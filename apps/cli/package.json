@@ -1,0 +1,9 @@
+{
+  "name": "@harness/cli",
+  "version": "1.2.0",
+  "type": "module",
+  "bin": { "harness-agent": "dist/main.js" },
+  "scripts": { "dev": "tsx src/main.ts", "build": "tsup" },
+  "dependencies": { "@harness/protocol": "workspace:*" },
+  "devDependencies": { "tsx": "^4.20.5" }
+}

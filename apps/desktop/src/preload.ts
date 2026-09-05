@@ -1,0 +1,79 @@
+import { contextBridge, ipcRenderer } from "electron";
+import type { DaemonRequestInput } from "@harness/protocol";
+import type { ProviderSettings } from "./provider-settings.js";
+
+const api = {
+  exportMemories: (memoryIds: string[]) => ipcRenderer.invoke("harness:memory-export", memoryIds) as Promise<{ canceled: boolean; path?: string }>,
+  unlock: (passphrase: string, remember = false) =>
+    ipcRenderer.invoke("harness:unlock", { passphrase, remember }) as Promise<{
+      ok: boolean;
+      error?: string;
+    }>,
+  restoreUnlock: () =>
+    ipcRenderer.invoke("harness:unlock", { restore: true }) as Promise<{
+      ok: boolean;
+      error?: string;
+    }>,
+  credentialStatus: () =>
+    ipcRenderer.invoke("harness:credentials-status") as Promise<
+      Record<string, boolean>
+    >,
+  setCredential: (name: string, value: string) =>
+    ipcRenderer.invoke("harness:credentials-set", { name, value }) as Promise<
+      Record<string, boolean>
+    >,
+  deleteCredential: (name: string) =>
+    ipcRenderer.invoke("harness:credentials-delete", name) as Promise<
+      Record<string, boolean>
+    >,
+  providerSettings: () =>
+    ipcRenderer.invoke(
+      "harness:provider-settings",
+    ) as Promise<ProviderSettings>,
+  setProviderSettings: (settings: ProviderSettings) =>
+    ipcRenderer.invoke(
+      "harness:provider-settings-set",
+      settings,
+    ) as Promise<ProviderSettings>,
+  request: <T>(request: DaemonRequestInput) =>
+    ipcRenderer.invoke("harness:request", request) as Promise<T>,
+  chooseWorkspace: () =>
+    ipcRenderer.invoke("harness:choose-workspace") as Promise<
+      string | undefined
+    >,
+  chooseImages: (allowedProviders: string[]) =>
+    ipcRenderer.invoke("harness:choose-images", allowedProviders) as Promise<
+      DesktopAttachment[]
+    >,
+  putImage: (
+    base64: string,
+    mimeType: string,
+    source: "clipboard" | "screenshot",
+    allowedProviders: string[],
+  ) =>
+    ipcRenderer.invoke("harness:put-image", {
+      base64,
+      mimeType,
+      source,
+      allowedProviders,
+    }) as Promise<DesktopAttachment>,
+  captureScreen: () =>
+    ipcRenderer.invoke("harness:capture-screen") as Promise<{
+      dataUrl: string;
+      width: number;
+      height: number;
+    }>,
+};
+
+export interface DesktopAttachment {
+  attachment: import("@harness/protocol").AttachmentRef;
+  previewDataUrl: string;
+}
+
+contextBridge.exposeInMainWorld("harness", api);
+
+declare global {
+  interface Window {
+    harness: typeof api;
+  }
+}

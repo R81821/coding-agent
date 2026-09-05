@@ -1,0 +1,22 @@
+import { fileURLToPath } from "node:url";
+import { defineConfig } from "vitest/config";
+
+const root = fileURLToPath(new URL(".", import.meta.url));
+
+export default defineConfig({
+  resolve: {
+    alias: {
+      "@harness/protocol": `${root}packages/protocol/src/index.ts`,
+      "@harness/providers": `${root}packages/providers/src/index.ts`,
+      "@harness/persistence": `${root}packages/persistence/src/index.ts`,
+      "@harness/tools": `${root}packages/tools/src/index.ts`,
+      "@harness/extensions": `${root}packages/extensions/src/index.ts`,
+      "@harness/core": `${root}packages/core/src/index.ts`,
+      "@harness/evals": `${root}packages/evals/src/index.ts`
+    }
+  },
+  test: {
+    environment: "node",
+    coverage: { reporter: ["text", "html"] }
+  }
+});

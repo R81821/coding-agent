@@ -1,0 +1,65 @@
+{
+  "name": "@harness/desktop",
+  "version": "1.2.0",
+  "description": "Local-first software development agent for Windows",
+  "author": "Harness Agent contributors",
+  "type": "module",
+  "main": "dist-electron/main.js",
+  "scripts": {
+    "dev": "concurrently -k \"vite --host 127.0.0.1\" \"wait-on http://127.0.0.1:5173 && cross-env VITE_DEV_SERVER_URL=http://127.0.0.1:5173 electron --import tsx src/main.ts\"",
+    "build": "vite build && tsup",
+    "package": "node scripts/package.mjs"
+  },
+  "dependencies": {
+    "@harness/daemon": "workspace:*",
+    "@harness/persistence": "workspace:*",
+    "@harness/protocol": "workspace:*",
+    "lucide-react": "^1.39.0",
+    "react": "^19.1.1",
+    "react-dom": "^19.1.1",
+    "sharp": "^0.34.3"
+  },
+  "devDependencies": {
+    "@electron/get": "5.1.0",
+    "@tailwindcss/vite": "^4.3.3",
+    "concurrently": "^9.2.1",
+    "cross-env": "^10.0.0",
+    "electron": "^37.3.1",
+    "electron-builder": "^26.0.12",
+    "tailwindcss": "^4.3.3",
+    "tsx": "^4.20.5",
+    "wait-on": "^8.0.4"
+  },
+  "build": {
+    "appId": "com.harnessagent.desktop",
+    "productName": "Harness Agent",
+    "directories": {
+      "output": "release"
+    },
+    "electronDist": "../../.cache/electron-dist",
+    "files": [
+      "dist/**/*",
+      "dist-electron/**/*",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "../daemon/dist",
+        "to": "daemon",
+        "filter": [
+          "**/*"
+        ]
+      }
+    ],
+    "win": {
+      "target": [
+        "nsis"
+      ],
+      "artifactName": "Harness-Agent-${version}-${arch}.${ext}"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true
+    }
+  }
+}

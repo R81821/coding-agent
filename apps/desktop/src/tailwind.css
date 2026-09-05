@@ -1,0 +1,39 @@
+@import "tailwindcss";
+
+@theme {
+  --color-bg: #191919;
+  --color-surface: rgba(37, 36, 39, 0.8);
+  --color-surface-strong: #29282b;
+  --color-line: rgba(148, 163, 184, 0.14);
+  --color-line-strong: rgba(148, 163, 184, 0.28);
+  --color-text: #ecebed;
+  --color-text-muted: #a29fa8;
+  --color-accent: #3b82f6;
+  --color-accent-soft: rgba(163, 132, 206, 0.12);
+  --color-accent-text: #c4a4ef;
+  --color-success: #34d399;
+  --color-warning: #fbbf24;
+  --color-danger: #f87171;
+  --font-sans: "Segoe UI", "Microsoft YaHei", "PingFang SC", system-ui, sans-serif;
+  --font-mono: "Cascadia Code", "JetBrains Mono", Consolas, "Courier New", monospace;
+  --animate-shimmer: shimmer 1.6s linear infinite;
+  @keyframes shimmer {
+    from { background-position: 200% 0; }
+    to { background-position: -200% 0; }
+  }
+}
+
+@layer base {
+  body {
+    @apply bg-bg text-text font-sans antialiased;
+  }
+}
+
+@layer components {
+  .glass {
+    @apply bg-surface backdrop-blur-xl border border-line rounded-2xl;
+  }
+  .glass-strong {
+    @apply bg-surface-strong backdrop-blur-xl border border-line rounded-2xl;
+  }
+}

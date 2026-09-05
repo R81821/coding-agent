@@ -1,0 +1,17 @@
+node_modules/
+.pnpm-store/
+.cache/
+dist/
+dist-electron/
+release/
+out/
+coverage/
+.vite/
+.harness-agent/
+*.log
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+.env
+.env.*
+!.env.example
