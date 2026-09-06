@@ -95,7 +95,9 @@ const destructivePatterns = [/\brm\s+-rf\b/i, /\bgit\s+reset\s+--hard\b/i, /\bfo
 export const terminalTool: ToolDefinition = {
   contract: {
     name: "terminal",
-    description: "Run a command in the workspace using the platform shell.",
+    description: process.platform === "win32"
+      ? "Run a command using Windows PowerShell 5.1 (powershell.exe). Use PowerShell syntax; &&, /dev/null, and Unix ls flags are not supported. Prefer list_files, search_text and read_file for repository inspection."
+      : "Run a command in the workspace using /bin/sh.",
     inputSchema: { type: "object", properties: { command: { type: "string" }, timeoutMs: { type: "integer", maximum: 3600000 } }, required: ["command"], additionalProperties: false },
     risk: "high",
     idempotent: false,
@@ -113,7 +115,7 @@ export const terminalTool: ToolDefinition = {
     const shell = process.platform === "win32" ? "powershell.exe" : "/bin/sh";
     const args = process.platform === "win32" ? ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", parsed.command] : ["-lc", parsed.command];
     const result = await runProcess(shell, args, { cwd: context.workspacePath, signal: context.signal, timeoutMs: parsed.timeoutMs });
-    return { output: result, truncated: result.truncated };
+    return { output: result, truncated: result.truncated, isError: result.exitCode !== 0 || result.timedOut };
   }
 };
 

@@ -330,11 +330,12 @@ const eventBase = { id: z.string(), runId: z.string(), at: z.string().datetime()
 export const AgentEventSchema = z.discriminatedUnion("type", [
   z.object({ ...eventBase, type: z.literal("status"), status: RunStatusSchema }),
   z.object({ ...eventBase, type: z.literal("route"), providerId: z.string(), modelId: z.string(), reason: z.string(), estimatedUsd: z.number().nonnegative() }),
+  z.object({ ...eventBase, type: z.literal("assistant_turn_started") }),
   z.object({ ...eventBase, type: z.literal("text_delta"), delta: z.string() }),
   z.object({ ...eventBase, type: z.literal("reasoning_summary"), summary: z.string() }),
   z.object({ ...eventBase, type: z.literal("tool_call"), call: ToolCallSchema }),
   z.object({ ...eventBase, type: z.literal("tool_started"), call: ToolCallSchema }),
-  z.object({ ...eventBase, type: z.literal("tool_finished"), callId: z.string(), output: z.unknown(), durationMs: z.number().nonnegative() }),
+  z.object({ ...eventBase, type: z.literal("tool_finished"), callId: z.string(), output: z.unknown(), durationMs: z.number().nonnegative(), isError: z.boolean().optional() }),
   z.object({ ...eventBase, type: z.literal("approval_required"), approvalId: z.string(), summary: z.string(), risk: RiskLevelSchema }),
   z.object({ ...eventBase, type: z.literal("plan_created"), plan: PlanSpecSchema }),
   z.object({ ...eventBase, type: z.literal("plan_updated"), plan: PlanSpecSchema }),

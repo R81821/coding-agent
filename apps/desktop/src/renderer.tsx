@@ -28,6 +28,7 @@ import { BuiPromptBar } from "./ui/prompt-bar.js";
 import { BuiSidebarNav } from "./ui/sidebar-nav.js";
 import { BuiToolChip } from "./ui/tool-chip.js";
 import { MemoryManager } from "./memory-manager.js";
+import { assistantMessages } from "./assistant-messages.js";
 import {
   Activity,
   Bug,
@@ -104,17 +105,7 @@ function App() {
   }>();
 
   const profile = profiles.find((item) => item.id === profileId);
-  const finalText = useMemo(
-    () =>
-      events
-        .filter((event) => event.type === "text_delta")
-        .map(
-          (event) =>
-            (event as Extract<AgentEvent, { type: "text_delta" }>).delta,
-        )
-        .join(""),
-    [events],
-  );
+  const finalText = useMemo(() => assistantMessages(events).text, [events]);
 
   useEffect(() => {
     void window.harness.restoreUnlock().then((result) => {
@@ -534,7 +525,7 @@ function App() {
         </details>
         </div>
         <div className="sidebar-foot">
-          <BuiButton variant="ghost" onClick={() => setTab("settings")} className="sidebar-settings"><Settings size={17} /><span>设置</span><small>v1.2.0</small></BuiButton>
+          <BuiButton variant="ghost" onClick={() => setTab("settings")} className="sidebar-settings"><Settings size={17} /><span>设置</span><small>v1.2.1</small></BuiButton>
           <div className="sidebar-connection"><span className="status-dot" />本地运行时已解锁</div>
         </div>
       </aside>
@@ -711,6 +702,7 @@ function ChatView(props: {
   onChooseWorkspace: () => void;
 }) {
   const conversationRef = useRef<HTMLDivElement>(null);
+  const progressMessages = useMemo(() => assistantMessages(props.events).progress, [props.events]);
   const followLatestRef = useRef(true);
   const route = props.events.find((event) => event.type === "route") as
     Extract<AgentEvent, { type: "route" }> | undefined;
@@ -789,6 +781,14 @@ function ChatView(props: {
               {props.finalText}
             </pre>
           </article>
+        )}
+        {progressMessages.length > 0 && (
+          <details className="glass mb-3 px-4 py-3">
+            <summary className="cursor-pointer text-xs text-text-muted">查看过程记录（{progressMessages.length} 轮）</summary>
+            {progressMessages.map((text, index) => (
+              <pre key={index} className="mt-3 whitespace-pre-wrap break-words border-t border-line pt-3 text-xs text-text-muted">{text}</pre>
+            ))}
+          </details>
         )}
         <div className="flex flex-col gap-2">
           {buildTimeline(props.events).map((item) =>
@@ -998,20 +998,21 @@ function ToolEventGroup({ tools }: { tools: ToolTimelineItem[] }) {
     0,
   );
   const allCompleted = completed === tools.length;
+  const failures = tools.filter((tool) => tool.finished?.isError === true || (tool.finished?.output && typeof tool.finished.output === "object" && "error" in tool.finished.output)).length;
   return (
     <details className="glass px-4 py-3">
       <summary className="flex cursor-pointer list-none items-center gap-3">
         <span
           className={`text-[10px] font-semibold tracking-widest ${
-            allCompleted ? "text-success" : "text-accent-text"
+            failures ? "text-danger" : allCompleted ? "text-success" : "text-accent-text"
           }`}
         >
-          {allCompleted ? "DONE" : "TOOLS"}
+          {failures ? "ERRORS" : allCompleted ? "DONE" : "TOOLS"}
         </span>
         <strong className="text-sm text-text">工具调用（{tools.length}）</strong>
         <small className="ml-auto text-xs text-text-muted">
           {allCompleted
-            ? `${formatDuration(totalDuration)} · 点击展开全部结果`
+            ? `${formatDuration(totalDuration)}${failures ? ` · ${failures} 项失败` : ""} · 点击展开全部结果`
             : `${completed}/${tools.length} 已完成 · 点击展开`}
         </small>
       </summary>
@@ -1035,11 +1036,11 @@ function ToolEventRow({
   started: ToolStartedEvent;
   finished?: ToolFinishedEvent;
 }) {
-  const failed =
+  const failed = finished?.isError === true || (
     finished !== undefined &&
     typeof finished.output === "object" &&
     finished.output !== null &&
-    "error" in (finished.output as Record<string, unknown>);
+    "error" in (finished.output as Record<string, unknown>));
   return (
     <details className="rounded-xl border border-line bg-white/5 px-3 py-2">
       <summary className="flex cursor-pointer list-none items-center gap-2.5">

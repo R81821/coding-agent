@@ -9,6 +9,7 @@ export interface ToolContext {
 
 export interface ToolResult {
   output: unknown;
+  isError?: boolean;
   truncated?: boolean;
   artifacts?: string[];
 }

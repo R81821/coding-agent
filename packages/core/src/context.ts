@@ -16,6 +16,11 @@ export function buildInitialMessages(input: ContextInputs): ModelMessage[] {
     { role: "system", content: [{ type: "text", text: APP_SAFETY_POLICY, trust: "app_policy" }] },
     { role: "developer", content: [{ type: "text", text: input.profile.systemPrompt, trust: "user_profile" }] }
   ];
+  messages.push({ role: "system", content: [{ type: "text", trust: "app_policy", text:
+    `Runtime environment: platform=${process.platform}; workspace=${input.run.workspacePath}.\n`
+    + (process.platform === "win32" ? "terminal uses Windows PowerShell 5.1 (powershell.exe), not Bash or PowerShell 7. Do not use &&, /dev/null, or ls -la. Use native read-only repository tools first.\n" : "terminal uses /bin/sh.\n")
+    + `This task allows at most ${input.run.budget.maxToolCalls} tool calls and ${input.run.budget.maxTurns} model turns. Inspect representative entry points, related files and tests; do not exhaustively read the repository. Reuse existing observations. When evidence is sufficient, answer the user's request with file references and concrete findings. Reserve time to summarize; clearly identify any uninspected scope.`
+  }] });
   if (input.trustedProjectInstructions) {
     messages.push({ role: "developer", content: [{ type: "text", text: `Trusted project instructions:\n${input.trustedProjectInstructions}`, trust: "trusted_project" }] });
   }

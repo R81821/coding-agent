@@ -23,6 +23,7 @@ import type { ToolRegistry } from "@harness/tools";
 import { ApprovalBroker } from "./approvals.js";
 import { buildInitialMessages } from "./context.js";
 import { runWithPiAgent } from "./pi-agent-bridge.js";
+import { RunProgress } from "./run-progress.js";
 import { PermissionEngine, summarizeToolRequest } from "./security.js";
 import type { ProjectTrustService } from "./project-trust.js";
 
@@ -327,8 +328,14 @@ export class HarnessEngine extends EventEmitter {
       });
       if (!recovery) this.status(spec.id, state, "running");
       let finalText = "";
-      let turnLimitReached = false;
-      let recoveryLimitReached = false;
+      let stopReason: string | undefined;
+      let summarizing = false;
+      const progress = new RunProgress();
+      if (state.turns >= spec.budget.maxTurns || (state.toolCalls > 0 && state.toolCalls >= spec.budget.maxToolCalls)) {
+        this.status(spec.id, state, "review");
+        this.emitEvent(spec.id, state, { type: "result", status: "review", text: "本轮预算已用完，历史结果已保留。请缩小任务范围后开始新任务。" });
+        return;
+      }
       const resiliencePolicy = profile.resiliencePolicy ?? {
         maxProviderAttempts: 3,
         providerRetryBaseDelayMs: 500,
@@ -351,13 +358,36 @@ export class HarnessEngine extends EventEmitter {
         },
         ...(state.transcript.length ? { resumeTranscript: state.transcript } : {}),
         contextPolicy: profile.contextPolicy,
-        getPinnedContext: () => JSON.stringify({ approvedPlan: state.plan?.status === "approved" ? state.plan : undefined, permissionSnapshot: spec.grants }),
-        beforeToolCall: async (call) => this.authorizeTool(spec, state, call),
+        getPinnedContext: () => JSON.stringify({
+          approvedPlan: state.plan?.status === "approved" ? state.plan : undefined,
+          permissionSnapshot: spec.grants,
+          remainingToolCalls: Math.max(0, spec.budget.maxToolCalls - state.toolCalls),
+          remainingTurns: Math.max(0, spec.budget.maxTurns - state.turns),
+          recentObservations: { trust: "untrusted_tool", items: progress.snapshot() },
+          guidance: spec.budget.maxToolCalls - state.toolCalls <= Math.max(4, Math.ceil(spec.budget.maxToolCalls * 0.2))
+            ? "Budget is nearly exhausted. Synthesize concrete findings now. Do not restart repository exploration; clearly state unresolved scope."
+            : "Reuse observations already collected; avoid repeated reads without new evidence.",
+        }),
+        beforeModelRequest: () => {
+          this.checkBudget(spec, state);
+          if (state.turns > spec.budget.maxTurns) throw new Error("Model-turn budget exceeded");
+        },
+        beforeToolCall: async (call) => {
+          if (summarizing || stopReason) return { block: true, terminate: true, reason: stopReason ?? "Only a final summary is allowed." };
+          if (state.toolCalls >= spec.budget.maxToolCalls) {
+            stopReason = "已达到工具调用额度，保留现有发现并结束本轮探索。";
+            return { block: true, terminate: true, reason: stopReason };
+          }
+          return this.authorizeTool(spec, state, call);
+        },
         executeTool: async (call, tool, signal) => {
           this.emitEvent(spec.id, state, { type: "tool_started", call });
           const started = Date.now();
           if (!tool.contract.idempotent) state.pendingNonIdempotent.set(call.id, call);
-          if ((tool.assessRisk?.(call.input) ?? tool.contract.risk) !== "read" || call.name === "delegate") state.hadSideEffect = true;
+          if ((tool.assessRisk?.(call.input) ?? tool.contract.risk) !== "read" || call.name === "delegate") {
+            state.hadSideEffect = true;
+            progress.invalidate();
+          }
           this.saveCheckpoint(spec.id, state, "tool_batch");
           try {
             const result = await tool.execute(call.input, {
@@ -370,12 +400,14 @@ export class HarnessEngine extends EventEmitter {
               type: "tool_finished",
               callId: call.id,
               output: result.output,
+              isError: result.isError === true,
               durationMs: Date.now() - started,
             });
             if (call.name === "web_search" && result.output && typeof result.output === "object") {
               const search = result.output as { searchId?: unknown; results?: unknown[]; usage?: Record<string, unknown> };
               if (typeof search.searchId === "string") this.emitEvent(spec.id, state, { type: "search_usage", providerId: "parallel", searchId: search.searchId, resultCount: Array.isArray(search.results) ? search.results.length : 0, usage: search.usage ?? {} });
             }
+            stopReason ??= progress.record(call, tool, result);
             state.pendingNonIdempotent.delete(call.id);
             this.saveCheckpoint(spec.id, state, "tool_batch");
             return result;
@@ -383,10 +415,12 @@ export class HarnessEngine extends EventEmitter {
             const output = {
               error: error instanceof Error ? error.message : String(error),
             };
+            stopReason ??= progress.record(call, tool, { output, isError: true });
             this.emitEvent(spec.id, state, {
               type: "tool_finished",
               callId: call.id,
               output,
+              isError: true,
               durationMs: Date.now() - started,
             });
             state.pendingNonIdempotent.delete(call.id);
@@ -395,23 +429,18 @@ export class HarnessEngine extends EventEmitter {
           }
         },
         shouldStopAfterTurn: (context) => {
-          state.turns += 1;
           this.checkBudget(spec, state);
-          if (
-            state.toolRecoveryLimitReached &&
-            context.toolResults.length > 0
-          ) {
-            recoveryLimitReached = true;
-            return true;
+          if (!context.message.content.some((part) => part.type === "toolCall")) {
+            finalText = context.message.content.flatMap((part) => part.type === "text" ? [part.text] : []).join("\n");
           }
-          if (
-            state.turns >= spec.budget.maxTurns &&
-            context.toolResults.length > 0
-          ) {
-            turnLimitReached = true;
-            return true;
+          if (summarizing) return true;
+          if (context.toolResults.length > 0) {
+            if (state.toolRecoveryLimitReached) stopReason ??= "工具错误恢复次数已耗尽，需复核未解决的问题。";
+            if (state.toolCalls >= spec.budget.maxToolCalls) stopReason ??= "已达到工具调用额度，保留现有发现并结束本轮探索。";
+            // Keep the last available model turn for a tool-free evidence summary.
+            if (state.turns >= spec.budget.maxTurns - 1) stopReason ??= "已达到探索轮次上限，保留剩余轮次整理结果。";
           }
-          return false;
+          return !!stopReason;
         },
         onTranscript: async (transcript, reason) => {
           state.transcript = transcript;
@@ -424,6 +453,10 @@ export class HarnessEngine extends EventEmitter {
           });
         },
         onPiEvent: (event) => {
+          if (event.type === "turn_start") {
+            state.turns += 1;
+            this.emitEvent(spec.id, state, { type: "assistant_turn_started" });
+          }
           if (event.type !== "tool_execution_end") return;
           if (!event.isError) {
             state.consecutiveToolErrors = 0;
@@ -468,7 +501,6 @@ export class HarnessEngine extends EventEmitter {
         onProviderEvent: (event) => {
           if (event.type === "text_delta") {
             const delta = event.delta ?? "";
-            finalText += delta;
             this.emitEvent(spec.id, state, { type: "text_delta", delta });
           }
           if (event.type === "reasoning_summary")
@@ -493,13 +525,24 @@ export class HarnessEngine extends EventEmitter {
           }
         },
         afterAgentRun: async (control) => {
-          if (turnLimitReached) return;
+          const finishStoppedRun = async () => {
+            if (!stopReason || summarizing || state.turns >= spec.budget.maxTurns || state.controller.signal.aborted) return;
+            this.checkBudget(spec, state);
+            summarizing = true;
+            await control.promptSummary(`Runtime stopping condition: ${stopReason}\nNo tools are available. Answer the original user request using only evidence already collected. State concrete findings and file paths, then unresolved questions and uninspected scope. Do not say you will keep exploring or claim the task is complete. Use the user's language.`);
+          };
+          if (stopReason) { await finishStoppedRun(); return; }
           const maxRepairs = profile.verificationPolicy.maxRepairAttempts;
           for (let attempt = 0; attempt <= maxRepairs; attempt += 1) {
+            this.checkBudget(spec, state);
             this.status(spec.id, state, "verifying");
             const verification = await this.verify(spec, profile, state, attempt);
             if (verification.passed) return;
             if (attempt >= maxRepairs || profile.verificationPolicy.items.length === 0) return;
+            if (state.turns >= spec.budget.maxTurns) {
+              stopReason = "验证尚未通过，模型轮次额度已用完。";
+              return;
+            }
             this.status(spec.id, state, "running");
             this.emitEvent(spec.id, state, { type: "repair_started", attempt: attempt + 1, maxAttempts: maxRepairs });
             this.emitEvent(spec.id, state, {
@@ -511,16 +554,18 @@ export class HarnessEngine extends EventEmitter {
             });
             await control.promptUntrusted(JSON.stringify({ verificationRunId: verification.id, attempt, results: verification.results }));
             state.transcript = control.transcript();
+            if (stopReason) { await finishStoppedRun(); return; }
           }
         },
       });
       state.transcript = bridgeResult.transcript;
-      if (bridgeResult.errorMessage) throw new Error(bridgeResult.errorMessage);
-      if (turnLimitReached || recoveryLimitReached) {
+      if (state.controller.signal.aborted) throw state.controller.signal.reason ?? new Error("Run cancelled");
+      if (bridgeResult.errorMessage && !stopReason) throw new Error(bridgeResult.errorMessage);
+      if (stopReason) {
         this.status(spec.id, state, "review");
         this.emitEvent(spec.id, state, {
           type: "result",
-          text: `${finalText}\n\n${recoveryLimitReached ? "Run paused for review after repeated tool failures exhausted the self-correction budget." : "Run stopped at the configured turn limit."}`,
+          text: `${finalText.trim() || progress.fallback()}\n\n本轮待复核：${stopReason}${bridgeResult.errorMessage ? `\n收尾未完成：${bridgeResult.errorMessage}` : ""}`,
           status: "review",
         });
         return;
