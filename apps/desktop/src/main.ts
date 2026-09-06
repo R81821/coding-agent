@@ -1,4 +1,5 @@
 import { spawn, type ChildProcess } from "node:child_process";
+import { existsSync } from "node:fs";
 import { appendFile, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -265,7 +266,9 @@ function createWindow(show: boolean): void {
     backgroundColor: "#211e27",
     titleBarStyle: "hiddenInset",
     webPreferences: {
-      preload: join(here, "preload.cjs"),
+      preload: existsSync(join(here, "preload.cjs"))
+        ? join(here, "preload.cjs")
+        : join(here, "..", "dist-electron", "preload.cjs"),
       contextIsolation: true,
       sandbox: true,
       nodeIntegration: false,
@@ -402,6 +405,7 @@ async function startDaemon(passphrase: string): Promise<void> {
         cwd: join(here, "..", "..", ".."),
         stdio: ["pipe", "pipe", "pipe"],
         windowsHide: true,
+        shell: process.platform === "win32",
         env: daemonEnvironment,
       },
     );

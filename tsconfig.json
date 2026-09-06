@@ -13,16 +13,16 @@
     "esModuleInterop": true,
     "allowSyntheticDefaultImports": true,
     "skipLibCheck": true,
+    "noUncheckedSideEffectImports": false,
     "jsx": "react-jsx",
-    "baseUrl": ".",
     "paths": {
-      "@harness/protocol": ["packages/protocol/src/index.ts"],
-      "@harness/providers": ["packages/providers/src/index.ts"],
-      "@harness/persistence": ["packages/persistence/src/index.ts"],
-      "@harness/tools": ["packages/tools/src/index.ts"],
-      "@harness/extensions": ["packages/extensions/src/index.ts"],
-      "@harness/core": ["packages/core/src/index.ts"]
-      ,"@harness/evals": ["packages/evals/src/index.ts"]
+      "@harness/protocol": ["./packages/protocol/src/index.ts"],
+      "@harness/providers": ["./packages/providers/src/index.ts"],
+      "@harness/persistence": ["./packages/persistence/src/index.ts"],
+      "@harness/tools": ["./packages/tools/src/index.ts"],
+      "@harness/extensions": ["./packages/extensions/src/index.ts"],
+      "@harness/core": ["./packages/core/src/index.ts"],
+      "@harness/evals": ["./packages/evals/src/index.ts"]
     },
     "types": ["node", "vitest/globals"]
   },

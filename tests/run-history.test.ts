@@ -4,7 +4,7 @@ import { isAbsolute, join, relative } from "node:path";
 import { tmpdir } from "node:os";
 import { HarnessDatabase, VaultCrypto } from "@harness/persistence";
 import { DEFAULT_PROFILE, DaemonRequestSchema, type AgentEvent, type RunHistoryItem, type RunSpec } from "@harness/protocol";
-import { isLiveRun, mergeRunEvents, mergeRunHistory } from "../apps/desktop/src/run-history.js";
+import { groupRunHistory, isLiveRun, mergeRunEvents, mergeRunHistory, workspaceKey } from "../apps/desktop/src/run-history.js";
 import { sanitizeRendererRequest } from "../apps/desktop/src/renderer-ipc.js";
 
 function spec(id: string, createdAt = "2026-09-01T00:00:00.000Z"): RunSpec {
@@ -61,6 +61,17 @@ describe("persistent run history", () => {
 });
 
 describe("history switching state", () => {
+  it("groups conversations under their project and puts the current project first", () => {
+    const alpha = { ...item("alpha"), workspacePath: "D:\\Code\\Alpha" };
+    const alphaOlder = { ...item("alpha-old"), workspacePath: "d:/code/alpha/" };
+    const beta = { ...item("beta"), workspacePath: "D:/Code/Beta" };
+    const groups = groupRunHistory([beta, alpha, alphaOlder], "D:/CODE/ALPHA");
+    expect(groups.map((group) => group.key)).toEqual([workspaceKey("D:/Code/Alpha"), workspaceKey("D:/Code/Beta")]);
+    expect(groups[0]?.workspacePath).toBe("D:/CODE/ALPHA");
+    expect(groups[0]?.items.map((row) => row.id)).toEqual(["alpha", "alpha-old"]);
+    expect(groupRunHistory([beta], "D:/Code/Empty")[0]).toMatchObject({ workspacePath: "D:/Code/Empty", items: [] });
+  });
+
   it("keeps older loaded pages and updates statuses when the newest page refreshes", () => {
     const current = { items: [item("b"), item("a")], hasMore: true };
     const updated = mergeRunHistory(current, { items: [{ ...item("b"), status: "review" }], hasMore: true }, false);

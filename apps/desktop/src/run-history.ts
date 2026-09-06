@@ -1,4 +1,29 @@
-import type { AgentEvent, RunHistoryPage, RunStatus } from "@harness/protocol";
+import type { AgentEvent, RunHistoryItem, RunHistoryPage, RunStatus } from "@harness/protocol";
+
+export interface ProjectHistoryGroup {
+  key: string;
+  workspacePath: string;
+  items: RunHistoryItem[];
+}
+
+export function workspaceKey(path: string): string {
+  return path.replace(/\\/g, "/").replace(/\/+$/, "").toLocaleLowerCase();
+}
+
+export function groupRunHistory(items: RunHistoryItem[], currentWorkspace = ""): ProjectHistoryGroup[] {
+  const groups = new Map<string, ProjectHistoryGroup>();
+  for (const item of items) {
+    const key = workspaceKey(item.workspacePath);
+    const group = groups.get(key) ?? { key, workspacePath: item.workspacePath, items: [] };
+    group.items.push(item);
+    groups.set(key, group);
+  }
+  if (!currentWorkspace) return [...groups.values()];
+  const currentKey = workspaceKey(currentWorkspace);
+  const current = groups.get(currentKey) ?? { key: currentKey, workspacePath: currentWorkspace, items: [] };
+  current.workspacePath = currentWorkspace;
+  return [current, ...[...groups.values()].filter((group) => group.key !== currentKey)];
+}
 
 export function mergeRunHistory(current: RunHistoryPage, incoming: RunHistoryPage, append: boolean): RunHistoryPage {
   const records = new Map(current.items.map((item) => [item.id, item]));

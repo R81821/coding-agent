@@ -33,13 +33,14 @@ import { BuiSidebarNav } from "./ui/sidebar-nav.js";
 import { BuiToolChip } from "./ui/tool-chip.js";
 import { MemoryManager } from "./memory-manager.js";
 import { assistantMessages } from "./assistant-messages.js";
-import { isLiveRun, mergeRunEvents, mergeRunHistory, runStatusLabel } from "./run-history.js";
+import { groupRunHistory, isLiveRun, mergeRunEvents, mergeRunHistory, runStatusLabel, workspaceKey } from "./run-history.js";
 import {
   Activity,
   Bug,
   Brain,
   Camera,
   ChevronDown,
+  ChevronRight,
   ClipboardList,
   FolderOpen,
   Hammer,
@@ -105,6 +106,8 @@ function App() {
   const historyRef = useRef<RunHistoryPage>({ items: [], hasMore: false });
   const historyRequest = useRef(0);
   const viewVersion = useRef(0);
+  const [expandedProjects, setExpandedProjects] = useState<Set<string>>(new Set());
+  const seededExpansion = useRef(false);
   const [historyLoading, setHistoryLoading] = useState(false);
   const [historyError, setHistoryError] = useState("");
   const [busy, setBusy] = useState(false);
@@ -117,6 +120,8 @@ function App() {
 
   const profile = profiles.find((item) => item.id === profileId);
   const finalText = useMemo(() => assistantMessages(events).text, [events]);
+  const historyGroups = useMemo(() => groupRunHistory(runHistory.items, workspace), [runHistory.items, workspace]);
+  const currentProjectKey = workspace ? workspaceKey(workspace) : "";
 
   const refreshHistory = useCallback(async (append = false) => {
     const requestVersion = ++historyRequest.current;
@@ -138,6 +143,22 @@ function App() {
   useEffect(() => {
     if (unlocked) void refreshHistory();
   }, [unlocked, refreshHistory]);
+
+  useEffect(() => {
+    if (!workspace) return;
+    const key = workspaceKey(workspace);
+    setExpandedProjects((current) => (current.has(key) ? current : new Set(current).add(key)));
+  }, [workspace]);
+
+  useEffect(() => {
+    if (seededExpansion.current || runHistory.items.length === 0) return;
+    seededExpansion.current = true;
+    const first = runHistory.items[0];
+    if (first) {
+      const key = workspaceKey(first.workspacePath);
+      setExpandedProjects((current) => (current.has(key) ? current : new Set(current).add(key)));
+    }
+  }, [runHistory.items, workspace]);
 
   useEffect(() => {
     void window.harness.restoreUnlock().then((result) => {
@@ -591,24 +612,42 @@ function App() {
               : {}),
           }))}
         />
-        <section className="sidebar-projects" aria-label="当前项目">
+        <section className="sidebar-projects" aria-label="项目与会话">
           <div className="sidebar-section-label"><span>项目</span>
             <BuiButton variant="ghost" size="sm" onClick={chooseWorkspace} aria-label="打开代码仓库" title="打开代码仓库"><Plus size={15} /></BuiButton>
           </div>
-          <button className="project-row" onClick={chooseWorkspace} title={workspace || "打开代码仓库"}>
-            <FolderOpen size={18} /><span>{workspace ? basename(workspace) : "打开代码仓库"}</span>
-          </button>
-          {!workspace && <p className="sidebar-hint">选择项目，或从下方打开历史会话</p>}
-        </section>
-        <section className="sidebar-history" aria-label="会话历史">
-          <div className="sidebar-section-label"><span>会话历史</span></div>
-          {runHistory.items.map((item) => (
-            <button key={item.id} className={`project-session history-session${activeRun === item.id ? " active" : ""}`} aria-current={activeRun === item.id ? "page" : undefined} disabled={busy} onClick={() => void openHistoricalRun(item)} title={`${item.request}\n${item.workspacePath}`}>
-              <MessageSquare size={14} />
-              <span className="history-session-content"><span>{item.request}</span><small>{basename(item.workspacePath)} · {runStatusLabel[item.status]}</small></span>
-            </button>
-          ))}
-          {!runHistory.items.length && !historyLoading && !historyError && <p className="sidebar-hint">发送任务后会自动保存在这里</p>}
+          {!historyGroups.length && !historyLoading && !historyError && <p className="sidebar-hint">{workspace ? "当前项目还没有会话" : "打开项目后，会话会自动按项目归档在这里"}</p>}
+          {historyGroups.map((group) => {
+            const isCurrent = group.key === currentProjectKey;
+            if (!isCurrent && group.items.length === 0) return null;
+            const expanded = expandedProjects.has(group.key);
+            return (
+              <div key={group.key} className="project-group">
+                <button type="button" className={`project-folder${expanded ? " expanded" : ""}`} aria-expanded={expanded} title={group.workspacePath} onClick={() => setExpandedProjects((current) => {
+                  const next = new Set(current);
+                  if (next.has(group.key)) next.delete(group.key); else next.add(group.key);
+                  return next;
+                })}>
+                  <ChevronRight size={14} className="folder-chevron" />
+                  <FolderOpen size={15} className="folder-icon" />
+                  <span className="project-folder-name">{group.workspacePath ? basename(group.workspacePath) : "未归组会话"}</span>
+                  {isCurrent && <span className="project-folder-tag">当前</span>}
+                  {group.items.length > 0 && <span className="project-folder-count">{group.items.length}</span>}
+                </button>
+                {expanded && (
+                  <div className="project-group-items">
+                    {group.items.map((item) => (
+                      <button key={item.id} className={`project-session history-session${activeRun === item.id ? " active" : ""}`} aria-current={activeRun === item.id ? "page" : undefined} disabled={busy} onClick={() => void openHistoricalRun(item)} title={`${item.request}\n${item.workspacePath}`}>
+                        <MessageSquare size={14} />
+                        <span className="history-session-content"><span>{item.request}</span><small>{runStatusLabel[item.status]}</small></span>
+                      </button>
+                    ))}
+                    {!group.items.length && <p className="sidebar-hint">发送任务后会自动保存在这里</p>}
+                  </div>
+                )}
+              </div>
+            );
+          })}
           {historyLoading && <p className="sidebar-hint">正在加载历史记录…</p>}
           {historyError && <p className="sidebar-hint history-error" role="alert">{historyError}</p>}
           {historyError && <BuiButton variant="ghost" size="sm" disabled={historyLoading} onClick={() => void refreshHistory()}>重试加载</BuiButton>}
@@ -620,7 +659,7 @@ function App() {
         </details>
         </div>
         <div className="sidebar-foot">
-          <BuiButton variant="ghost" onClick={() => setTab("settings")} className="sidebar-settings"><Settings size={17} /><span>设置</span><small>v1.2.2</small></BuiButton>
+          <BuiButton variant="ghost" onClick={() => setTab("settings")} className="sidebar-settings"><Settings size={17} /><span>设置</span><small>v1.2.3</small></BuiButton>
           <div className="sidebar-connection"><span className="status-dot" />本地运行时已解锁</div>
         </div>
       </aside>

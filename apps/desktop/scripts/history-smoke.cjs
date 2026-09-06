@@ -14,6 +14,9 @@ function save(id, request, text, status = "completed", createdAt = "2026-09-01T0
 }
 save("old-a", "历史任务 A", "历史回答 A：已完成分析。");
 save("old-b", "历史任务 B", "历史回答 B：保留失败诊断。", "failed");
+save("old-c", "其他项目任务", "其他项目回答。");
+runs.get("old-c").spec.workspacePath = "D:/other-project";
+runs.get("old-c").spec.createdAt = "2026-08-01T00:00:00.000Z";
 ipcMain.handle("history-fixture", (_event, request) => {
   switch (request.method) {
     case "profiles.list": return [{ id: "default", name: "Fixture Developer", allowedProviders: ["openai-compatible"], budget: {} }];
@@ -60,6 +63,14 @@ app.whenReady().then(async () => {
   await evaluate("document.querySelector('.new-task-button').click()");
   await waitFor("!document.querySelector('.user-message') && !document.querySelector('.assistant-message') && document.querySelectorAll('.history-session').length === 2", "new task clears current view and retains history");
   await openHistory("历史任务 B", "历史回答 B");
+  await openHistory("历史任务 A", "历史回答 A");
+  await waitFor("document.querySelectorAll('.project-group').length === 2 && [...document.querySelectorAll('.history-session')].every(el => el.closest('.project-group-items'))", "history belongs to project children");
+  await evaluate("[...document.querySelectorAll('.project-folder')].find(el => el.title === 'D:/other-project').click()");
+  await waitFor("document.querySelectorAll('.history-session').length === 3", "expand second project");
+  await openHistory("其他项目任务", "其他项目回答");
+  await waitFor("document.querySelector('.composer-project-bar').textContent.includes('other-project')", "restore switches to correct project");
+  await evaluate("[...document.querySelectorAll('.project-folder')].find(el => el.title === 'D:/other-project').click()");
+  await waitFor("document.querySelectorAll('.history-session').length === 2", "collapse hides only that project's children");
   await openHistory("历史任务 A", "历史回答 A");
   failDetail = true;
   await evaluate("[...document.querySelectorAll('.history-session')].find(el=>el.textContent.includes('历史任务 B')).click()");
