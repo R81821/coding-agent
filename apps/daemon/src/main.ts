@@ -81,11 +81,15 @@ async function dispatchLine(line: string): Promise<DaemonResponse> {
 async function dispatch(request: DaemonRequest, target: HarnessRuntime): Promise<unknown> {
   switch (request.method) {
     case "health":
-      return { status: "ok", version: "1.2.1", activeRuns: "available", connectors: [...connectors.keys()] };
+      return { status: "ok", version: "1.2.2", activeRuns: "available", connectors: [...connectors.keys()] };
     case "run.start": {
       target.engine.start(request.params, profileFor(target, request.params.profileId));
       return { runId: request.params.id };
     }
+    case "runs.list":
+      return target.database.listRunHistory(request.params?.limit, request.params?.offset);
+    case "run.get":
+      return target.database.getRun(request.params.runId);
     case "run.resume": {
       const previous = target.database.getRun(request.params.runId);
       if (!previous) throw new Error(`Unknown run: ${request.params.runId}`);

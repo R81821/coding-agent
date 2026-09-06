@@ -144,3 +144,12 @@ button:focus-visible, summary:focus-visible, select:focus-visible, input:focus-v
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: .01ms !important; transition-duration: .01ms !important; }
 }
+
+.sidebar-history { margin-top: 24px; }
+.history-session { width: 100%; text-align: left; border-radius: 9px; padding: 10px 12px; margin: 2px 0; }
+.history-session:hover { background: rgba(255, 255, 255, .05); }
+.history-session.active { background: rgba(173, 131, 224, .14); color: #e3d5f4; }
+.history-session:disabled { cursor: default; opacity: .6; }
+.history-session-content { display: flex; flex-direction: column; gap: 4px; min-width: 0; flex: 1; }
+.history-session-content small { font-size: 10px; color: #99939f; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.history-error { color: #f09a9a; overflow-wrap: anywhere; }

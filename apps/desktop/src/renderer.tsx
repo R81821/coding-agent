@@ -14,6 +14,10 @@ import type {
   PluginRecord,
   Profile,
   RunCheckpoint,
+  RunHistoryItem,
+  RunHistoryPage,
+  RunSpec,
+  RunStatus,
   SkillManifest,
   TaskSpec,
 } from "@harness/protocol";
@@ -29,6 +33,7 @@ import { BuiSidebarNav } from "./ui/sidebar-nav.js";
 import { BuiToolChip } from "./ui/tool-chip.js";
 import { MemoryManager } from "./memory-manager.js";
 import { assistantMessages } from "./assistant-messages.js";
+import { isLiveRun, mergeRunEvents, mergeRunHistory, runStatusLabel } from "./run-history.js";
 import {
   Activity,
   Bug,
@@ -96,6 +101,12 @@ function App() {
   const [attachments, setAttachments] = useState<DesktopAttachment[]>([]);
   const [events, setEvents] = useState<AgentEvent[]>([]);
   const [activeRun, setActiveRun] = useState<string>();
+  const [runHistory, setRunHistory] = useState<RunHistoryPage>({ items: [], hasMore: false });
+  const historyRef = useRef<RunHistoryPage>({ items: [], hasMore: false });
+  const historyRequest = useRef(0);
+  const viewVersion = useRef(0);
+  const [historyLoading, setHistoryLoading] = useState(false);
+  const [historyError, setHistoryError] = useState("");
   const [busy, setBusy] = useState(false);
   const [approvalPrompt, setApprovalPrompt] = useState<ApprovalPrompt>();
   const [capture, setCapture] = useState<{
@@ -106,6 +117,27 @@ function App() {
 
   const profile = profiles.find((item) => item.id === profileId);
   const finalText = useMemo(() => assistantMessages(events).text, [events]);
+
+  const refreshHistory = useCallback(async (append = false) => {
+    const requestVersion = ++historyRequest.current;
+    setHistoryLoading(true);
+    setHistoryError("");
+    try {
+      const page = await window.harness.request<RunHistoryPage>({ method: "runs.list", params: { limit: 50, offset: append ? historyRef.current.items.length : 0 } });
+      if (requestVersion !== historyRequest.current) return;
+      const next = mergeRunHistory(historyRef.current, page, append);
+      historyRef.current = next;
+      setRunHistory(next);
+    } catch (error) {
+      if (requestVersion === historyRequest.current) setHistoryError(`无法加载历史记录：${error instanceof Error ? error.message : String(error)}`);
+    } finally {
+      if (requestVersion === historyRequest.current) setHistoryLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (unlocked) void refreshHistory();
+  }, [unlocked, refreshHistory]);
 
   useEffect(() => {
     void window.harness.restoreUnlock().then((result) => {
@@ -237,6 +269,7 @@ function App() {
 
   async function send() {
     if (!profile || !workspace || !prompt.trim() || busy) return;
+    const viewToken = ++viewVersion.current;
     setSubmittedPrompt(prompt.trim());
     const runId = newId("run");
     setBusy(true);
@@ -257,10 +290,13 @@ function App() {
           createdAt: nowIso(),
         },
       });
+      void refreshHistory();
+      if (viewToken !== viewVersion.current) return;
       setPrompt("");
       setAttachments([]);
-      await pollRun(runId);
+      await pollRun(runId, -1, viewToken);
     } catch (error) {
+      if (viewToken !== viewVersion.current) return;
       setEvents((current) => [
         ...current,
         {
@@ -275,21 +311,67 @@ function App() {
         },
       ]);
     } finally {
-      setBusy(false);
+      if (viewToken === viewVersion.current) setBusy(false);
       await refresh().catch(() => {});
+      await refreshHistory();
     }
   }
 
-  async function pollRun(runId: string) {
-    let sequence = -1;
+  function newTask() {
+    viewVersion.current += 1;
+    setTab("chat");
+    setEvents([]);
+    setSubmittedPrompt("");
+    setActiveRun(undefined);
+    setPrompt("");
+    setAttachments([]);
+    setApprovalPrompt(undefined);
+    setHistoryError("");
+  }
+
+  async function openHistoricalRun(item: RunHistoryItem) {
+    if (busy) return;
+    const viewToken = ++viewVersion.current;
+    setBusy(true);
+    setHistoryError("");
+    try {
+      const [stored, storedEvents] = await Promise.all([
+        window.harness.request<{ spec: RunSpec; status: RunStatus } | undefined>({ method: "run.get", params: { runId: item.id } }),
+        window.harness.request<AgentEvent[]>({ method: "run.events", params: { runId: item.id, afterSequence: -1 } }),
+      ]);
+      if (viewToken !== viewVersion.current) return;
+      if (!stored) throw new Error("该历史任务已不存在");
+      setTab("chat");
+      setWorkspace(stored.spec.workspacePath);
+      setProfileId(stored.spec.profileId);
+      setActiveRun(stored.spec.id);
+      setSubmittedPrompt(stored.spec.request);
+      setEvents(mergeRunEvents([], storedEvents, stored.spec.id));
+      setPrompt("");
+      setAttachments([]);
+      setApprovalPrompt(undefined);
+      if (isLiveRun(stored.status)) {
+        await pollRun(stored.spec.id, storedEvents.reduce((max, event) => Math.max(max, event.sequence), -1), viewToken);
+      }
+      await refreshHistory();
+    } catch (error) {
+      if (viewToken === viewVersion.current) setHistoryError(`无法打开历史记录：${error instanceof Error ? error.message : String(error)}`);
+    } finally {
+      if (viewToken === viewVersion.current) setBusy(false);
+    }
+  }
+
+  async function pollRun(runId: string, startSequence = -1, viewToken = viewVersion.current) {
+    let sequence = startSequence;
     let finished = false;
-    while (!finished) {
+    while (!finished && viewToken === viewVersion.current) {
       const batch = await window.harness.request<AgentEvent[]>({
         method: "run.events",
         params: { runId, afterSequence: sequence },
       });
+      if (viewToken !== viewVersion.current) return;
       if (batch.length) {
-        setEvents((current) => [...current, ...batch]);
+        setEvents((current) => viewToken === viewVersion.current ? mergeRunEvents(current, batch, runId) : current);
         sequence = Math.max(...batch.map((event) => event.sequence), sequence);
         finished = batch.some((event) => event.type === "result");
         const toolApproval = batch.find(
@@ -304,6 +386,7 @@ function App() {
           const nextApprovals = await window.harness.request<ApprovalRequest[]>({
             method: "approvals.list",
           });
+          if (viewToken !== viewVersion.current) return;
           setApprovals(nextApprovals);
           const pending = nextApprovals.find(
             (approval) =>
@@ -316,9 +399,15 @@ function App() {
             method: "plan.get",
             params: { runId },
           });
+          if (viewToken !== viewVersion.current) return;
           if (plan?.status === "awaiting_approval")
             setApprovalPrompt({ kind: "plan", plan });
         }
+      }
+      if (!batch.length) {
+        const stored = await window.harness.request<{ spec: RunSpec; status: RunStatus } | undefined>({ method: "run.get", params: { runId } });
+        if (viewToken !== viewVersion.current) return;
+        finished = !stored || !isLiveRun(stored.status);
       }
       if (!finished) await delay(500);
     }
@@ -475,14 +564,7 @@ function App() {
           </div>
         </div>
         <BuiButton className="new-task-button" variant="ghost" disabled={busy}
-          onClick={() => {
-            setTab("chat");
-            setEvents([]);
-            setSubmittedPrompt("");
-            setActiveRun(undefined);
-            setPrompt("");
-            setAttachments([]);
-          }}>
+          onClick={newTask}>
           <SquarePen size={18} /> 新建任务
         </BuiButton>
         <div className="sidebar-scroll">
@@ -516,8 +598,21 @@ function App() {
           <button className="project-row" onClick={chooseWorkspace} title={workspace || "打开代码仓库"}>
             <FolderOpen size={18} /><span>{workspace ? basename(workspace) : "打开代码仓库"}</span>
           </button>
-          {submittedPrompt ? <button className="project-session" onClick={() => setTab("chat")} title={submittedPrompt}><MessageSquare size={14} /><span>{submittedPrompt}</span></button>
-            : <p className="sidebar-hint">{workspace ? "从一个新任务开始" : "选择项目后开始开发"}</p>}
+          {!workspace && <p className="sidebar-hint">选择项目，或从下方打开历史会话</p>}
+        </section>
+        <section className="sidebar-history" aria-label="会话历史">
+          <div className="sidebar-section-label"><span>会话历史</span></div>
+          {runHistory.items.map((item) => (
+            <button key={item.id} className={`project-session history-session${activeRun === item.id ? " active" : ""}`} aria-current={activeRun === item.id ? "page" : undefined} disabled={busy} onClick={() => void openHistoricalRun(item)} title={`${item.request}\n${item.workspacePath}`}>
+              <MessageSquare size={14} />
+              <span className="history-session-content"><span>{item.request}</span><small>{basename(item.workspacePath)} · {runStatusLabel[item.status]}</small></span>
+            </button>
+          ))}
+          {!runHistory.items.length && !historyLoading && !historyError && <p className="sidebar-hint">发送任务后会自动保存在这里</p>}
+          {historyLoading && <p className="sidebar-hint">正在加载历史记录…</p>}
+          {historyError && <p className="sidebar-hint history-error" role="alert">{historyError}</p>}
+          {historyError && <BuiButton variant="ghost" size="sm" disabled={historyLoading} onClick={() => void refreshHistory()}>重试加载</BuiButton>}
+          {runHistory.hasMore && <BuiButton variant="ghost" size="sm" disabled={busy || historyLoading} onClick={() => void refreshHistory(true)}>加载更早的会话</BuiButton>}
         </section>
         <details className="sidebar-tools">
           <summary>工作台工具 <ChevronDown size={14} /></summary>
@@ -525,7 +620,7 @@ function App() {
         </details>
         </div>
         <div className="sidebar-foot">
-          <BuiButton variant="ghost" onClick={() => setTab("settings")} className="sidebar-settings"><Settings size={17} /><span>设置</span><small>v1.2.1</small></BuiButton>
+          <BuiButton variant="ghost" onClick={() => setTab("settings")} className="sidebar-settings"><Settings size={17} /><span>设置</span><small>v1.2.2</small></BuiButton>
           <div className="sidebar-connection"><span className="status-dot" />本地运行时已解锁</div>
         </div>
       </aside>

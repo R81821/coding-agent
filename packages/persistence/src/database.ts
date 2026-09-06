@@ -12,6 +12,7 @@ import type {
   PluginRecord,
   Profile,
   RunCheckpoint,
+  RunHistoryPage,
   RunSpec,
   RunStatus,
   SkillManifest,
@@ -77,6 +78,18 @@ export class HarnessDatabase {
     const row = this.db.prepare("SELECT id, status, payload FROM runs WHERE id=?").get(runId) as RunRow | undefined;
     if (!row) return undefined;
     return { spec: this.crypto.decryptJson<RunSpec>(row.payload, `run:${row.id}`), status: row.status };
+  }
+
+  listRunHistory(limit = 50, offset = 0): RunHistoryPage {
+    if (!Number.isInteger(limit) || limit < 1 || limit > 200 || !Number.isInteger(offset) || offset < 0) throw new Error("Invalid history pagination");
+    const rows = this.db.prepare("SELECT id, status, payload FROM runs ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?").all(limit + 1, offset) as unknown as RunRow[];
+    return {
+      items: rows.slice(0, limit).map((row) => {
+        const spec = this.crypto.decryptJson<RunSpec>(row.payload, `run:${row.id}`);
+        return { id: spec.id, sessionId: spec.sessionId, request: spec.request, workspacePath: spec.workspacePath, profileId: spec.profileId, createdAt: spec.createdAt, status: row.status };
+      }),
+      hasMore: rows.length > limit,
+    };
   }
 
   listInterruptedRuns(): Array<{ spec: RunSpec; status: RunStatus }> {

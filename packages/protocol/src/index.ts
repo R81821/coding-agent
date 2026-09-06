@@ -411,6 +411,10 @@ export const RunSpecSchema = z.object({
 });
 export type RunSpec = z.infer<typeof RunSpecSchema>;
 
+export type RunHistoryItem = Pick<RunSpec, "id" | "sessionId" | "request" | "workspacePath" | "profileId" | "createdAt"> & { status: RunStatus };
+export interface RunHistoryPage { items: RunHistoryItem[]; hasMore: boolean }
+
+
 export const ProfileSchema = z.object({
   id: z.string(),
   name: z.string(),
@@ -534,6 +538,8 @@ export type TaskSpec = z.infer<typeof TaskSpecSchema>;
 export const DaemonRequestSchema = z.discriminatedUnion("method", [
   z.object({ id: z.string(), method: z.literal("health") }),
   z.object({ id: z.string(), method: z.literal("run.start"), params: RunSpecSchema }),
+  z.object({ id: z.string(), method: z.literal("runs.list"), params: z.object({ limit: z.number().int().positive().max(200).default(50), offset: z.number().int().nonnegative().default(0) }).optional() }),
+  z.object({ id: z.string(), method: z.literal("run.get"), params: z.object({ runId: z.string().min(1) }) }),
   z.object({ id: z.string(), method: z.literal("run.resume"), params: z.object({ runId: z.string() }) }),
   z.object({ id: z.string(), method: z.literal("run.cancel"), params: z.object({ runId: z.string() }) }),
   z.object({ id: z.string(), method: z.literal("run.events"), params: z.object({ runId: z.string(), afterSequence: z.number().int().default(-1) }) }),

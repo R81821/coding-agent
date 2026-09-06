@@ -4,6 +4,8 @@ import type { DaemonRequest } from "@harness/protocol";
 const RENDERER_ALLOWED_METHODS: ReadonlySet<DaemonRequest["method"]> = new Set([
   "health",
   "run.start",
+  "runs.list",
+  "run.get",
   "run.resume",
   "run.cancel",
   "run.events",
