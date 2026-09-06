@@ -18,7 +18,7 @@ import {
   Tray,
 } from "electron";
 import type { DaemonRequest, DaemonResponse } from "@harness/protocol";
-import { DaemonResponseSchema, newId } from "@harness/protocol";
+import { daemonEndpointName, DaemonResponseSchema, newId } from "@harness/protocol";
 import { ensureV2Storage } from "@harness/persistence";
 import {
   credentialNames,
@@ -34,10 +34,12 @@ import { appendBounded, daemonStartupError } from "./daemon-startup.js";
 import { sanitizeRendererRequest } from "./renderer-ipc.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
+const daemonInstanceId = newId("desktop");
+const endpointName = daemonEndpointName(daemonInstanceId);
 const pipePath =
   process.platform === "win32"
-    ? "\\\\.\\pipe\\harness-agent-v2"
-    : join(tmpdir(), "harness-agent-v2.sock");
+    ? `\\\\.\\pipe\\${endpointName}`
+    : join(tmpdir(), `${endpointName}.sock`);
 let window: BrowserWindow | undefined;
 let tray: Tray | undefined;
 let daemon: ChildProcess | undefined;
@@ -390,6 +392,7 @@ async function startDaemon(passphrase: string): Promise<void> {
     ...credentialEnvironment,
     ...settingsEnvironment,
     HARNESS_APP_DATA_PATH: app.getPath("userData"),
+    HARNESS_DAEMON_INSTANCE: daemonInstanceId,
   };
   if (app.isPackaged)
     daemon = spawn(process.execPath, [packagedPath], {

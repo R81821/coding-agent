@@ -7,6 +7,7 @@ import { createRuntime, profileFor, type HarnessRuntime } from "@harness/core";
 import { FeishuConnector, PairingService, TelegramConnector, type MessageConnector, type RemoteMessage } from "@harness/extensions";
 import {
   DaemonRequestSchema,
+  daemonEndpointName,
   type DaemonRequest,
   type DaemonResponse,
   type AgentEvent,
@@ -24,7 +25,8 @@ if (!passphrase) {
   process.exit(2);
 }
 
-const pipePath = process.platform === "win32" ? "\\\\.\\pipe\\harness-agent-v2" : join(tmpdir(), "harness-agent-v2.sock");
+const endpointName = daemonEndpointName(process.env.HARNESS_DAEMON_INSTANCE);
+const pipePath = process.platform === "win32" ? `\\\\.\\pipe\\${endpointName}` : join(tmpdir(), `${endpointName}.sock`);
 if (process.platform !== "win32" && existsSync(pipePath)) unlinkSync(pipePath);
 
 const runtime = await createRuntime({ passphrase, ...(process.env.HARNESS_APP_DATA_PATH ? { appDataPath: process.env.HARNESS_APP_DATA_PATH } : {}) });
@@ -81,7 +83,7 @@ async function dispatchLine(line: string): Promise<DaemonResponse> {
 async function dispatch(request: DaemonRequest, target: HarnessRuntime): Promise<unknown> {
   switch (request.method) {
     case "health":
-      return { status: "ok", version: "1.2.3", activeRuns: "available", connectors: [...connectors.keys()] };
+      return { status: "ok", version: "1.2.4", activeRuns: "available", providerIds: target.providerIds, connectors: [...connectors.keys()] };
     case "run.start": {
       target.engine.start(request.params, profileFor(target, request.params.profileId));
       return { runId: request.params.id };

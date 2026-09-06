@@ -1,6 +1,6 @@
 {
   "name": "@harness/desktop",
-  "version": "1.2.3",
+  "version": "1.2.4",
   "description": "Local-first software development agent for Windows",
   "author": "Harness Agent contributors",
   "type": "module",

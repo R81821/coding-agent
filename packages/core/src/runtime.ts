@@ -11,6 +11,7 @@ import { configureTelemetry } from "./telemetry.js";
 import { HarnessEvalRunner } from "@harness/evals";
 
 export interface HarnessRuntime {
+  providerIds: string[];
   engine: HarnessEngine;
   database: HarnessDatabase;
   blobs: EncryptedBlobStore;
@@ -183,6 +184,7 @@ export async function createRuntime(options: { appDataPath?: string; passphrase:
   scheduler.recoverInterrupted();
   scheduler.start();
   return {
+    providerIds: providers.map((provider) => provider.id),
     engine,
     database,
     blobs,

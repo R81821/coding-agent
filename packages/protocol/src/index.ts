@@ -609,6 +609,13 @@ export const DEFAULT_PROFILE: Profile = ProfileSchema.parse({
   detailedRemoteOutput: false
 });
 
+// A desktop launch owns one daemon endpoint; CLI daemons keep the legacy default.
+export function daemonEndpointName(instanceId?: string): string {
+  if (instanceId === undefined) return "harness-agent-v2";
+  if (!/^[a-zA-Z0-9_-]{1,80}$/.test(instanceId)) throw new Error("Invalid daemon instance ID");
+  return `harness-agent-v2-${instanceId}`;
+}
+
 export function newId(prefix: string): string {
   return `${prefix}_${crypto.randomUUID()}`;
 }
