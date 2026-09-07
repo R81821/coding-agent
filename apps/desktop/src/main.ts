@@ -14,6 +14,7 @@ import {
   Menu,
   nativeImage,
   safeStorage,
+  shell,
   screen,
   Tray,
 } from "electron";
@@ -32,6 +33,13 @@ import {
 } from "./provider-settings.js";
 import { appendBounded, daemonStartupError } from "./daemon-startup.js";
 import { sanitizeRendererRequest } from "./renderer-ipc.js";
+import { messageHttpUrl } from "./message-links.js";
+
+ipcMain.handle("harness:open-external", async (_event, value: unknown) => {
+  const url = messageHttpUrl(value);
+  if (!url) throw new Error("仅支持有效的 HTTP(S) 链接");
+  await shell.openExternal(url);
+});
 
 const here = dirname(fileURLToPath(import.meta.url));
 const daemonInstanceId = newId("desktop");
@@ -276,6 +284,8 @@ function createWindow(show: boolean): void {
       nodeIntegration: false,
     },
   });
+  window.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
+  window.webContents.on("will-navigate", (event) => event.preventDefault());
   const devUrl = process.env.VITE_DEV_SERVER_URL;
   if (devUrl) void window.loadURL(devUrl);
   else void window.loadFile(join(here, "..", "dist", "index.html"));

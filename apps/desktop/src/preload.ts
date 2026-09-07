@@ -3,6 +3,7 @@ import type { DaemonRequestInput } from "@harness/protocol";
 import type { ProviderSettings } from "./provider-settings.js";
 
 const api = {
+  openExternal: (url: string) => ipcRenderer.invoke("harness:open-external", url) as Promise<void>,
   exportMemories: (memoryIds: string[]) => ipcRenderer.invoke("harness:memory-export", memoryIds) as Promise<{ canceled: boolean; path?: string }>,
   unlock: (passphrase: string, remember = false) =>
     ipcRenderer.invoke("harness:unlock", { passphrase, remember }) as Promise<{

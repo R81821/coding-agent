@@ -12,7 +12,8 @@ function save(id, request, text, status = "completed", createdAt = "2026-09-01T0
   const spec = { id, sessionId: `session-${id}`, request, workspacePath: "D:/fixture-project", profileId: "default", attachments: [], grants: [], budget: {}, createdAt };
   runs.set(id, { spec, status, events: [{ id: `event-${id}`, runId: id, at: createdAt, sequence: 0, type: "result", text, status }] });
 }
-save("old-a", "历史任务 A", "历史回答 A：已完成分析。");
+const markdownFixture = fs.readFileSync(path.join(__dirname, "markdown-fixture.md"), "utf8");
+save("old-a", "历史任务 A", markdownFixture);
 save("old-b", "历史任务 B", "历史回答 B：保留失败诊断。", "failed");
 save("old-c", "其他项目任务", "其他项目回答。");
 runs.get("old-c").spec.workspacePath = "D:/other-project";
@@ -32,12 +33,22 @@ ipcMain.handle("history-fixture", (_event, request) => {
       return run && { spec: run.spec, status: run.status };
     }
     case "run.events": return (runs.get(request.params.runId)?.events ?? []).filter((event) => event.sequence > request.params.afterSequence);
-    case "run.start": save(request.params.id, request.params.request, "新会话回答", "completed", request.params.createdAt); return { runId: request.params.id };
+    case "run.start": {
+      const id = request.params.id;
+      save(id, request.params.request, "# 新会话回答\n\n```js\nconst stream = 42;\n```", "running", request.params.createdAt);
+      const run = runs.get(id);
+      const result = { ...run.events[0], sequence: 1, status: "completed" };
+      run.events = [{ ...result, sequence: 0, type: "text_delta", delta: "# 新会话回答\n\n```js\nconst stream =" }];
+      setTimeout(() => { run.events.push(result); run.status = "completed"; }, 1500);
+      return { runId: id };
+    }
     default: return [];
   }
 });
+let openedLink;
+ipcMain.handle("history-open-link", (_event, url) => { openedLink = url; });
 const preload = path.join(scratch, "preload.cjs");
-fs.writeFileSync(preload, `const {contextBridge,ipcRenderer}=require('electron');contextBridge.exposeInMainWorld('harness',{restoreUnlock:async()=>({ok:true}),request:(request)=>ipcRenderer.invoke('history-fixture',request)});`);
+fs.writeFileSync(preload, `const {contextBridge,ipcRenderer}=require('electron');contextBridge.exposeInMainWorld('harness',{restoreUnlock:async()=>({ok:true}),openExternal:async(url)=>ipcRenderer.invoke("history-open-link",url),request:(request)=>ipcRenderer.invoke('history-fixture',request)});`);
 let win;
 const checks = [];
 const evaluate = (code) => win.webContents.executeJavaScript(code);
@@ -81,11 +92,26 @@ app.whenReady().then(async () => {
   await evaluate("document.querySelector('.task-starter').click()");
   await waitFor("document.querySelector('.prompt-send') && !document.querySelector('.prompt-send').disabled", "new task can submit");
   await evaluate("document.querySelector('.prompt-send').click()");
+  await waitFor("document.querySelector('.md-code-block code')?.textContent.includes('const stream =') && document.querySelector('.new-task-button').disabled", "partial streamed code fence renders before completion");
 
   await waitFor("document.querySelectorAll('.history-session').length === 3 && document.querySelector('.assistant-message')?.textContent.includes('新会话回答') && !document.querySelector('.new-task-button').disabled", "sending new task retains both older conversations");
   await win.loadFile(path.join(root, "apps/desktop/dist/index.html"));
   await waitFor("document.querySelectorAll('.history-session').length === 3", "renderer reload restores all history");
   await openHistory("历史任务 A", "历史回答 A");
+  await waitFor("document.querySelector('.md-content h1') && document.querySelector('.md-content table') && document.querySelector('.md-content blockquote') && document.querySelector('.hljs-keyword')", "renders rich Markdown and highlighted code");
+  await evaluate("Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText: async text => { window.__copiedText = text; } } });");
+  await evaluate("document.querySelector('[aria-label=\"复制代码\"]').click()");
+  await waitFor("window.__copiedText?.includes('export function findSession') && !window.__copiedText.includes('```')", "copies code without Markdown fences");
+  await evaluate("document.querySelector('[aria-label=\"复制 Markdown\"]').click()");
+  await waitFor(`window.__copiedText === ${JSON.stringify(markdownFixture)}`, "copies original Markdown exactly");
+  await evaluate("[...document.querySelectorAll('.md-message-actions button')].find(el=>el.textContent.includes('查看原文')).click()");
+  await waitFor("document.querySelector('.md-source')?.textContent.includes('# 历史回答 A')", "raw Markdown view");
+  await evaluate("[...document.querySelectorAll('.md-message-actions button')].find(el=>el.textContent.includes('查看渲染')).click()");
+  await waitFor("document.querySelector('.md-content table') !== null", "switches back to rich rendering");
+  await evaluate("document.querySelector('.md-content a[href=\"https://example.com/docs\"]').click()");
+  if (openedLink !== "https://example.com/docs") throw new Error("Link did not use desktop bridge");
+  checks.push("external links use bridge without navigating the app");
+  await evaluate("document.querySelector('.conversation').scrollTop = 0");
   const screenshot = path.join(scratch, "history.png");
   fs.writeFileSync(screenshot, (await win.webContents.capturePage()).toPNG());
   console.log(JSON.stringify({ checks, screenshot, note: "Real built renderer with fixture IPC; no user database or model calls." }));

@@ -1,9 +1,9 @@
 {
   "name": "harness-agent",
-  "version": "1.2.4",
+  "version": "1.2.5",
   "private": true,
   "type": "module",
-  "packageManager": "pnpm@10.15.0",
+  "packageManager": "pnpm@11.25.0",
   "engines": {
     "node": ">=22.19.0"
   },

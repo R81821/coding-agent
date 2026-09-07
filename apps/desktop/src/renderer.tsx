@@ -33,6 +33,7 @@ import { BuiSidebarNav } from "./ui/sidebar-nav.js";
 import { BuiToolChip } from "./ui/tool-chip.js";
 import { MemoryManager } from "./memory-manager.js";
 import { assistantMessages } from "./assistant-messages.js";
+import { MarkdownMessage } from "./markdown-message.js";
 import { groupRunHistory, isLiveRun, mergeRunEvents, mergeRunHistory, runStatusLabel, workspaceKey } from "./run-history.js";
 import {
   Activity,
@@ -659,7 +660,7 @@ function App() {
         </details>
         </div>
         <div className="sidebar-foot">
-          <BuiButton variant="ghost" onClick={() => setTab("settings")} className="sidebar-settings"><Settings size={17} /><span>设置</span><small>v1.2.4</small></BuiButton>
+          <BuiButton variant="ghost" onClick={() => setTab("settings")} className="sidebar-settings"><Settings size={17} /><span>设置</span><small>v1.2.5</small></BuiButton>
           <div className="sidebar-connection"><span className="status-dot" />本地运行时已解锁</div>
         </div>
       </aside>
@@ -911,16 +912,14 @@ function ChatView(props: {
             <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-accent-soft text-sm font-semibold text-accent-text">
               H
             </div>
-            <pre className="min-w-0 flex-1 whitespace-pre-wrap break-words font-mono text-sm text-text">
-              {props.finalText}
-            </pre>
+            <MarkdownMessage text={props.finalText} />
           </article>
         )}
         {progressMessages.length > 0 && (
           <details className="glass mb-3 px-4 py-3">
             <summary className="cursor-pointer text-xs text-text-muted">查看过程记录（{progressMessages.length} 轮）</summary>
             {progressMessages.map((text, index) => (
-              <pre key={index} className="mt-3 whitespace-pre-wrap break-words border-t border-line pt-3 text-xs text-text-muted">{text}</pre>
+              <div key={index} className="mt-3 border-t border-line pt-3"><MarkdownMessage text={text} compact /></div>
             ))}
           </details>
         )}

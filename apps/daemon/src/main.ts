@@ -83,7 +83,7 @@ async function dispatchLine(line: string): Promise<DaemonResponse> {
 async function dispatch(request: DaemonRequest, target: HarnessRuntime): Promise<unknown> {
   switch (request.method) {
     case "health":
-      return { status: "ok", version: "1.2.4", activeRuns: "available", providerIds: target.providerIds, connectors: [...connectors.keys()] };
+      return { status: "ok", version: "1.2.5", activeRuns: "available", providerIds: target.providerIds, connectors: [...connectors.keys()] };
     case "run.start": {
       target.engine.start(request.params, profileFor(target, request.params.profileId));
       return { runId: request.params.id };

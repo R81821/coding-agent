@@ -1,6 +1,6 @@
 {
   "name": "@harness/desktop",
-  "version": "1.2.4",
+  "version": "1.2.5",
   "description": "Local-first software development agent for Windows",
   "author": "Harness Agent contributors",
   "type": "module",
@@ -14,9 +14,12 @@
     "@harness/daemon": "workspace:*",
     "@harness/persistence": "workspace:*",
     "@harness/protocol": "workspace:*",
+    "lowlight": "^3.3.0",
     "lucide-react": "^1.39.0",
     "react": "^19.1.1",
     "react-dom": "^19.1.1",
+    "react-markdown": "^10.1.0",
+    "remark-gfm": "^4.0.1",
     "sharp": "^0.34.3"
   },
   "devDependencies": {
