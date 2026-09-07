@@ -14,6 +14,13 @@ function save(id, request, text, status = "completed", createdAt = "2026-09-01T0
 }
 const markdownFixture = fs.readFileSync(path.join(__dirname, "markdown-fixture.md"), "utf8");
 save("old-a", "历史任务 A", markdownFixture);
+const workflow = {
+  phase: "final_review", objective: "检查仓库", intent: "change", requirements: ["修复目标行为"], context: "已检查入口与测试", plan: ["最小修改"],
+  hypotheses: [{ cause: "边界条件未处理", evidenceIds: ["read-1"], revision: 1 }], observations: [], verification: [], relevantFiles: ["src/value.ts"], changedFiles: ["src/value.ts"],
+  revision: 1, localRevision: 1, broaderRevision: 1, diffRevision: 1, requirementsRevision: 1, reviewedRevision: 1, failures: 1, diagnosisRequired: false, lastFailure: "", requirementEvidence: ["测试通过"], review: "已检查边界条件与修改范围",
+};
+runs.get("old-a").events[0].sequence = 1;
+runs.get("old-a").events.unshift({ id: "workflow-fixture", runId: "old-a", at: "2026-09-01T00:00:00.000Z", sequence: 0, type: "workflow_updated", workflow, detail: "已检查边界条件与修改范围" });
 save("old-b", "历史任务 B", "历史回答 B：保留失败诊断。", "failed");
 save("old-c", "其他项目任务", "其他项目回答。");
 runs.get("old-c").spec.workspacePath = "D:/other-project";
@@ -99,6 +106,9 @@ app.whenReady().then(async () => {
   await waitFor("document.querySelectorAll('.history-session').length === 3", "renderer reload restores all history");
   await openHistory("历史任务 A", "历史回答 A");
   await waitFor("document.querySelector('.md-content h1') && document.querySelector('.md-content table') && document.querySelector('.md-content blockquote') && document.querySelector('.hljs-keyword')", "renders rich Markdown and highlighted code");
+  await waitFor("document.querySelector('.workflow-progress summary')?.textContent.includes('最终评审')", "restores persisted workflow phase");
+  await evaluate("document.querySelector('.workflow-progress summary').click()");
+  await waitFor("document.querySelector('.workflow-progress').open && document.querySelector('.workflow-progress').textContent.includes('边界条件未处理')", "workflow expands hypothesis and acceptance evidence");
   await evaluate("Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText: async text => { window.__copiedText = text; } } });");
   await evaluate("document.querySelector('[aria-label=\"复制代码\"]').click()");
   await waitFor("window.__copiedText?.includes('export function findSession') && !window.__copiedText.includes('```')", "copies code without Markdown fences");
@@ -111,7 +121,10 @@ app.whenReady().then(async () => {
   await evaluate("document.querySelector('.md-content a[href=\"https://example.com/docs\"]').click()");
   if (openedLink !== "https://example.com/docs") throw new Error("Link did not use desktop bridge");
   checks.push("external links use bridge without navigating the app");
-  await evaluate("document.querySelector('.conversation').scrollTop = 0");
+  await evaluate("document.querySelector('.workflow-progress').scrollIntoView({block: 'start', behavior: 'instant'})");
+  await evaluate("new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))");
+  await evaluate("document.querySelector('.conversation').scrollTo({top: 0, behavior: 'instant'})");
+  await new Promise(resolve => setTimeout(resolve, 350));
   const screenshot = path.join(scratch, "history.png");
   fs.writeFileSync(screenshot, (await win.webContents.capturePage()).toPNG());
   console.log(JSON.stringify({ checks, screenshot, note: "Real built renderer with fixture IPC; no user database or model calls." }));

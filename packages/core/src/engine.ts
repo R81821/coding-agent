@@ -1,6 +1,6 @@
 import { EventEmitter } from "node:events";
 import { createHash } from "node:crypto";
-import { relative, resolve } from "node:path";
+import { isAbsolute, relative, resolve } from "node:path";
 import { SpanStatusCode, trace } from "@opentelemetry/api";
 import type {
   AgentEvent,
@@ -20,10 +20,12 @@ import { ModelRouter } from "@harness/providers";
 import type { MemoryService, SkillService } from "@harness/extensions";
 import type { HarnessDatabase } from "@harness/persistence";
 import type { ToolRegistry } from "@harness/tools";
+import { confinedPath } from "@harness/tools";
 import { ApprovalBroker } from "./approvals.js";
 import { buildInitialMessages } from "./context.js";
 import { runWithPiAgent } from "./pi-agent-bridge.js";
 import { RunProgress } from "./run-progress.js";
+import { CodingWorkflow, compactObservation } from "./coding-workflow.js";
 import { PermissionEngine, summarizeToolRequest } from "./security.js";
 import type { ProjectTrustService } from "./project-trust.js";
 
@@ -104,6 +106,7 @@ function planCovers(plan: PlanSpec, call: ToolCall, risk: "read" | "write" | "hi
 }
 
 interface ActiveRun {
+  workflow?: CodingWorkflow;
   spec: RunSpec;
   controller: AbortController;
   sequence: number;
@@ -307,7 +310,15 @@ export class HarnessEngine extends EventEmitter {
         trustedSkills,
         ...(trustedProjectInstructions ? { trustedProjectInstructions } : {}),
       });
+      const workflow = new CodingWorkflow(spec.request, (snapshot, detail) => {
+        this.emitEvent(spec.id, state, { type: "workflow_updated", workflow: snapshot, detail });
+      }, recovery?.workflow);
+      state.workflow = workflow;
+      if (recovery?.pendingNonIdempotentToolCalls.length) workflow.fail("Execution state is unknown after restart. Inspect current repository state and diagnose before any new mutation or verification command.");
+      const workflowTool = workflow.tool();
       const contracts = this.deps.tools.contracts(profile.toolNames);
+      if (contracts.length) contracts.push(workflowTool.contract);
+      workflow.move(workflow.state.phase, recovery ? "恢复工作流；代码验证与评审需要重新执行" : "接收用户任务，准备理解目标");
       const requirements = {
         needsVision: spec.attachments.length > 0,
         needsTools: contracts.length > 0,
@@ -330,6 +341,7 @@ export class HarnessEngine extends EventEmitter {
       let finalText = "";
       let stopReason: string | undefined;
       let summarizing = false;
+      let yieldForVerification = false;
       const progress = new RunProgress();
       if (state.turns >= spec.budget.maxTurns || (state.toolCalls > 0 && state.toolCalls >= spec.budget.maxToolCalls)) {
         this.status(spec.id, state, "review");
@@ -348,7 +360,7 @@ export class HarnessEngine extends EventEmitter {
         model: route.model,
         initialMessages: messages,
         contracts,
-        resolveTool: (name) => this.deps.tools.get(name),
+        resolveTool: (name) => name === "update_workflow" ? workflowTool : this.deps.tools.get(name),
         externalSignal: state.controller.signal,
         maxOutputTokens: Math.min(8_192, requirements.estimatedOutputTokens, Math.max(1, Math.floor(route.model.capabilities.maxContextTokens * profile.contextPolicy.outputReserveRatio))),
         parallelToolCalls: route.model.capabilities.parallelTools,
@@ -361,6 +373,8 @@ export class HarnessEngine extends EventEmitter {
         getPinnedContext: () => JSON.stringify({
           approvedPlan: state.plan?.status === "approved" ? state.plan : undefined,
           permissionSnapshot: spec.grants,
+          workingMemory: { trust: "untrusted_tool", ...workflow.snapshot() },
+          verificationPolicy: profile.verificationPolicy,
           remainingToolCalls: Math.max(0, spec.budget.maxToolCalls - state.toolCalls),
           remainingTurns: Math.max(0, spec.budget.maxTurns - state.turns),
           recentObservations: { trust: "untrusted_tool", items: progress.snapshot() },
@@ -378,6 +392,10 @@ export class HarnessEngine extends EventEmitter {
             stopReason = "已达到工具调用额度，保留现有发现并结束本轮探索。";
             return { block: true, terminate: true, reason: stopReason };
           }
+          if (call.name === "update_workflow") { state.toolCalls += 1; return {}; }
+          const tool = this.deps.tools.get(call.name);
+          const blocked = tool && workflow.before(call, tool);
+          if (blocked) { state.toolCalls += 1; return { block: true, reason: blocked }; }
           return this.authorizeTool(spec, state, call);
         },
         executeTool: async (call, tool, signal) => {
@@ -388,6 +406,8 @@ export class HarnessEngine extends EventEmitter {
             state.hadSideEffect = true;
             progress.invalidate();
           }
+          workflow.starting(call, tool);
+          if ((tool.assessRisk?.(call.input) ?? tool.contract.risk) !== "read" || call.name === "delegate") yieldForVerification = true;
           this.saveCheckpoint(spec.id, state, "tool_batch");
           try {
             const result = await tool.execute(call.input, {
@@ -407,14 +427,16 @@ export class HarnessEngine extends EventEmitter {
               const search = result.output as { searchId?: unknown; results?: unknown[]; usage?: Record<string, unknown> };
               if (typeof search.searchId === "string") this.emitEvent(spec.id, state, { type: "search_usage", providerId: "parallel", searchId: search.searchId, resultCount: Array.isArray(search.results) ? search.results.length : 0, usage: search.usage ?? {} });
             }
+            workflow.observe(call, result);
             stopReason ??= progress.record(call, tool, result);
             state.pendingNonIdempotent.delete(call.id);
             this.saveCheckpoint(spec.id, state, "tool_batch");
-            return result;
+            return call.name === "terminal" ? { ...result, output: { observation: compactObservation(result.output), isError: result.isError === true } } : result;
           } catch (error) {
             const output = {
               error: error instanceof Error ? error.message : String(error),
             };
+            workflow.observe(call, { output, isError: true });
             stopReason ??= progress.record(call, tool, { output, isError: true });
             this.emitEvent(spec.id, state, {
               type: "tool_finished",
@@ -440,7 +462,7 @@ export class HarnessEngine extends EventEmitter {
             // Keep the last available model turn for a tool-free evidence summary.
             if (state.turns >= spec.budget.maxTurns - 1) stopReason ??= "已达到探索轮次上限，保留剩余轮次整理结果。";
           }
-          return !!stopReason;
+          return !!stopReason || yieldForVerification;
         },
         onTranscript: async (transcript, reason) => {
           state.transcript = transcript;
@@ -533,26 +555,53 @@ export class HarnessEngine extends EventEmitter {
           };
           if (stopReason) { await finishStoppedRun(); return; }
           const maxRepairs = profile.verificationPolicy.maxRepairAttempts;
-          for (let attempt = 0; attempt <= maxRepairs; attempt += 1) {
+          for (let round = 0; round <= maxRepairs + 1; round += 1) {
             this.checkBudget(spec, state);
-            this.status(spec.id, state, "verifying");
-            const verification = await this.verify(spec, profile, state, attempt);
-            if (verification.passed) return;
-            if (attempt >= maxRepairs || profile.verificationPolicy.items.length === 0) return;
-            if (state.turns >= spec.budget.maxTurns) {
-              stopReason = "验证尚未通过，模型轮次额度已用完。";
+            if (workflow.canFinish()) return;
+            const revision = workflow.state.revision;
+            let passed = workflow.checksCurrent();
+            if (!passed && !workflow.state.diagnosisRequired) {
+              yieldForVerification = false;
+              this.status(spec.id, state, "verifying");
+              workflow.move("local_verification", "先运行局部验证；失败时不运行扩大验证");
+              const local = await this.verify(spec, profile, state, round, "local");
+              workflow.move("inspect_result", local.passed ? "局部验证通过" : "局部验证失败");
+              passed = local.passed;
+              if (local.passed) {
+                workflow.state.localRevision = revision;
+                workflow.move("broader_verification", this.verificationItems(profile, state).some(item => item.stage === "broader") ? "局部验证通过，运行扩大验证" : "未配置扩大验证项；保留局部验证证据，进入需求核对");
+                const broader = await this.verify(spec, profile, state, round, "broader");
+                passed = broader.passed;
+                if (broader.passed) workflow.state.broaderRevision = revision;
+                else workflow.fail(JSON.stringify(broader.results.map(r => ({ ...r, output: compactObservation(r.output, 3000) }))));
+              } else workflow.fail(JSON.stringify(local.results.map(r => ({ ...r, output: compactObservation(r.output, 3000) }))));
+              this.saveCheckpoint(spec.id, state, "verification");
+            }
+            if (!workflow.needsChange && passed) {
+              workflow.move("requirements_check", "只读任务：记录结论，不要求代码修改验证");
+              workflow.move("final_review", "运行时检查结束状态与验证结果");
               return;
             }
-            this.status(spec.id, state, "running");
-            this.emitEvent(spec.id, state, { type: "repair_started", attempt: attempt + 1, maxAttempts: maxRepairs });
-            this.emitEvent(spec.id, state, {
-              type: "self_correction_started",
-              trigger: "verification_failure",
-              attempt: attempt + 1,
-              maxAttempts: maxRepairs,
-              summary: "Verification failed; the structured results were returned to the same agent for diagnosis and a revised fix.",
-            });
-            await control.promptUntrusted(JSON.stringify({ verificationRunId: verification.id, attempt, results: verification.results }));
+            if (workflow.needsChange && !this.verificationItems(profile, state).some(item => (item.stage ?? "local") === "local" && item.required)) {
+              stopReason = "缺少必需的局部验证配置，不能将修改标记为完成。请在计划中提出局部验证命令，或在 Profile 中配置。";
+              return;
+            }
+            if (workflow.canFinish()) return;
+            if (round >= maxRepairs + 1 || (!passed && round >= maxRepairs) || state.turns >= spec.budget.maxTurns) {
+              stopReason = "验证、需求核对或最终评审尚未完成，修复轮次或模型额度已用完。";
+              return;
+            }
+            if (state.status !== "running") this.status(spec.id, state, "running");
+            if (!passed || workflow.state.diagnosisRequired) {
+              this.emitEvent(spec.id, state, { type: "repair_started", attempt: round + 1, maxAttempts: maxRepairs + 1 });
+              this.emitEvent(spec.id, state, { type: "self_correction_started", trigger: "verification_failure", attempt: round + 1, maxAttempts: maxRepairs + 1, summary: workflow.strategy() });
+            } else workflow.move("requirements_check", "验证通过；读取当前 git_diff，核对全部验收条件并执行最终评审");
+            await control.promptUntrusted(JSON.stringify({
+              workflow: workflow.snapshot(),
+              nextAction: passed && !workflow.state.diagnosisRequired
+                ? "Use git_diff for current changes. Call update_workflow requirements with passed and one evidence entry per requirement, then review with passed and a summary covering requirement mismatch, regressions, edge cases and unrelated changes. If requirements or review fail, report passed=false, diagnose and revise with a minimal patch. Finally provide the user a clear result."
+                : "Inspect failed verification output in working memory. Re-read relevant code, then call update_workflow diagnose with context, steps, a revised cause and actual evidenceIds. Make a minimal fix; runtime will rerun local checks before broader checks.",
+            }));
             state.transcript = control.transcript();
             if (stopReason) { await finishStoppedRun(); return; }
           }
@@ -571,7 +620,8 @@ export class HarnessEngine extends EventEmitter {
         return;
       }
       const verificationRuns = this.deps.database.listVerificationRuns(spec.id);
-      const verified = verificationRuns.at(-1)?.passed ?? !state.hadSideEffect;
+      const verified = workflow.needsChange ? workflow.canFinish() : (verificationRuns.at(-1)?.passed ?? !state.hadSideEffect);
+      if (verified) workflow.move("done", "运行时完成门槛已通过");
       if (finalText.trim()) {
         this.deps.memory.saveSessionSummary(
           spec.sessionId,
@@ -587,6 +637,7 @@ export class HarnessEngine extends EventEmitter {
         });
       }
       this.status(spec.id, state, verified ? "completed" : "review");
+      this.saveCheckpoint(spec.id, state, "manual");
       this.emitEvent(spec.id, state, {
         type: "result",
         text: finalText,
@@ -744,17 +795,23 @@ export class HarnessEngine extends EventEmitter {
     }
   }
 
+  private verificationItems(profile: Profile, state: ActiveRun): Profile["verificationPolicy"]["items"] {
+    return [...profile.verificationPolicy.items, ...(state.workflow?.state.verification ?? []).map((item, index) => ({ ...item, id: "task-check-" + index, required: true, expectedExitCodes: [0] }))];
+  }
+
   private async verify(
     spec: RunSpec,
     profile: Profile,
     state: ActiveRun,
     attempt: number,
+    stage: "local" | "broader",
   ): Promise<VerificationRun> {
     const startedAt = nowIso();
     const verificationRunId = newId("verify");
     this.emitEvent(spec.id, state, { type: "verification_started", verificationRunId, attempt });
-    if (profile.verificationPolicy.items.length === 0) {
-      const verification: VerificationRun = { id: verificationRunId, runId: spec.id, attempt, results: [], passed: !state.hadSideEffect, startedAt, finishedAt: nowIso() };
+    const items = this.verificationItems(profile, state).filter(item => (item.stage ?? "local") === stage);
+    if (items.length === 0) {
+      const verification: VerificationRun = { id: verificationRunId, runId: spec.id, attempt, stage, revision: state.workflow?.state.revision ?? 0, results: [], passed: stage === "broader" || !state.workflow?.needsChange, startedAt, finishedAt: nowIso() };
       this.deps.database.saveVerificationRun(verification);
       this.emitEvent(spec.id, state, { type: "verification_finished", verification });
       this.saveCheckpoint(spec.id, state, "verification");
@@ -762,39 +819,56 @@ export class HarnessEngine extends EventEmitter {
     }
     const terminal = this.deps.tools.get("terminal");
     const results: VerificationRun["results"] = [];
-    for (const item of profile.verificationPolicy.items) {
-      const workspacePath = resolve(spec.workspacePath, item.cwd);
-      const outside = relative(resolve(spec.workspacePath), workspacePath).startsWith("..") || relative(resolve(spec.workspacePath), workspacePath).startsWith("/");
+    for (const item of items) {
+      this.checkBudget(spec, state);
+      if (state.controller.signal.aborted) throw new Error("Run cancelled");
+      let workspacePath = resolve(spec.workspacePath, item.cwd);
+      let invalidDirectory = false;
+      try { workspacePath = await confinedPath(spec.workspacePath, item.cwd); } catch { invalidDirectory = true; }
+      const pathFromWorkspace = relative(resolve(spec.workspacePath), workspacePath);
+      const outside = invalidDirectory || pathFromWorkspace === ".." || pathFromWorkspace.startsWith("..\\") || pathFromWorkspace.startsWith("../") || isAbsolute(pathFromWorkspace);
       const started = Date.now();
-      if (!terminal || outside) {
+      if (state.toolCalls >= spec.budget.maxToolCalls) {
+        results.push({ itemId: item.id, command: item.command, cwd: item.cwd, exitCode: null, passed: false, required: item.required, output: "Verification tool-call budget exhausted", durationMs: 0, timedOut: false });
+        break;
+      }
+      if (!terminal || outside || !profile.toolNames.includes("terminal")) {
         results.push({ itemId: item.id, command: item.command, cwd: item.cwd, exitCode: null, passed: false, required: item.required, output: outside ? "Verification cwd escapes the workspace." : "terminal tool is unavailable", durationMs: Date.now() - started, timedOut: false });
         continue;
       }
-      const decision = this.permission.decide(
-        "terminal",
-        { command: item.command },
-        "high",
-        spec.grants,
-        spec.workspacePath,
-      );
+      const verificationCall: ToolCall = { id: newId("verification-call"), name: "terminal", input: { command: item.command, timeoutMs: item.timeoutMs } };
+      const risk = terminal.assessRisk?.(verificationCall.input) ?? terminal.contract.risk;
+      const decision = this.permission.decide("terminal", verificationCall.input, risk, spec.grants, spec.workspacePath);
       if (!decision.allowed) {
-        results.push({ itemId: item.id, command: item.command, cwd: item.cwd, exitCode: null, passed: false, required: item.required, output: `Verification permission denied: ${decision.reason}`, durationMs: Date.now() - started, timedOut: false });
-        continue;
-      }
+        this.status(spec.id, state, "running");
+        const authorization = await this.authorizeTool(spec, state, verificationCall);
+        if (state.controller.signal.aborted) throw new Error("Run cancelled");
+        if (state.status !== "verifying") this.status(spec.id, state, "verifying");
+        if (authorization.block) {
+          results.push({ itemId: item.id, command: item.command, cwd: item.cwd, exitCode: null, passed: false, required: item.required, output: "Verification permission denied: " + authorization.reason, durationMs: Date.now() - started, timedOut: false });
+          break;
+        }
+      } else state.toolCalls += 1;
+      state.pendingNonIdempotent.set(verificationCall.id, verificationCall);
+      this.saveCheckpoint(spec.id, state, "verification");
       try {
         const result = await terminal.execute(
-          { command: item.command, timeoutMs: item.timeoutMs },
+          { command: item.command, timeoutMs: Math.max(1, Math.min(item.timeoutMs, spec.budget.maxDurationMs - (Date.now() - state.startedAt))) },
           { runId: spec.id, workspacePath, grants: spec.grants, signal: state.controller.signal },
         );
         const output = result.output as { exitCode?: number; stdout?: string; stderr?: string; timedOut?: boolean };
         const exitCode = typeof output.exitCode === "number" ? output.exitCode : null;
-        results.push({ itemId: item.id, command: item.command, cwd: item.cwd, exitCode, passed: exitCode !== null && item.expectedExitCodes.includes(exitCode), required: item.required, output: `${output.stdout ?? ""}\n${output.stderr ?? ""}`.trim().slice(0, 64_000), durationMs: Date.now() - started, timedOut: output.timedOut === true });
+        results.push({ itemId: item.id, command: item.command, cwd: item.cwd, exitCode, passed: result.isError !== true && output.timedOut !== true && exitCode !== null && item.expectedExitCodes.includes(exitCode), required: item.required, output: `${output.stdout ?? ""}\n${output.stderr ?? ""}`.trim().slice(0, 64_000), durationMs: Date.now() - started, timedOut: output.timedOut === true });
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         results.push({ itemId: item.id, command: item.command, cwd: item.cwd, exitCode: null, passed: false, required: item.required, output: message, durationMs: Date.now() - started, timedOut: /timed? out/i.test(message) });
+      } finally {
+        state.pendingNonIdempotent.delete(verificationCall.id);
+        this.saveCheckpoint(spec.id, state, "verification");
       }
+      if (results.at(-1)?.passed === false) break;
     }
-    const verification: VerificationRun = { id: verificationRunId, runId: spec.id, attempt, results, passed: results.every((result) => !result.required || result.passed), startedAt, finishedAt: nowIso() };
+    const verification: VerificationRun = { id: verificationRunId, runId: spec.id, attempt, stage, revision: state.workflow?.state.revision ?? 0, results, passed: results.length === items.length && results.every(result => result.passed) && (stage === "broader" || !state.workflow?.needsChange || results.some(result => result.required && result.passed)), startedAt, finishedAt: nowIso() };
     this.deps.database.saveVerificationRun(verification);
     this.emitEvent(spec.id, state, { type: "verification_finished", verification });
     this.saveCheckpoint(spec.id, state, "verification");
@@ -814,6 +888,7 @@ export class HarnessEngine extends EventEmitter {
       turns: state.turns,
       toolCalls: state.toolCalls,
       pendingNonIdempotentToolCalls: [...state.pendingNonIdempotent.values()],
+      ...(state.workflow ? { workflow: state.workflow.snapshot() } : {}),
       createdAt: nowIso(),
     };
     this.deps.database.saveCheckpoint(checkpoint);

@@ -21,7 +21,7 @@ import type {
   SkillManifest,
   TaskSpec,
 } from "@harness/protocol";
-import { newId, nowIso } from "@harness/protocol";
+import { newId, nowIso, WORKFLOW_LABELS } from "@harness/protocol";
 import type { DesktopAttachment } from "./preload.js";
 import type { ProviderSettings } from "./provider-settings.js";
 import { BuiBadge } from "./ui/badge.js";
@@ -660,7 +660,7 @@ function App() {
         </details>
         </div>
         <div className="sidebar-foot">
-          <BuiButton variant="ghost" onClick={() => setTab("settings")} className="sidebar-settings"><Settings size={17} /><span>设置</span><small>v1.2.5</small></BuiButton>
+          <BuiButton variant="ghost" onClick={() => setTab("settings")} className="sidebar-settings"><Settings size={17} /><span>设置</span><small>v1.2.6</small></BuiButton>
           <div className="sidebar-connection"><span className="status-dot" />本地运行时已解锁</div>
         </div>
       </aside>
@@ -902,6 +902,7 @@ function ChatView(props: {
             <small className="ml-auto text-xs text-text-muted">{route.reason}</small>
           </BuiGlassPanel>
         )}
+        <WorkflowProgress events={props.events} />
         {props.busy && !props.finalText && (
           <div className="mb-3">
             <BuiLoadingState label="Agent 正在思考与执行…" />
@@ -1022,6 +1023,20 @@ function ChatView(props: {
       </div>
     </div>
   );
+}
+
+function WorkflowProgress({ events }: { events: AgentEvent[] }) {
+  const stages = events.filter((event): event is Extract<AgentEvent, { type: "workflow_updated" }> => event.type === "workflow_updated");
+  const latest = stages.at(-1);
+  if (!latest) return null;
+  const state = latest.workflow;
+  return <details className="glass mb-3 px-4 py-3 workflow-progress">
+    <summary className="cursor-pointer text-sm text-text"><strong>{WORKFLOW_LABELS[state.phase]}</strong><span className="ml-3 text-xs text-text-muted">修改版本 {state.revision} · 诊断 {state.failures} 次</span></summary>
+    <p className="mt-2 text-xs text-text-muted">{latest.detail}</p>
+    <ol className="mt-3 space-y-1 text-xs text-text-muted">{stages.slice(-16).map(event => <li key={event.id}>{WORKFLOW_LABELS[event.workflow.phase]}：{event.detail}</li>)}</ol>
+    {state.hypotheses.length > 0 && <p className="mt-3 text-xs text-text">当前假设：{state.hypotheses.at(-1)?.cause}</p>}
+    {state.requirements.length > 0 && <ul className="mt-2 space-y-1 text-xs text-text">{state.requirements.map((item, index) => <li key={index}>{state.requirementsRevision === state.revision ? "✓" : "○"} {item}</li>)}</ul>}
+  </details>;
 }
 
 function EventRow({ event }: { event: AgentEvent }) {
@@ -1723,7 +1738,11 @@ function ProfilesView({
 
 function VerificationEditor({ profile, refresh }: { profile?: Profile; refresh: () => Promise<void> }) {
   const [commands, setCommands] = useState("");
-  useEffect(() => setCommands(profile?.verificationPolicy.items.map((item) => item.command).join("\n") ?? ""), [profile]);
+  const [broaderCommands, setBroaderCommands] = useState("");
+  useEffect(() => {
+    setCommands(profile?.verificationPolicy.items.filter(item => (item.stage ?? "local") === "local").map(item => item.command).join("\n") ?? "");
+    setBroaderCommands(profile?.verificationPolicy.items.filter(item => item.stage === "broader").map(item => item.command).join("\n") ?? "");
+  }, [profile]);
   if (!profile) return null;
   return (
     <BuiGlassPanel className="mt-6 p-4">
@@ -1731,7 +1750,7 @@ function VerificationEditor({ profile, refresh }: { profile?: Profile; refresh: 
         <span className="text-[10px] font-semibold tracking-widest text-accent-text">
           VERIFICATION MATRIX
         </span>
-        <strong className="text-sm text-text">每行一条 required 命令</strong>
+        <strong className="text-sm text-text">分层验证 · 每行一条必需命令</strong>
         <small className="ml-auto text-xs text-text-muted">
           写任务没有矩阵时进入 Review
         </small>
@@ -1740,18 +1759,18 @@ function VerificationEditor({ profile, refresh }: { profile?: Profile; refresh: 
         className="mt-3 min-h-[90px] w-full resize-y rounded-xl border border-line bg-black/30 p-3 font-mono text-xs text-text outline-none placeholder:text-text-muted"
         value={commands}
         onChange={(event) => setCommands(event.target.value)}
-        placeholder={"pnpm lint\npnpm typecheck\npnpm test"}
+        aria-label="局部验证命令"
+        placeholder={"局部验证：先语法、再相关测试\npnpm typecheck"}
       />
+      <textarea className="mt-3 min-h-[90px] w-full rounded-xl border border-line bg-black/30 p-3 font-mono text-xs text-text" aria-label="扩大验证命令" value={broaderCommands} onChange={event => setBroaderCommands(event.target.value)} placeholder={"扩大验证：局部通过后执行，可留空\npnpm test\npnpm build"} />
       <div className="mt-2 flex justify-end">
         <BuiButton
           variant="primary"
           size="sm"
           onClick={async () => {
-            const items = commands
-              .split(/\r?\n/)
-              .map((command) => command.trim())
-              .filter(Boolean)
-              .map((command, index) => ({
+            const items = ([{ stage: "local" as const, text: commands }, { stage: "broader" as const, text: broaderCommands }]).flatMap(group => group.text.split(/\r?\n/).map(command => command.trim()).filter(Boolean).map(command => ({ command, stage: group.stage })))
+              .map(({ command, stage }, index) => ({
+                stage,
                 id: `verify-${index + 1}`,
                 command,
                 cwd: ".",

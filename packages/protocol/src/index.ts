@@ -1,4 +1,6 @@
 import { z } from "zod";
+import { WorkflowStateSchema } from "./workflow.js";
+export * from "./workflow.js";
 
 export const TrustLevelSchema = z.enum([
   "app_policy",
@@ -158,6 +160,7 @@ export const PlanSpecSchema = z.object({
 export type PlanSpec = z.infer<typeof PlanSpecSchema>;
 
 export const VerificationItemSchema = z.object({
+  stage: z.enum(["local", "broader"]).optional(),
   id: z.string(),
   command: z.string().min(1),
   cwd: z.string().default("."),
@@ -187,6 +190,8 @@ export const VerificationResultSchema = z.object({
 export type VerificationResult = z.infer<typeof VerificationResultSchema>;
 
 export const VerificationRunSchema = z.object({
+  stage: z.enum(["local", "broader"]).optional(),
+  revision: z.number().int().nonnegative().optional(),
   id: z.string(),
   runId: z.string(),
   attempt: z.number().int().nonnegative(),
@@ -209,6 +214,7 @@ export const ContextSnapshotSchema = z.object({
 export type ContextSnapshot = z.infer<typeof ContextSnapshotSchema>;
 
 export const RunCheckpointSchema = z.object({
+  workflow: WorkflowStateSchema.optional(),
   id: z.string(),
   runId: z.string(),
   sequence: z.number().int().nonnegative(),
@@ -328,6 +334,7 @@ export type ModelRequest = z.infer<typeof ModelRequestSchema>;
 
 const eventBase = { id: z.string(), runId: z.string(), at: z.string().datetime(), sequence: z.number().int().nonnegative() };
 export const AgentEventSchema = z.discriminatedUnion("type", [
+  z.object({ ...eventBase, type: z.literal("workflow_updated"), workflow: WorkflowStateSchema, detail: z.string() }),
   z.object({ ...eventBase, type: z.literal("status"), status: RunStatusSchema }),
   z.object({ ...eventBase, type: z.literal("route"), providerId: z.string(), modelId: z.string(), reason: z.string(), estimatedUsd: z.number().nonnegative() }),
   z.object({ ...eventBase, type: z.literal("assistant_turn_started") }),

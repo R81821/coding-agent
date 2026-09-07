@@ -177,7 +177,7 @@ function createPiTools(options: PiAgentBridgeOptions): AgentTool[] {
         parameters: Unsafe<Record<string, unknown>>(
           contract.inputSchema as TSchema,
         ),
-        executionMode: contract.risk === "read" ? "parallel" : "sequential",
+        executionMode: contract.risk === "read" && contract.idempotent ? "parallel" : "sequential",
         execute: async (toolCallId, params, signal) => {
           const result = await options.executeTool(
             { id: toolCallId, name: contract.name, input: asRecord(params) },

@@ -1,3 +1,4 @@
+import { workflowPrelude, workflowReadTool } from "./workflow-fixture.js";
 import { afterEach, describe, expect, it } from "vitest";
 import { mkdtemp, rm } from "node:fs/promises";
 import { join } from "node:path";
@@ -40,8 +41,11 @@ describe("approval grants are persisted and reused within a run", () => {
       estimateCost() { return 0; },
       async *stream(): AsyncIterable<ProviderStreamEvent> {
         requests += 1;
-        if (requests === 1) yield { type: "tool_call", toolCall: { id: "write-1", name: "write_value", input: { value: "beta" } } };
-        else if (requests === 2) yield { type: "tool_call", toolCall: { id: "write-2", name: "write_value", input: { value: "beta" } } };
+        if (requests <= 3) yield* workflowPrelude(requests);
+        else if (requests === 4) {
+          yield { type: "tool_call", toolCall: { id: "write-1", name: "write_value", input: { value: "beta" } } };
+          yield { type: "tool_call", toolCall: { id: "write-2", name: "write_value", input: { value: "beta" } } };
+        }
         else yield { type: "text_delta", delta: "writes finished" };
       },
     };
@@ -51,7 +55,8 @@ describe("approval grants are persisted and reused within a run", () => {
       async execute() { executions += 1; return { output: { written: true } }; },
     });
     const engine = new HarnessEngine({ database, providers: [provider], tools, memory: new MemoryService(database), skills: new SkillService(join(root, "skills")), projectTrust: new ProjectTrustService(database) });
-    const profile = { ...DEFAULT_PROFILE, allowedProviders: ["fake"], toolNames: ["write_value"] };
+    tools.register(workflowReadTool);
+    const profile = { ...DEFAULT_PROFILE, allowedProviders: ["fake"], toolNames: ["write_value", "read_file"] };
     const run: RunSpec = { id: newId("run"), sessionId: "grant", request: "write beta twice", workspacePath: root, profileId: profile.id, attachments: [], budget: profile.budget, grants: [], createdAt: nowIso() };
     let approvalRequests = 0;
     const result = new Promise<AgentEvent>((resolveResult, reject) => {

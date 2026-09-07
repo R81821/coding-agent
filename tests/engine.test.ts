@@ -1,3 +1,4 @@
+import { workflowPrelude, workflowReadTool } from "./workflow-fixture.js";
 import { afterEach, describe, expect, it } from "vitest";
 import { mkdtemp, rm } from "node:fs/promises";
 import { join } from "node:path";
@@ -275,7 +276,8 @@ describe("HarnessEngine", () => {
       id: "fake", async listModels() { return [model]; }, async health() { return true; }, estimateCost() { return 0; },
       async *stream(): AsyncIterable<ProviderStreamEvent> {
         requests += 1;
-        if (requests === 1) yield { type: "tool_call", toolCall: { id: "write-1", name: "write_value", input: { value: "beta" } } };
+        if (requests <= 3) yield* workflowPrelude(requests);
+        else if (requests === 4) yield { type: "tool_call", toolCall: { id: "write-1", name: "write_value", input: { value: "beta" } } };
         else yield { type: "text_delta", delta: "write finished" };
       }
     };
@@ -285,7 +287,8 @@ describe("HarnessEngine", () => {
       async execute() { executions += 1; return { output: { written: true } }; }
     });
     const engine = new HarnessEngine({ database, providers: [provider], tools, memory: new MemoryService(database), skills: new SkillService(join(root, "skills")), projectTrust: new ProjectTrustService(database) });
-    const profile = { ...DEFAULT_PROFILE, allowedProviders: ["fake"], toolNames: ["write_value"] };
+    tools.register(workflowReadTool);
+    const profile = { ...DEFAULT_PROFILE, allowedProviders: ["fake"], toolNames: ["write_value", "read_file"] };
     const run: RunSpec = { id: newId("run"), sessionId: "plan", request: "write beta", workspacePath: root, profileId: profile.id, attachments: [], budget: profile.budget, grants: [{ toolNames: ["write_value"], pathGlobs: ["**"], commandPrefixes: [], networkDomains: [], maxRisk: "write" }], createdAt: nowIso() };
     const result = new Promise<AgentEvent>((resolveResult) => engine.on("event", (event: AgentEvent) => {
       if (event.type === "plan_approval_required") {

@@ -1,4 +1,4 @@
-import { readFile } from "node:fs/promises";
+import { readFile, stat } from "node:fs/promises";
 import { join } from "node:path";
 import fg from "fast-glob";
 import { z } from "zod";
@@ -65,7 +65,7 @@ export const searchTextTool: ToolDefinition = {
       maxOutputBytes: 1_000_000
     });
     const lines = result.stdout.split(/\r?\n/).filter(Boolean);
-    return { output: { matches: lines.slice(0, parsed.limit), stderr: result.stderr, exitCode: result.exitCode }, truncated: result.truncated || lines.length > parsed.limit };
+    return { output: { matches: lines.slice(0, parsed.limit), stderr: result.stderr, exitCode: result.exitCode }, truncated: result.truncated || lines.length > parsed.limit, isError: result.exitCode > 1 || result.exitCode === null || result.timedOut };
   }
 };
 
@@ -131,7 +131,25 @@ export const gitDiffTool: ToolDefinition = {
   async execute(_input, context) {
     const status = await runProcess("git", ["status", "--short", "--branch"], { cwd: context.workspacePath, signal: context.signal, timeoutMs: 20_000 });
     const diff = await runProcess("git", ["diff", "--no-ext-diff"], { cwd: context.workspacePath, signal: context.signal, timeoutMs: 20_000 });
-    return { output: { status: status.stdout, diff: diff.stdout, stderr: [status.stderr, diff.stderr].filter(Boolean).join("\n") }, truncated: status.truncated || diff.truncated };
+    const staged = await runProcess("git", ["diff", "--cached", "--no-ext-diff"], { cwd: context.workspacePath, signal: context.signal, timeoutMs: 20_000 });
+    const untracked = await runProcess("git", ["ls-files", "--others", "--exclude-standard", "-z"], { cwd: context.workspacePath, signal: context.signal, timeoutMs: 20_000 });
+    const paths = untracked.stdout.split("\0").filter(Boolean);
+    let truncated = status.truncated || diff.truncated || staged.truncated || untracked.truncated || paths.length > 30;
+    let bytes = 0;
+    const newFiles: Array<{ path: string; content: string }> = [];
+    for (const path of paths.slice(0, 30)) {
+      try {
+        const file = await confinedPath(context.workspacePath, path);
+        const metadata = await stat(file);
+        if (!metadata.isFile() || metadata.size > 64000 || bytes + metadata.size > 384000) { truncated = true; newFiles.push({ path, content: "Not fully inspected: size limit" }); continue; }
+        const contents = await readFile(file);
+        bytes += contents.length;
+        if (contents.includes(0) || contents.length > 64000 || bytes > 384000) { truncated = true; newFiles.push({ path, content: "Not fully inspected: binary or size limit" }); }
+        else newFiles.push({ path, content: contents.toString("utf8") });
+      } catch { truncated = true; newFiles.push({ path, content: "Not fully inspected: file unavailable" }); }
+    }
+    const results = [status, diff, staged, untracked];
+    return { output: { status: status.stdout, diff: diff.stdout, stagedDiff: staged.stdout, newFiles, stderr: results.map(result => result.stderr).filter(Boolean).join("\n") }, truncated, isError: results.some(result => result.exitCode !== 0 || result.timedOut) };
   }
 };
 

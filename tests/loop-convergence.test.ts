@@ -1,3 +1,4 @@
+import { workflowPrelude } from "./workflow-fixture.js";
 import { describe, expect, it } from "vitest";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -108,8 +109,8 @@ describe("agent loop convergence", () => {
 
   it("counts structured terminal failures as errors and forwards stdout/stderr", async () => {
     const terminal: ToolDefinition = { ...terminalTool, async execute() { return { output: { exitCode: 1, stdout: "", stderr: "fixture syntax error" }, isError: true }; } };
-    const observed = await scenario({ tools: [terminal], respond: (_request, turn) => turn === 1 ? [{ type: "tool_call", toolCall: { id: "cmd", name: "terminal", input: { command: "fixture" } } }] : [say("The command failed; inspect the syntax error.")] });
-    expect(JSON.stringify(observed.requests[1]?.messages)).toContain("fixture syntax error");
+    const observed = await scenario({ tools: [readTool, terminal], verification: { items: [{ id: "test", command: "fixture", cwd: ".", timeoutMs: 1000, required: true, expectedExitCodes: [0] }], maxRepairAttempts: 1 }, respond: (_request, turn) => turn <= 3 ? workflowPrelude(turn) : turn === 4 ? [{ type: "tool_call", toolCall: { id: "cmd", name: "terminal", input: { command: "fixture" } } }] : [say("The command failed; inspect the syntax error.")] });
+    expect(JSON.stringify(observed.requests[4]?.messages)).toContain("fixture syntax error");
     expect(observed.events.some((event) => event.type === "tool_finished" && event.isError === true)).toBe(true);
     expect(observed.events.some((event) => event.type === "self_correction_started")).toBe(true);
   });
