@@ -162,3 +162,17 @@ button:focus-visible, summary:focus-visible, select:focus-visible, input:focus-v
 .history-session-content { display: flex; flex-direction: column; gap: 4px; min-width: 0; flex: 1; }
 .history-session-content small { font-size: 10px; color: #99939f; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 .history-error { color: #f09a9a; overflow-wrap: anywhere; }
+.project-folder-row, .project-session-row { display: flex; align-items: center; min-width: 0; }
+.project-folder-row .project-folder, .project-session-row .project-session { flex: 1; min-width: 0; width: auto; }
+.row-icon-action { flex: 0 0 auto; width: 25px; height: 25px; display: grid; place-items: center; padding: 0; border: 0; border-radius: 7px; background: transparent; color: #817a8a; cursor: pointer; opacity: 0; }
+.project-folder-row:hover .row-icon-action, .project-session-row:hover .row-icon-action, .row-icon-action:focus-visible { opacity: 1; }
+.row-icon-action:hover:not(:disabled) { background: rgba(255, 255, 255, .08); color: #ddd7e2; }
+.row-icon-action:disabled { cursor: default; opacity: .3; }
+.project-delete:hover:not(:disabled), .session-delete:hover:not(:disabled), .purge-session:hover:not(:disabled) { color: #f09a9a; }
+.conversation-turn + .conversation-turn { margin-top: 34px; padding-top: 34px; border-top: 1px solid rgba(255, 255, 255, .06); }
+.recycle-list { display: flex; flex-direction: column; gap: 7px; }
+.recycle-row { display: flex; align-items: center; gap: 8px; min-width: 0; padding: 9px 10px; border: 1px solid #39343e; border-radius: 11px; background: rgba(0, 0, 0, .13); }
+.recycle-row > div { flex: 1; min-width: 0; }
+.recycle-row strong, .recycle-row small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.recycle-row strong { color: #ddd7e2; font-size: 12px; }
+.recycle-row small { margin-top: 3px; color: #8f8998; font-size: 10px; }

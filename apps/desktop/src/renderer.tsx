@@ -37,6 +37,7 @@ import { BuiToolChip } from "./ui/tool-chip.js";
 import { MemoryManager } from "./memory-manager.js";
 import { assistantMessages } from "./assistant-messages.js";
 import { MarkdownMessage } from "./markdown-message.js";
+import { RecycleBin } from "./recycle-bin.js";
 import { groupSessionsByProject, isLiveRun, mergeRunEvents, mergeSessionPages, runStatusLabel, sessionTurns, workspaceKey, type SessionTurn } from "./run-history.js";
 import {
   Activity,
@@ -61,6 +62,7 @@ import {
   SquarePen,
   Terminal,
   Telescope,
+  Trash2,
   UserCog,
   X,
 } from "lucide-react";
@@ -116,6 +118,7 @@ function App() {
   const seededExpansion = useRef(false);
   const [historyLoading, setHistoryLoading] = useState(false);
   const [historyError, setHistoryError] = useState("");
+  const [recycleVersion, setRecycleVersion] = useState(0);
   const [busy, setBusy] = useState(false);
   const [approvalPrompt, setApprovalPrompt] = useState<ApprovalPrompt>();
   const [capture, setCapture] = useState<{
@@ -279,6 +282,9 @@ function App() {
 
   async function createSessionForWorkspace(workspacePath: string) {
     if (!profile) return;
+    const deletedProjects = await window.harness.request<ProjectRecord[]>({ method: "projects.list", params: { deleted: true } });
+    const archivedProject = deletedProjects.find((project) => workspaceKey(project.workspacePath) === workspaceKey(workspacePath));
+    if (archivedProject) await window.harness.request({ method: "project.restore", params: { projectId: archivedProject.id } });
     const createdAt = nowIso();
     const session = await window.harness.request<SessionRecord>({
       method: "sessions.create",
@@ -395,6 +401,54 @@ function App() {
       return;
     }
     await createSessionForWorkspace(workspace);
+  }
+
+  async function deleteSession(item: SessionSummary) {
+    if (busy || !window.confirm(`将会话“${item.title}”移到设置中的已删除会话？长期记忆会保留。`)) return;
+    setHistoryError("");
+    try {
+      await window.harness.request({ method: "session.delete", params: { sessionId: item.id } });
+      setRecycleVersion((current) => current + 1);
+      const nextPage = { ...sessionPageRef.current, items: sessionPageRef.current.items.filter((session) => session.id !== item.id) };
+      sessionPageRef.current = nextPage;
+      setSessionPage(nextPage);
+      if (activeSessionId === item.id) {
+        viewVersion.current += 1;
+        setActiveSessionId(undefined);
+        setSessionDetail(undefined);
+        setActiveRun(undefined);
+        setEvents([]);
+        localStorage.removeItem("harness.activeSessionId");
+      }
+      await refreshHistory();
+    } catch (error) {
+      setHistoryError(`无法删除会话：${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
+  async function deleteProject(project: ProjectRecord) {
+    if (busy || !window.confirm(`从 Harness 隐藏项目“${basename(project.workspacePath)}”？磁盘中的代码与文件不会被删除，会话和记忆也会保留。`)) return;
+    setHistoryError("");
+    try {
+      await window.harness.request({ method: "project.delete", params: { projectId: project.id } });
+      setRecycleVersion((current) => current + 1);
+      setProjects((current) => current.filter((item) => item.id !== project.id));
+      const nextPage = { ...sessionPageRef.current, items: sessionPageRef.current.items.filter((session) => workspaceKey(session.workspacePath) !== workspaceKey(project.workspacePath)) };
+      sessionPageRef.current = nextPage;
+      setSessionPage(nextPage);
+      if (workspaceKey(workspace) === workspaceKey(project.workspacePath)) {
+        viewVersion.current += 1;
+        setWorkspace("");
+        setActiveSessionId(undefined);
+        setSessionDetail(undefined);
+        setActiveRun(undefined);
+        setEvents([]);
+        localStorage.removeItem("harness.activeSessionId");
+      }
+      await refreshHistory();
+    } catch (error) {
+      setHistoryError(`无法删除项目：${error instanceof Error ? error.message : String(error)}`);
+    }
   }
 
   async function openSession(item: SessionSummary) {
@@ -676,24 +730,31 @@ function App() {
             const expanded = expandedProjects.has(group.key);
             return (
               <div key={group.key} className="project-group">
-                <button type="button" className={`project-folder${expanded ? " expanded" : ""}`} aria-expanded={expanded} title={group.project.workspacePath} onClick={() => setExpandedProjects((current) => {
-                  const next = new Set(current);
-                  if (next.has(group.key)) next.delete(group.key); else next.add(group.key);
-                  return next;
-                })}>
-                  <ChevronRight size={14} className="folder-chevron" />
-                  <FolderOpen size={15} className="folder-icon" />
-                  <span className="project-folder-name">{group.project.workspacePath ? basename(group.project.workspacePath) : "未归组会话"}</span>
-                  {isCurrent && <span className="project-folder-tag">当前</span>}
-                  {group.items.length > 0 && <span className="project-folder-count">{group.items.length}</span>}
-                </button>
+                <div className="project-folder-row">
+                  <button type="button" className={`project-folder${expanded ? " expanded" : ""}`} aria-expanded={expanded} title={group.project.workspacePath} onClick={() => setExpandedProjects((current) => {
+                    const next = new Set(current);
+                    if (next.has(group.key)) next.delete(group.key); else next.add(group.key);
+                    return next;
+                  })}>
+                    <ChevronRight size={14} className="folder-chevron" />
+                    <FolderOpen size={15} className="folder-icon" />
+                    <span className="project-folder-name">{group.project.workspacePath ? basename(group.project.workspacePath) : "未归组会话"}</span>
+                    {isCurrent && <span className="project-folder-tag">当前</span>}
+                    {group.items.length > 0 && <span className="project-folder-count">{group.items.length}</span>}
+                  </button>
+                  <button type="button" className="row-icon-action project-new-session" aria-label={`在 ${basename(group.project.workspacePath)} 中新建会话`} title="新建会话" disabled={busy} onClick={(event) => { event.stopPropagation(); void createSessionForWorkspace(group.project.workspacePath); }}><Plus size={13} /></button>
+                  <button type="button" className="row-icon-action project-delete" aria-label={`删除项目 ${basename(group.project.workspacePath)}`} title="从 Harness 删除项目" disabled={busy} onClick={(event) => { event.stopPropagation(); void deleteProject(group.project); }}><Trash2 size={13} /></button>
+                </div>
                 {expanded && (
                   <div className="project-group-items">
                     {group.items.map((item) => (
-                      <button key={item.id} className={`project-session history-session${activeSessionId === item.id ? " active" : ""}`} aria-current={activeSessionId === item.id ? "page" : undefined} disabled={busy} onClick={() => void openSession(item)} title={`${item.title}\n${item.workspacePath}`}>
-                        <MessageSquare size={14} />
-                        <span className="history-session-content"><span>{item.title}</span><small>{item.latestStatus ? runStatusLabel[item.latestStatus] : "新会话"} · {item.runCount} 轮</small></span>
-                      </button>
+                      <div className="project-session-row" key={item.id}>
+                        <button className={`project-session history-session${activeSessionId === item.id ? " active" : ""}`} aria-current={activeSessionId === item.id ? "page" : undefined} disabled={busy} onClick={() => void openSession(item)} title={`${item.title}\n${item.workspacePath}`}>
+                          <MessageSquare size={14} />
+                          <span className="history-session-content"><span>{item.title}</span><small>{item.latestStatus ? runStatusLabel[item.latestStatus] : "新会话"} · {item.runCount} 轮</small></span>
+                        </button>
+                        <button type="button" className="row-icon-action session-delete" aria-label={`删除会话 ${item.title}`} title="移到已删除会话" disabled={busy} onClick={(event) => { event.stopPropagation(); void deleteSession(item); }}><Trash2 size={13} /></button>
+                      </div>
                     ))}
                     {!group.items.length && <p className="sidebar-hint">点击项目旁的 + 新建会话</p>}
                   </div>
@@ -783,7 +844,7 @@ function App() {
               {...(activeRun ? { runId: activeRun } : {})}
             />
           )}
-          {tab === "settings" && <SettingsView refresh={refresh} />}
+          {tab === "settings" && <SettingsView key={recycleVersion} refresh={refresh} refreshHistory={refreshHistory} />}
         </section>
       </main>
       {capture && (
@@ -2135,7 +2196,7 @@ function TraceView({
   );
 }
 
-function SettingsView({ refresh }: { refresh: () => Promise<void> }) {
+function SettingsView({ refresh, refreshHistory }: { refresh: () => Promise<void>; refreshHistory: () => Promise<void> }) {
   const [pairing, setPairing] = useState<string>();
   const [credentials, setCredentials] = useState<Record<string, boolean>>({});
   const [credentialValue, setCredentialValue] = useState("");
@@ -2218,6 +2279,7 @@ function SettingsView({ refresh }: { refresh: () => Promise<void> }) {
   }
   return (
     <div className="grid grid-cols-2 gap-3">
+      <RecycleBin onChanged={refreshHistory} />
       <article className="glass flex flex-col gap-2 p-4">
         <small className="text-[10px] font-semibold tracking-widest text-accent-text">
           PARALLEL SEARCH
