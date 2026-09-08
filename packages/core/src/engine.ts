@@ -26,6 +26,7 @@ import { buildInitialMessages } from "./context.js";
 import { runWithPiAgent } from "./pi-agent-bridge.js";
 import { RunProgress } from "./run-progress.js";
 import { CodingWorkflow, compactObservation } from "./coding-workflow.js";
+import { reviewChanges } from "./independent-review.js";
 import { PermissionEngine, summarizeToolRequest } from "./security.js";
 import type { ProjectTrustService } from "./project-trust.js";
 
@@ -312,7 +313,7 @@ export class HarnessEngine extends EventEmitter {
       });
       const workflow = new CodingWorkflow(spec.request, (snapshot, detail) => {
         this.emitEvent(spec.id, state, { type: "workflow_updated", workflow: snapshot, detail });
-      }, recovery?.workflow);
+      }, recovery?.workflow, profile.verificationPolicy);
       state.workflow = workflow;
       if (recovery?.pendingNonIdempotentToolCalls.length) workflow.fail("Execution state is unknown after restart. Inspect current repository state and diagnose before any new mutation or verification command.");
       const workflowTool = workflow.tool();
@@ -557,24 +558,52 @@ export class HarnessEngine extends EventEmitter {
           const maxRepairs = profile.verificationPolicy.maxRepairAttempts;
           for (let round = 0; round <= maxRepairs + 1; round += 1) {
             this.checkBudget(spec, state);
+            if (workflow.baseCanFinish() && workflow.requiresIndependentReview && !workflow.canFinish()) {
+              if (state.turns >= spec.budget.maxTurns) { stopReason = "独立评审尚未完成，模型轮次额度已用完。"; return; }
+              const diffObservation = workflow.state.observations.findLast(item => item.tool === "git_diff" && item.epoch === workflow.state.epoch && item.revision === workflow.state.revision && !item.failed && item.complete);
+              const reviewEvents = this.deps.database.listEvents(spec.id);
+              const diffEvent = reviewEvents.findLast(event => event.type === "tool_finished" && event.callId === diffObservation?.id);
+              if (!diffEvent || diffEvent.type !== "tool_finished") { stopReason = "独立评审缺少完整 diff 记录。"; return; }
+              const checkIds = [workflow.state.localCheck.runId, workflow.state.broaderCheck.runId];
+              const verificationRuns = this.deps.database.listVerificationRuns(spec.id).filter(run => checkIds.includes(run.id) && run.epoch === workflow.state.epoch && run.revision === workflow.state.revision);
+              const evidenceIds = [...new Set([...workflow.state.requirementReceipts.flatMap(receipt => [...receipt.observationIds, receipt.diffObservationId]), ...workflow.state.reviewEvidenceIds])];
+              const observations = evidenceIds.map(id => {
+                const observed = workflow.state.observations.find(item => item.id === id && item.epoch === workflow.state.epoch && item.revision === workflow.state.revision && !item.failed && item.complete);
+                if (!observed) return undefined;
+                const event = reviewEvents.findLast(item => item.type === "tool_finished" && item.callId === id && !item.isError);
+                const verification = verificationRuns.find(item => item.id === id);
+                if (!event && !verification) return undefined;
+                return { ...observed, output: event?.type === "tool_finished" ? event.output : verification };
+              });
+              if (verificationRuns.length !== checkIds.length || observations.some(item => !item)) { stopReason = "独立评审引用的原始证据缺失，需要重新收集。"; return; }
+              workflow.move("final_review", "触发独立只读评审，检查需求、回归与边界条件");
+              state.turns += 1;
+              try {
+                const result = await reviewChanges({
+                  provider: route.provider, model: route.model, runId: spec.id, state: workflow.snapshot(), diff: diffEvent.output, observations, verificationRuns,
+                  signal: AbortSignal.any([state.controller.signal, AbortSignal.timeout(Math.max(1, Math.min(60000, spec.budget.maxDurationMs - (Date.now() - state.startedAt))))]),
+                  remainingUsd: Math.max(0, spec.budget.maxUsd - state.spentUsd),
+                  onUsage: usage => { state.spentUsd += usage.estimatedUsd; state.inputTokens += usage.inputTokens; state.outputTokens += usage.outputTokens; this.emitEvent(spec.id, state, { type: "usage", usage }); this.checkBudget(spec, state); },
+                });
+                this.checkBudget(spec, state);
+                workflow.recordIndependentReview(result.passed, result.summary);
+              } catch (error) { stopReason = "独立评审未完成：" + (error instanceof Error ? error.message : String(error)); return; }
+              finally { this.saveCheckpoint(spec.id, state, "verification"); }
+            }
             if (workflow.canFinish()) return;
-            const revision = workflow.state.revision;
             let passed = workflow.checksCurrent();
             if (!passed && !workflow.state.diagnosisRequired) {
               yieldForVerification = false;
               this.status(spec.id, state, "verifying");
               workflow.move("local_verification", "先运行局部验证；失败时不运行扩大验证");
               const local = await this.verify(spec, profile, state, round, "local");
-              workflow.move("inspect_result", local.passed ? "局部验证通过" : "局部验证失败");
-              passed = local.passed;
-              if (local.passed) {
-                workflow.state.localRevision = revision;
+              workflow.move("inspect_result", local.outcome === "skipped" ? "只读任务跳过代码验证" : local.passed ? "局部验证通过" : "局部验证失败");
+              passed = local.passed || (!workflow.needsChange && local.outcome === "skipped");
+              if (passed) {
                 workflow.move("broader_verification", this.verificationItems(profile, state).some(item => item.stage === "broader") ? "局部验证通过，运行扩大验证" : "未配置扩大验证项；保留局部验证证据，进入需求核对");
-                const broader = await this.verify(spec, profile, state, round, "broader");
-                passed = broader.passed;
-                if (broader.passed) workflow.state.broaderRevision = revision;
-                else workflow.fail(JSON.stringify(broader.results.map(r => ({ ...r, output: compactObservation(r.output, 3000) }))));
-              } else workflow.fail(JSON.stringify(local.results.map(r => ({ ...r, output: compactObservation(r.output, 3000) }))));
+                await this.verify(spec, profile, state, round, "broader");
+                passed = workflow.checksCurrent();
+              }
               this.saveCheckpoint(spec.id, state, "verification");
             }
             if (!workflow.needsChange && passed) {
@@ -599,8 +628,8 @@ export class HarnessEngine extends EventEmitter {
             await control.promptUntrusted(JSON.stringify({
               workflow: workflow.snapshot(),
               nextAction: passed && !workflow.state.diagnosisRequired
-                ? "Use git_diff for current changes. Call update_workflow requirements with passed and one evidence entry per requirement, then review with passed and a summary covering requirement mismatch, regressions, edge cases and unrelated changes. If requirements or review fail, report passed=false, diagnose and revise with a minimal patch. Finally provide the user a clear result."
-                : "Inspect failed verification output in working memory. Re-read relevant code, then call update_workflow diagnose with context, steps, a revised cause and actual evidenceIds. Make a minimal fix; runtime will rerun local checks before broader checks.",
+                ? "Use git_diff for current changes. Call update_workflow requirements with passed and one structured evidence receipt per requirementId: summary, observationIds, verificationIds (successful local/broader run IDs) and diffObservationId. Then call review with passed, evidenceIds including the current diff, and a summary covering requirement mismatch, regressions, edge cases and unrelated changes. If requirements or review fail, report passed=false, diagnose and revise with a minimal patch. Finally provide the user a clear result."
+                : "Inspect activeFailureId and its fresh observation in working memory. For repeated failures collect new successful repository evidence; at level 3 also supply alternatives and an experiment (question, expectedResults, observationIds) with expanded search. Call diagnose with context, steps, a revised cause and evidenceIds including current failure or newer observations. Make a minimal fix; runtime will rerun local checks before broader checks.",
             }));
             state.transcript = control.transcript();
             if (stopReason) { await finishStoppedRun(); return; }
@@ -619,8 +648,7 @@ export class HarnessEngine extends EventEmitter {
         });
         return;
       }
-      const verificationRuns = this.deps.database.listVerificationRuns(spec.id);
-      const verified = workflow.needsChange ? workflow.canFinish() : (verificationRuns.at(-1)?.passed ?? !state.hadSideEffect);
+      const verified = workflow.needsChange ? workflow.canFinish() : workflow.checksCurrent();
       if (verified) workflow.move("done", "运行时完成门槛已通过");
       if (finalText.trim()) {
         this.deps.memory.saveSessionSummary(
@@ -810,8 +838,10 @@ export class HarnessEngine extends EventEmitter {
     const verificationRunId = newId("verify");
     this.emitEvent(spec.id, state, { type: "verification_started", verificationRunId, attempt });
     const items = this.verificationItems(profile, state).filter(item => (item.stage ?? "local") === stage);
-    if (items.length === 0) {
-      const verification: VerificationRun = { id: verificationRunId, runId: spec.id, attempt, stage, revision: state.workflow?.state.revision ?? 0, results: [], passed: stage === "broader" || !state.workflow?.needsChange, startedAt, finishedAt: nowIso() };
+    if (items.length === 0 || (stage === "broader" && state.workflow?.state.broaderPolicy === "disabled")) {
+      const allowedSkip = stage === "broader" ? state.workflow?.state.broaderPolicy !== "required" : !state.workflow?.needsChange;
+      const verification: VerificationRun = { id: verificationRunId, runId: spec.id, attempt, stage, epoch: state.workflow?.state.epoch ?? "legacy", revision: state.workflow?.state.revision ?? 0, results: [], passed: false, outcome: allowedSkip ? "skipped" : "failed", skipReason: allowedSkip ? (stage === "local" ? "只读任务，无代码验证项" : state.workflow?.state.broaderPolicy === "disabled" ? "Profile 策略禁用扩大验证" : "可选扩大验证未配置") : "必需验证项未配置", startedAt, finishedAt: nowIso() };
+      state.workflow?.recordVerification(verification);
       this.deps.database.saveVerificationRun(verification);
       this.emitEvent(spec.id, state, { type: "verification_finished", verification });
       this.saveCheckpoint(spec.id, state, "verification");
@@ -868,7 +898,9 @@ export class HarnessEngine extends EventEmitter {
       }
       if (results.at(-1)?.passed === false) break;
     }
-    const verification: VerificationRun = { id: verificationRunId, runId: spec.id, attempt, stage, revision: state.workflow?.state.revision ?? 0, results, passed: results.length === items.length && results.every(result => result.passed) && (stage === "broader" || !state.workflow?.needsChange || results.some(result => result.required && result.passed)), startedAt, finishedAt: nowIso() };
+    const verification: VerificationRun = { id: verificationRunId, runId: spec.id, attempt, stage, epoch: state.workflow?.state.epoch ?? "legacy", revision: state.workflow?.state.revision ?? 0, results, passed: results.length === items.length && results.every(result => result.passed) && (stage === "broader" || !state.workflow?.needsChange || results.some(result => result.required && result.passed)), startedAt, finishedAt: nowIso() };
+    verification.outcome = verification.passed ? "passed" : "failed";
+    state.workflow?.recordVerification(verification);
     this.deps.database.saveVerificationRun(verification);
     this.emitEvent(spec.id, state, { type: "verification_finished", verification });
     this.saveCheckpoint(spec.id, state, "verification");

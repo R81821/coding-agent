@@ -660,7 +660,7 @@ function App() {
         </details>
         </div>
         <div className="sidebar-foot">
-          <BuiButton variant="ghost" onClick={() => setTab("settings")} className="sidebar-settings"><Settings size={17} /><span>设置</span><small>v1.2.6</small></BuiButton>
+          <BuiButton variant="ghost" onClick={() => setTab("settings")} className="sidebar-settings"><Settings size={17} /><span>设置</span><small>v1.2.7</small></BuiButton>
           <div className="sidebar-connection"><span className="status-dot" />本地运行时已解锁</div>
         </div>
       </aside>
@@ -1030,12 +1030,18 @@ function WorkflowProgress({ events }: { events: AgentEvent[] }) {
   const latest = stages.at(-1);
   if (!latest) return null;
   const state = latest.workflow;
+  const chain = state.failureChains?.find(item => item.id === state.activeChainId && item.status === "open");
+  const checkLabels = { pending: "待验证", passed: "通过", failed: "失败", skipped: "已跳过" };
   return <details className="glass mb-3 px-4 py-3 workflow-progress">
-    <summary className="cursor-pointer text-sm text-text"><strong>{WORKFLOW_LABELS[state.phase]}</strong><span className="ml-3 text-xs text-text-muted">修改版本 {state.revision} · 诊断 {state.failures} 次</span></summary>
+    <summary className="cursor-pointer text-sm text-text"><strong>{WORKFLOW_LABELS[state.phase]}</strong><span className="ml-3 text-xs text-text-muted">修改版本 {state.revision} · 累计失败 {state.failures} · 当前故障重复 {chain?.count ?? 0} 次</span></summary>
     <p className="mt-2 text-xs text-text-muted">{latest.detail}</p>
+    {state.activity && <p className="mt-2 break-words text-xs text-text-muted">工具活动：{state.activity}</p>}
+    <div className="mt-3 space-y-1 text-xs text-text workflow-checks">{(["localCheck", "broaderCheck"] as const).map((key, index) => <p key={key}>{index === 0 ? "局部验证" : "扩大验证"}：{state[key] ? checkLabels[state[key].status] : "历史记录，未区分验证与跳过"}{state[key]?.reason && <span className="ml-2 text-text-muted">{state[key].reason}</span>}</p>)}
+    <p>独立只读评审：{state.reviewPolicy !== "risk_based" ? "未启用" : !state.riskFlags?.length ? "未触发" : checkLabels[state.independentReview?.status ?? "pending"]}</p></div>
     <ol className="mt-3 space-y-1 text-xs text-text-muted">{stages.slice(-16).map(event => <li key={event.id}>{WORKFLOW_LABELS[event.workflow.phase]}：{event.detail}</li>)}</ol>
     {state.hypotheses.length > 0 && <p className="mt-3 text-xs text-text">当前假设：{state.hypotheses.at(-1)?.cause}</p>}
-    {state.requirements.length > 0 && <ul className="mt-2 space-y-1 text-xs text-text">{state.requirements.map((item, index) => <li key={index}>{state.requirementsRevision === state.revision ? "✓" : "○"} {item}</li>)}</ul>}
+    {state.requirementReceipts?.length > 0 && <p className="mt-2 text-xs text-text-muted">证据引用已核对；业务语义结论由模型评审。</p>}
+    {state.requirements.length > 0 && <ul className="mt-2 space-y-1 text-xs text-text">{state.requirements.map((item, index) => <li key={index}>{state.requirementsRevision === state.revision && state.requirementReceipts?.some(receipt => receipt.requirementId === state.requirementIds?.[index]) ? "✓" : "○"} {item}</li>)}</ul>}
   </details>;
 }
 
@@ -1739,7 +1745,13 @@ function ProfilesView({
 function VerificationEditor({ profile, refresh }: { profile?: Profile; refresh: () => Promise<void> }) {
   const [commands, setCommands] = useState("");
   const [broaderCommands, setBroaderCommands] = useState("");
+  const [broaderPolicy, setBroaderPolicy] = useState<"required" | "optional" | "disabled">("optional");
+  const [repairLimit, setRepairLimit] = useState(2);
+  const [reviewPolicy, setReviewPolicy] = useState<"standard" | "risk_based">("standard");
   useEffect(() => {
+    setRepairLimit(profile?.verificationPolicy.maxRepairAttempts ?? 2);
+    setBroaderPolicy(profile?.verificationPolicy.broaderPolicy ?? "optional");
+    setReviewPolicy(profile?.verificationPolicy.reviewPolicy ?? "standard");
     setCommands(profile?.verificationPolicy.items.filter(item => (item.stage ?? "local") === "local").map(item => item.command).join("\n") ?? "");
     setBroaderCommands(profile?.verificationPolicy.items.filter(item => item.stage === "broader").map(item => item.command).join("\n") ?? "");
   }, [profile]);
@@ -1762,6 +1774,12 @@ function VerificationEditor({ profile, refresh }: { profile?: Profile; refresh: 
         aria-label="局部验证命令"
         placeholder={"局部验证：先语法、再相关测试\npnpm typecheck"}
       />
+      <div className="mt-3 flex flex-wrap gap-4 text-xs text-text">
+        <label>最多修复次数 <select aria-label="最多修复次数" value={repairLimit} onChange={event => setRepairLimit(Number(event.target.value))}>{[0, 1, 2, 3, 4, 5].map(value => <option key={value} value={value}>{value}</option>)}</select></label>
+        <label>扩大验证策略 <select aria-label="扩大验证策略" value={broaderPolicy} onChange={event => setBroaderPolicy(event.target.value as typeof broaderPolicy)}><option value="optional">可选（无配置时明确跳过）</option><option value="required">必需（无配置时不能完成）</option><option value="disabled">禁用（记录策略原因）</option></select></label>
+        <label>独立只读评审 <select aria-label="独立只读评审" value={reviewPolicy} onChange={event => setReviewPolicy(event.target.value as typeof reviewPolicy)}><option value="standard">不额外启用</option><option value="risk_based">敏感路径、大补丁、多文件或修改范围不明时启用</option></select></label>
+      </div>
+      <p className="mt-2 text-xs text-text-muted">独立评审使用额外模型轮次并计入任务预算。</p>
       <textarea className="mt-3 min-h-[90px] w-full rounded-xl border border-line bg-black/30 p-3 font-mono text-xs text-text" aria-label="扩大验证命令" value={broaderCommands} onChange={event => setBroaderCommands(event.target.value)} placeholder={"扩大验证：局部通过后执行，可留空\npnpm test\npnpm build"} />
       <div className="mt-2 flex justify-end">
         <BuiButton
@@ -1782,7 +1800,7 @@ function VerificationEditor({ profile, refresh }: { profile?: Profile; refresh: 
               method: "profiles.upsert",
               params: {
                 ...profile,
-                verificationPolicy: { ...profile.verificationPolicy, items },
+                verificationPolicy: { ...profile.verificationPolicy, items, broaderPolicy, reviewPolicy, maxRepairAttempts: repairLimit },
               },
             });
             await refresh();

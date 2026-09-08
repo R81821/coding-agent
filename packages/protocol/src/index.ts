@@ -171,8 +171,10 @@ export const VerificationItemSchema = z.object({
 export type VerificationItem = z.infer<typeof VerificationItemSchema>;
 
 export const VerificationMatrixSchema = z.object({
+  broaderPolicy: z.enum(["required", "optional", "disabled"]).optional(),
+  reviewPolicy: z.enum(["standard", "risk_based"]).optional(),
   items: z.array(VerificationItemSchema).default([]),
-  maxRepairAttempts: z.number().int().min(0).max(2).default(2)
+  maxRepairAttempts: z.number().int().min(0).max(5).default(2)
 });
 export type VerificationMatrix = z.infer<typeof VerificationMatrixSchema>;
 
@@ -190,6 +192,9 @@ export const VerificationResultSchema = z.object({
 export type VerificationResult = z.infer<typeof VerificationResultSchema>;
 
 export const VerificationRunSchema = z.object({
+  outcome: z.enum(["passed", "failed", "skipped"]).optional(),
+  skipReason: z.string().optional(),
+  epoch: z.string().optional(),
   stage: z.enum(["local", "broader"]).optional(),
   revision: z.number().int().nonnegative().optional(),
   id: z.string(),

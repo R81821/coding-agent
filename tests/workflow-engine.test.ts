@@ -10,16 +10,26 @@ import { DEFAULT_PROFILE, newId, nowIso, type AgentEvent, type RunSpec, type Wor
 import { terminalTool, ToolRegistry } from "@harness/tools";
 import { workflowCall, workflowPrelude, workflowReadTool } from "./workflow-fixture.js";
 
-async function runScenario(mode: "pass" | "local-failure" | "broader-failure" | "review-failure" | "early-done" | "reedit" | "no-verification" | "timeout" | "dynamic-verification" | "denied-verification" | "check-budget" | "outside-check") {
+async function runScenario(mode: "pass" | "local-failure" | "broader-failure" | "review-failure" | "early-done" | "reedit" | "no-verification" | "timeout" | "dynamic-verification" | "denied-verification" | "check-budget" | "outside-check" | "independent-pass" | "independent-fail" | "independent-malformed" | "independent-tool-call" | "broader-required" | "broader-optional" | "broader-disabled" | "deep-failure") {
   const root = await mkdtemp(join(tmpdir(), "harness-workflow-"));
   const vault = await VaultCrypto.open(join(root, "key.json"), "fixture-passphrase");
   const database = await HarnessDatabase.open(join(root, "db.sqlite"), vault);
   try {
-    const checks: string[] = []; let mutations = 0; let turn = 0; let failedOnce = false; let reviewFailed = false; let last: WorkflowState | undefined;
+    const checks: string[] = []; let mutations = 0; let turn = 0; let failedOnce = false; let reviewFailed = false; let last: WorkflowState | undefined; let reviews = 0; let localFailures = 0;
     const model = descriptor({ providerId: "fake", modelId: "workflow", displayName: "Workflow", capabilities: { vision: false, tools: true, parallelTools: true, structuredOutput: true, maxContextTokens: 128000, dataPolicy: "local" } });
     const provider: ModelProvider = {
       id: "fake", async listModels() { return [model]; }, async health() { return true; }, estimateCost() { return 0; },
       async *stream(request): AsyncIterable<ProviderStreamEvent> {
+        if (request.messages.some(message => message.content.some(part => part.type === "text" && part.text.startsWith("Independent read-only final review")))) {
+          reviews += 1;
+          expect(request.tools).toEqual([]);
+          const supplied = JSON.parse(request.messages.find(message => message.role === "user")!.content.map(part => part.type === "text" ? part.text : "").join(""));
+          expect(supplied.verificationRuns).toEqual(expect.arrayContaining([expect.objectContaining({ stage: "local", outcome: "passed", results: expect.arrayContaining([expect.objectContaining({ output: "test output", exitCode: 0 })]) })]));
+          expect(supplied.observations).toEqual(expect.arrayContaining([expect.objectContaining({ output: { diff: "-old\n+new" } })]));
+          if (mode === "independent-tool-call") { yield workflowCall("forbidden", "apply_patch", { patch: "unwanted" }); return; }
+          yield { type: "text_delta", delta: mode === "independent-malformed" ? "invalid JSON" : JSON.stringify({ passed: mode !== "independent-fail" || reviews > 1, summary: reviews === 1 && mode === "independent-fail" ? "Missing edge case" : "Independent diff review passed" }) };
+          yield { type: "usage", usage: { inputTokens: 20, outputTokens: 10, estimatedUsd: 0 } }; return;
+        }
         const runtime = request.messages.flatMap(message => message.content.flatMap(part => part.type === "text" && part.text.startsWith("Trusted runtime context") ? [part.text] : [])).at(-1);
         if (runtime) last = JSON.parse(runtime.slice(runtime.indexOf("\n") + 1)).workingMemory;
         turn += 1;
@@ -31,34 +41,39 @@ async function runScenario(mode: "pass" | "local-failure" | "broader-failure" | 
         if (mode === "early-done" || (mode === "timeout" && mutations > 0)) { yield { type: "text_delta", delta: "Looks done." }; return; }
         const state = last!;
         if (state.diagnosisRequired) {
-          yield workflowCall(`diagnose-${turn}`, "update_workflow", { action: "diagnose", context: "Failure evidence identifies an unhandled boundary", steps: ["Fix boundary and rerun tests"], cause: `Boundary case needs correction ${turn}`, evidenceIds: ["recon"] }); return;
+          const chain = state.failureChains.find(item => item.id === state.activeChainId);
+          const fresh = state.observations.find(item => item.epoch === state.epoch && item.sequence > (chain?.lastSequence ?? 0) && item.tool === "read_file" && !item.failed);
+          if (chain && chain.count >= 2 && !fresh) { yield workflowCall("reread-" + turn, "read_file", { path: "src/value.ts" }); return; }
+          const expanded = state.observations.find(item => item.epoch === state.epoch && item.sequence > (chain?.lastSequence ?? 0) && item.tool === "search_text" && !item.failed);
+          if (chain && chain.count >= 3 && !expanded) { yield workflowCall("search-" + turn, "search_text", { query: "boundary callers" }); return; }
+          yield workflowCall(`diagnose-${turn}`, "update_workflow", { action: "diagnose", context: "Failure evidence identifies an unhandled boundary", steps: ["Fix boundary and rerun tests"], cause: `Boundary case needs correction ${turn}`, evidenceIds: [state.activeFailureId, ...(fresh ? [fresh.id] : []), ...(expanded ? [expanded.id] : [])], ...(expanded ? { alternatives: ["wrong caller", "wrong condition"], experiment: { question: "Which layer handles null?", expectedResults: ["caller handles", "callee handles"], observationIds: [expanded.id] } } : {}) }); return;
         }
         if (mutations === 0 || (state.phase === "update_hypothesis") || (mode === "reedit" && state.reviewedRevision === 1)) {
-          yield workflowCall(`patch-${turn}`, "apply_patch", { patch: "+++ b/src/value.ts\n-old\n+new" }); return;
+          yield workflowCall(`patch-${turn}`, "apply_patch", { patch: mode.startsWith("independent") ? "+++ b/src/auth.ts\n-old\n+new" : "+++ b/src/value.ts\n-old\n+new" }); return;
         }
         if (state.diffRevision !== state.revision) { yield workflowCall(`diff-${turn}`, "git_diff", {}); return; }
         if (state.requirementsRevision !== state.revision) {
-          yield workflowCall(`requirements-${turn}`, "update_workflow", { action: "requirements", passed: true, evidence: ["The configured tests verify the target and compatibility"] }); return;
+          yield workflowCall(`requirements-${turn}`, "update_workflow", { action: "requirements", passed: true, evidence: [{ requirementId: state.requirementIds[0], summary: "The configured tests verify the target and compatibility", observationIds: [state.observations.findLast(item => item.tool === "git_diff")!.id], verificationIds: [state.localCheck.runId], diffObservationId: state.observations.findLast(item => item.tool === "git_diff")!.id }] }); return;
         }
         if (state.reviewedRevision !== state.revision) {
           const reject = mode === "review-failure" && !reviewFailed; reviewFailed ||= reject;
-          yield workflowCall(`review-${turn}`, "update_workflow", { action: "review", passed: !reject, summary: reject ? "Missing edge case" : "Diff is scoped; requirements, regressions and edge cases checked" }); return;
+          yield workflowCall(`review-${turn}`, "update_workflow", { action: "review", passed: !reject, evidenceIds: [state.observations.findLast(item => item.tool === "git_diff")!.id], summary: reject ? "Missing edge case" : "Diff is scoped; requirements, regressions and edge cases checked" }); return;
         }
         yield { type: "text_delta", delta: "Implemented and verified with reviewed diff." };
       },
     };
-    const tools = new ToolRegistry().register(workflowReadTool).register({
+    const tools = new ToolRegistry().register(workflowReadTool).register({ ...workflowReadTool, contract: { ...workflowReadTool.contract, name: "search_text", inputSchema: { type: "object", properties: { query: { type: "string" } }, required: ["query"] } } }).register({
       contract: { ...workflowReadTool.contract, name: "apply_patch", risk: "write", idempotent: false, inputSchema: { type: "object", properties: { patch: { type: "string" } }, required: ["patch"] } },
       async execute() { mutations += 1; return { output: { applied: true } }; },
     }).register({ contract: { ...workflowReadTool.contract, name: "git_diff", inputSchema: { type: "object", properties: {} } }, async execute() { return { output: { diff: "-old\n+new" } }; } }).register({
       ...terminalTool, async execute(input) {
         const command = String(input.command); checks.push(command);
-        const shouldFail = !failedOnce && ((mode === "local-failure" && command === "fixture local") || (mode === "broader-failure" && command === "fixture broader"));
-        if (shouldFail) failedOnce = true;
+        const shouldFail = (mode === "deep-failure" && command === "fixture local" && localFailures < 3) || !failedOnce && ((mode === "local-failure" && command === "fixture local") || (mode === "broader-failure" && command === "fixture broader"));
+        if (shouldFail) { failedOnce = true; localFailures += 1; }
         return { output: { exitCode: shouldFail ? 1 : 0, stdout: "test output", stderr: shouldFail ? "FAILED value: boundary mismatch" : "", timedOut: mode === "timeout" }, isError: shouldFail };
       },
     });
-    const profile = { ...DEFAULT_PROFILE, allowedProviders: ["fake"], toolNames: ["read_file", "apply_patch", "git_diff", "terminal"], verificationPolicy: { maxRepairAttempts: 2, items: ["no-verification", "dynamic-verification"].includes(mode) ? [] : (["local", "broader"] as const).map(stage => ({ id: stage, stage, command: `fixture ${stage}`, cwd: mode === "outside-check" ? ".." : ".", timeoutMs: 1000, required: true, expectedExitCodes: [0] })) } };
+    const profile = { ...DEFAULT_PROFILE, allowedProviders: ["fake"], toolNames: ["read_file", "search_text", "apply_patch", "git_diff", "terminal"], verificationPolicy: { maxRepairAttempts: mode === "deep-failure" ? 4 : 2, broaderPolicy: mode === "broader-required" ? "required" as const : mode === "broader-disabled" ? "disabled" as const : "optional" as const, reviewPolicy: mode.startsWith("independent") ? "risk_based" as const : "standard" as const, items: ["no-verification", "dynamic-verification"].includes(mode) ? [] : (["local", "broader"] as const).filter(stage => !["broader-optional", "broader-required"].includes(mode) || stage === "local").map(stage => ({ id: stage, stage, command: `fixture ${stage}`, cwd: mode === "outside-check" ? ".." : ".", timeoutMs: 1000, required: true, expectedExitCodes: [0] })) } };
     const run: RunSpec = { id: newId("run"), sessionId: "workflow", request: "Fix value without changing compatibility", workspacePath: root, profileId: profile.id, attachments: [], budget: { ...profile.budget, maxTurns: 40, maxToolCalls: mode === "check-budget" ? 5 : 64 }, grants: [{ toolNames: mode === "denied-verification" ? ["apply_patch"] : ["apply_patch", "terminal"], pathGlobs: ["**"], commandPrefixes: ["fixture"], networkDomains: [], maxRisk: "high" }], createdAt: nowIso() };
     const engine = new HarnessEngine({ database, providers: [provider], tools, memory: new MemoryService(database), skills: new SkillService(join(root, "skills")), projectTrust: new ProjectTrustService(database) });
     const result = await new Promise<Extract<AgentEvent, { type: "result" }>>((done, reject) => {
@@ -72,7 +87,7 @@ async function runScenario(mode: "pass" | "local-failure" | "broader-failure" | 
       engine.start(run, profile);
     });
     await new Promise<void>(done => setImmediate(done));
-    return { result, checks, mutations, events: database.listEvents(run.id), checkpoint: database.getLatestCheckpoint(run.id) };
+    return { result, checks, mutations, reviews, verificationRuns: database.listVerificationRuns(run.id), events: database.listEvents(run.id), checkpoint: database.getLatestCheckpoint(run.id) };
   } finally {
     database.close(); vault.dispose(); const rel = relative(tmpdir(), root);
     if (!rel || rel.startsWith("..") || isAbsolute(rel)) throw new Error("Unsafe cleanup target");
@@ -88,11 +103,14 @@ describe("real engine workflow", () => {
     expect(phases).toEqual(expect.arrayContaining(["task_understanding", "repository_recon", "build_working_context", "plan_hypothesis", "small_edit", "local_verification", "inspect_result", "broader_verification", "requirements_check", "final_review", "done"]));
     expect(phases.indexOf("small_edit")).toBeLessThan(phases.indexOf("local_verification"));
     expect(result.checkpoint?.workflow?.reviewedRevision).toBe(1);
+    expect(result.verificationRuns.every(run => run.outcome === "passed")).toBe(true);
+    expect(result.events.filter(e => e.type === "verification_finished").every(e => e.type === "verification_finished" && e.verification.outcome === "passed")).toBe(true);
   });
   it.each(["local-failure", "broader-failure", "review-failure"] as const)("diagnoses and repairs %s before completing", async mode => {
     const result = await runScenario(mode);
     expect(result.result.status).toBe("completed"); expect(result.mutations).toBe(2);
     expect(result.events.some(e => e.type === "workflow_updated" && e.workflow.phase === "update_hypothesis")).toBe(true);
+    if (mode !== "review-failure") expect(result.verificationRuns.some(run => run.outcome === "failed" && !run.passed)).toBe(true);
     if (mode === "local-failure") expect(result.checks).toEqual(["fixture local", "fixture local", "fixture broader"]);
     else expect(result.checks).toEqual(["fixture local", "fixture broader", "fixture local", "fixture broader"]);
   });
@@ -107,6 +125,29 @@ describe("real engine workflow", () => {
   it("charges verification against tool budget and leaves incomplete work in review", async () => {
     const result = await runScenario("check-budget"); expect(result.result.status).toBe("review"); expect(result.checks).toEqual(["fixture local"]);
     expect(result.checkpoint?.toolCalls).toBeLessThanOrEqual(5);
+  });
+  it.each(["independent-pass", "independent-fail"] as const)("handles %s with a tool-free runtime review", async mode => {
+    const result = await runScenario(mode); expect(result.result.status).toBe("completed");
+    expect(result.reviews).toBe(mode === "independent-pass" ? 1 : 2);
+    expect(result.mutations).toBe(mode === "independent-pass" ? 1 : 2);
+    expect(result.checkpoint?.workflow?.independentReview.status).toBe("passed");
+  });
+  it.each(["independent-malformed", "independent-tool-call"] as const)("leaves %s in review without executing extra tools", async mode => {
+    const result = await runScenario(mode); expect(result.result.status).toBe("review"); expect(result.mutations).toBe(1); expect(result.reviews).toBe(1);
+  });
+  it.each(["broader-optional", "broader-disabled"] as const)("records %s as skipped, never passed", async mode => {
+    const result = await runScenario(mode); expect(result.result.status).toBe("completed"); expect(result.checks).toEqual(["fixture local"]);
+    expect(result.checkpoint?.workflow?.broaderCheck.status).toBe("skipped"); expect(result.checkpoint?.workflow?.broaderRevision).toBe(-1);
+    expect(result.events.some(event => event.type === "verification_finished" && event.verification.stage === "broader" && event.verification.passed === false && event.verification.outcome === "skipped")).toBe(true);
+  });
+  it("does not complete if required broader verification has no configured items", async () => {
+    const result = await runScenario("broader-required"); expect(result.result.status).toBe("review"); expect(result.checkpoint?.workflow?.broaderCheck.status).toBe("failed");
+  });
+  it("requires expanded search and experiment evidence before repairing a third recurring failure", async () => {
+    const result = await runScenario("deep-failure"); expect(result.result.status).toBe("completed"); expect(result.mutations).toBe(4);
+    expect(result.checkpoint?.workflow?.hypotheses.at(-1)?.alternatives).toHaveLength(2);
+    expect(result.checkpoint?.workflow?.hypotheses.at(-1)?.experiment?.observationIds[0]).toMatch(/^search-/);
+    expect(result.checkpoint?.workflow?.failureChains.filter(item => item.source.startsWith("verification")).every(item => item.status === "resolved")).toBe(true);
   });
   it("reruns both verification levels when the model edits after review", async () => {
     const result = await runScenario("reedit"); expect(result.result.status).toBe("completed"); expect(result.mutations).toBe(2);

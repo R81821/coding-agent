@@ -14,11 +14,10 @@ function planned() {
   return flow;
 }
 function verified(flow: CodingWorkflow) {
-  flow.state.localRevision = flow.state.revision;
-  flow.state.broaderRevision = flow.state.revision;
+  for (const stage of ["local", "broader"] as const) flow.recordVerification({ id: "verify-" + stage, runId: "fixture", stage, epoch: flow.state.epoch, revision: flow.state.revision, attempt: 0, passed: true, results: [], startedAt: new Date().toISOString(), finishedAt: new Date().toISOString() });
   flow.observe({ id: "diff", name: "git_diff", input: {} }, { output: "-old +new" });
-  flow.update({ action: "requirements", passed: true, evidence: ["value test passed"] });
-  flow.update({ action: "review", passed: true, summary: "Minimal diff; compatibility and edge cases checked" });
+  flow.update({ action: "requirements", passed: true, evidence: [{ requirementId: "req-1", summary: "value test passed", observationIds: ["diff"], verificationIds: ["verify-local"], diffObservationId: "diff" }] });
+  flow.update({ action: "review", passed: true, evidenceIds: ["diff"], summary: "Minimal diff; compatibility and edge cases checked" });
 }
 describe("coding workflow gates", () => {
   it("blocks editing before understanding, reconnaissance and an evidence-backed hypothesis", () => {
@@ -32,9 +31,9 @@ describe("coding workflow gates", () => {
   it("cannot mark completion with model claims or a truncated diff", () => {
     const flow = planned(); flow.starting(call, patch);
     expect(() => flow.update({ action: "review", passed: true, summary: "done" })).toThrow("runtime verification");
-    flow.state.localRevision = flow.state.broaderRevision = flow.state.revision;
+    verified(flow);
     flow.observe({ id: "diff", name: "git_diff", input: {} }, { output: "partial", truncated: true });
-    expect(() => flow.update({ action: "requirements", passed: true, evidence: ["done"] })).toThrow("complete git_diff");
+    expect(() => flow.update({ action: "requirements", passed: true, evidence: [{ requirementId: "req-1", summary: "done", observationIds: ["diff"], verificationIds: ["verify-local"], diffObservationId: "diff" }] })).toThrow("complete git_diff");
     expect(flow.canFinish()).toBe(false);
   });
   it("invalidates every successful gate on the next possible mutation", () => {
@@ -48,10 +47,10 @@ describe("coding workflow gates", () => {
     const flow = planned(); flow.fail("test failed");
     expect(flow.before(call, patch)).toContain("diagnose");
     expect(() => flow.update({ action: "diagnose", context: "same", steps: ["same"], cause: "outdated value", evidenceIds: ["read-1"] })).toThrow("Revise");
-    flow.update({ action: "diagnose", context: "boundary found", steps: ["fix boundary"], cause: "null boundary not handled", evidenceIds: ["read-1"] });
+    flow.update({ action: "diagnose", context: "boundary found", steps: ["fix boundary"], cause: "null boundary not handled", evidenceIds: [flow.state.activeFailureId] });
     expect(flow.before(call, patch)).toBeUndefined();
-    flow.fail("again"); expect(flow.strategy()).toContain("扩大");
-    flow.fail("again"); expect(flow.strategy()).toContain("架构");
+    flow.fail("test failed"); expect(flow.failureLevel).toBe(2);
+    flow.fail("test failed"); expect(flow.strategy()).toContain("替代假设");
   });
   it("requirement and review failures return to diagnosis without erasing acceptance criteria", () => {
     const flow = planned(); flow.starting(call, patch); verified(flow);
