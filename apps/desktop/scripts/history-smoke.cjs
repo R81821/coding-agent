@@ -66,11 +66,11 @@ ipcMain.handle("session-fixture", (_event, request) => {
       return session && { session, runs: sessionRuns(session.id).map((run) => ({ spec: run.spec, status: run.status, events: run.events })) };
     }
     case "session.delete": { const session = sessions.get(request.params.sessionId); sessions.set(session.id, { ...session, deletedAt: new Date().toISOString() }); return sessions.get(session.id); }
-    case "session.restore": { const session = sessions.get(request.params.sessionId); const { deletedAt, ...rest } = session; sessions.set(session.id, rest); return rest; }
+    case "session.restore": { const session = { ...sessions.get(request.params.sessionId) }; delete session.deletedAt; sessions.set(session.id, session); return session; }
     case "session.purge": { const sessionId = request.params.sessionId; for (const [id, run] of runs) if (run.spec.sessionId === sessionId) runs.delete(id); sessions.delete(sessionId); return { sessionId }; }
     case "projects.list": return [...projects.values()].filter((project) => Boolean(project.deletedAt) === (request.params?.deleted ?? false));
     case "project.delete": { const project = projects.get(request.params.projectId); projects.set(project.id, { ...project, deletedAt: new Date().toISOString() }); return projects.get(project.id); }
-    case "project.restore": { const project = projects.get(request.params.projectId); const { deletedAt, ...rest } = project; projects.set(project.id, rest); return rest; }
+    case "project.restore": { const project = { ...projects.get(request.params.projectId) }; delete project.deletedAt; projects.set(project.id, project); return project; }
     case "run.get": { const run = runs.get(request.params.runId); return run && { spec: run.spec, status: run.status }; }
     case "run.events": return (runs.get(request.params.runId)?.events ?? []).filter((event) => event.sequence > request.params.afterSequence);
     case "run.start": {
