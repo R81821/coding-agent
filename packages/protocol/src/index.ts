@@ -426,6 +426,20 @@ export type RunSpec = z.infer<typeof RunSpecSchema>;
 export type RunHistoryItem = Pick<RunSpec, "id" | "sessionId" | "request" | "workspacePath" | "profileId" | "createdAt"> & { status: RunStatus };
 export interface RunHistoryPage { items: RunHistoryItem[]; hasMore: boolean }
 
+export const SessionRecordSchema = z.object({
+  id: z.string().min(1), workspacePath: z.string().min(1), profileId: z.string().min(1),
+  title: z.string().trim().min(1).max(300), createdAt: z.string().datetime(), updatedAt: z.string().datetime(),
+  deletedAt: z.string().datetime().optional(),
+});
+export type SessionRecord = z.infer<typeof SessionRecordSchema>;
+export type SessionSummary = SessionRecord & { runCount: number; latestRunId?: string; latestStatus?: RunStatus };
+export interface SessionPage { items: SessionSummary[]; hasMore: boolean }
+export interface SessionDetail { session: SessionRecord; runs: Array<{ spec: RunSpec; status: RunStatus; events: AgentEvent[] }> }
+export const ProjectRecordSchema = z.object({
+  id: z.string().min(1), workspacePath: z.string().min(1), createdAt: z.string().datetime(), updatedAt: z.string().datetime(), deletedAt: z.string().datetime().optional(),
+});
+export type ProjectRecord = z.infer<typeof ProjectRecordSchema>;
+
 
 export const ProfileSchema = z.object({
   id: z.string(),

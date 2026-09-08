@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { mkdir } from "node:fs/promises";
 import { dirname } from "node:path";
 import type {
@@ -13,20 +14,25 @@ import type {
   Profile,
   RunCheckpoint,
   RunHistoryPage,
+  SessionDetail,
+  SessionPage,
+  SessionRecord,
+  ProjectRecord,
   RunSpec,
   RunStatus,
   SkillManifest,
   TaskSpec,
   VerificationRun
 } from "@harness/protocol";
-import { ProfileSchema } from "@harness/protocol";
+import { ProfileSchema, ProjectRecordSchema, SessionRecordSchema } from "@harness/protocol";
 import type { VaultCrypto } from "./crypto.js";
 import { SQLiteFile } from "./sqlite.js";
 
 interface RunRow { id: string; status: RunStatus; payload: string }
 interface EventRow { payload: string }
 interface GenericRow { id: string; payload: string }
-type GenericTable = "profiles" | "approvals" | "memories" | "skills" | "tasks" | "attachments" | "plans" | "checkpoints" | "compactions" | "verification_runs" | "plugins" | "eval_results" | "traces";
+type GenericTable = "profiles" | "approvals" | "memories" | "skills" | "tasks" | "attachments" | "plans" | "checkpoints" | "compactions" | "verification_runs" | "plugins" | "eval_results" | "traces" | "sessions" | "projects";
+const liveStatuses = new Set<RunStatus>(["queued", "planning", "running", "waiting_approval", "verifying"]);
 
 export class HarnessDatabase {
   private readonly db: SQLiteFile;
@@ -72,6 +78,8 @@ export class HarnessDatabase {
 
   updateRunStatus(runId: string, status: RunStatus): void {
     this.db.prepare("UPDATE runs SET status=?, updated_at=? WHERE id=?").run(status, new Date().toISOString(), runId);
+    const run = this.getRun(runId);
+    if (run && this.get<SessionRecord>("sessions", run.spec.sessionId)) this.touchSession(run.spec.sessionId, { updatedAt: new Date().toISOString() });
   }
 
   getRun(runId: string): { spec: RunSpec; status: RunStatus } | undefined {
@@ -96,6 +104,114 @@ export class HarnessDatabase {
     const rows = this.db.prepare("SELECT id, status, payload FROM runs WHERE status IN ('planning','running','waiting_approval','verifying')").all() as unknown as RunRow[];
     return rows.map((row) => ({ spec: this.crypto.decryptJson<RunSpec>(row.payload, `run:${row.id}`), status: row.status }));
   }
+
+  ensureProject(workspacePath: string, at = new Date().toISOString()): ProjectRecord {
+    const id = projectId(workspacePath);
+    const current = this.get<ProjectRecord>("projects", id);
+    if (current) return current;
+    const project = ProjectRecordSchema.parse({ id, workspacePath, createdAt: at, updatedAt: at });
+    this.upsert("projects", id, project);
+    return project;
+  }
+
+  listProjects(deleted = false): ProjectRecord[] {
+    return this.list<ProjectRecord>("projects").map(record => ProjectRecordSchema.parse(record)).filter(record => Boolean(record.deletedAt) === deleted).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt) || b.id.localeCompare(a.id));
+  }
+
+  createSession(input: SessionRecord): SessionRecord {
+    const session = SessionRecordSchema.parse(input);
+    if (this.get<SessionRecord>("sessions", session.id)) throw new Error(`Session already exists: ${session.id}`);
+    const project = this.ensureProject(session.workspacePath, session.createdAt);
+    if (project.deletedAt) throw new Error("Cannot create a Session in a deleted project");
+    this.upsert("sessions", session.id, session);
+    return session;
+  }
+
+  touchSession(id: string, patch: Partial<Pick<SessionRecord, "title" | "profileId" | "updatedAt">>): SessionRecord {
+    const current = this.get<SessionRecord>("sessions", id);
+    if (!current) throw new Error(`Unknown Session: ${id}`);
+    const updated = SessionRecordSchema.parse({ ...current, ...patch });
+    this.upsert("sessions", id, updated);
+    const project = this.ensureProject(updated.workspacePath, updated.createdAt);
+    if (!project.deletedAt) this.upsert("projects", project.id, { ...project, workspacePath: updated.workspacePath, updatedAt: updated.updatedAt });
+    return updated;
+  }
+
+  listSessions(input: { deleted?: boolean; limit?: number; offset?: number } = {}): SessionPage {
+    const deleted = input.deleted ?? false, limit = input.limit ?? 50, offset = input.offset ?? 0;
+    if (!Number.isInteger(limit) || limit < 1 || limit > 200 || !Number.isInteger(offset) || offset < 0) throw new Error("Invalid Session pagination");
+    const visibleProjects = new Set(this.listProjects(false).map(project => project.id));
+    const records = this.list<SessionRecord>("sessions").map(record => SessionRecordSchema.parse(record)).filter(record => Boolean(record.deletedAt) === deleted).filter(record => deleted || visibleProjects.has(projectId(record.workspacePath))).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt) || b.id.localeCompare(a.id));
+    return { items: records.slice(offset, offset + limit).map(session => { const runs = this.runsForSession(session.id), latest = runs.at(-1); return { ...session, runCount: runs.length, ...(latest ? { latestRunId: latest.spec.id, latestStatus: latest.status } : {}) }; }), hasMore: records.length > offset + limit };
+  }
+
+  getSessionDetail(id: string): SessionDetail | undefined {
+    const session = this.get<SessionRecord>("sessions", id);
+    return session ? { session: SessionRecordSchema.parse(session), runs: this.runsForSession(id).map(run => ({ ...run, events: this.listEvents(run.spec.id) })) } : undefined;
+  }
+
+  deleteSession(id: string): SessionRecord {
+    const session = this.get<SessionRecord>("sessions", id);
+    if (!session) throw new Error(`Unknown Session: ${id}`);
+    if (this.runsForSession(id).some(run => liveStatuses.has(run.status))) throw new Error("Cannot delete a Session with an active run");
+    if (session.deletedAt) return session;
+    const updated = { ...session, deletedAt: new Date().toISOString(), updatedAt: new Date().toISOString() };
+    this.upsert("sessions", id, updated); return updated;
+  }
+
+  restoreSession(id: string): SessionRecord {
+    const session = this.get<SessionRecord>("sessions", id);
+    if (!session) throw new Error(`Unknown Session: ${id}`);
+    if (!session.deletedAt) return session;
+    const { deletedAt: _deletedAt, ...rest } = session;
+    const updated = { ...rest, updatedAt: new Date().toISOString() };
+    this.upsert("sessions", id, updated); return updated;
+  }
+
+  deleteProject(id: string): ProjectRecord {
+    const project = this.get<ProjectRecord>("projects", id);
+    if (!project) throw new Error(`Unknown project: ${id}`);
+    const sessionIds = new Set(this.list<SessionRecord>("sessions").filter(session => normalizeWorkspace(session.workspacePath) === normalizeWorkspace(project.workspacePath)).map(session => session.id));
+    if (this.allRuns().some(run => sessionIds.has(run.spec.sessionId) && liveStatuses.has(run.status))) throw new Error("Cannot delete a project with an active run");
+    if (project.deletedAt) return project;
+    const updated = { ...project, deletedAt: new Date().toISOString(), updatedAt: new Date().toISOString() };
+    this.upsert("projects", id, updated); return updated;
+  }
+
+  restoreProject(id: string): ProjectRecord {
+    const project = this.get<ProjectRecord>("projects", id);
+    if (!project) throw new Error(`Unknown project: ${id}`);
+    if (!project.deletedAt) return project;
+    const { deletedAt: _deletedAt, ...rest } = project;
+    const updated = { ...rest, updatedAt: new Date().toISOString() };
+    this.upsert("projects", id, updated); return updated;
+  }
+
+  purgeSession(id: string): { sessionId: string; runs: number } {
+    const session = this.get<SessionRecord>("sessions", id);
+    if (!session) throw new Error(`Unknown Session: ${id}`);
+    if (!session.deletedAt) throw new Error("Session must be deleted before permanent deletion");
+    const runs = this.runsForSession(id);
+    if (runs.some(run => liveStatuses.has(run.status))) throw new Error("Cannot purge a Session with an active run");
+    const runIds = new Set(runs.map(run => run.spec.id));
+    const tables: GenericTable[] = ["approvals", "plans", "checkpoints", "compactions", "verification_runs", "traces"];
+    const ids = new Map(tables.map(table => [table, this.list<Record<string, unknown>>(table).filter(record => typeof record.runId === "string" && runIds.has(record.runId)).map(record => String(record.id))]));
+    this.db.exec("BEGIN TRANSACTION");
+    try {
+      for (const runId of runIds) this.db.prepare("DELETE FROM events WHERE run_id=?").run(runId);
+      for (const [table, recordIds] of ids) for (const recordId of recordIds) this.db.prepare(`DELETE FROM ${table} WHERE id=?`).run(recordId);
+      for (const runId of runIds) this.db.prepare("DELETE FROM runs WHERE id=?").run(runId);
+      this.db.prepare("DELETE FROM sessions WHERE id=?").run(id);
+      this.db.exec("COMMIT"); return { sessionId: id, runs: runs.length };
+    } catch (error) { this.db.exec("ROLLBACK"); throw error; }
+  }
+
+  private allRuns(): Array<{ spec: RunSpec; status: RunStatus }> {
+    const rows = this.db.prepare("SELECT id, status, payload FROM runs ORDER BY created_at, id").all() as unknown as RunRow[];
+    return rows.map(row => ({ spec: this.crypto.decryptJson<RunSpec>(row.payload, `run:${row.id}`), status: row.status }));
+  }
+
+  private runsForSession(sessionId: string): Array<{ spec: RunSpec; status: RunStatus }> { return this.allRuns().filter(run => run.spec.sessionId === sessionId); }
 
   appendEvent(event: AgentEvent): void {
     this.db.prepare("INSERT OR IGNORE INTO events (run_id, sequence, type, payload, created_at) VALUES (?, ?, ?, ?, ?)")
@@ -254,9 +370,26 @@ export class HarnessDatabase {
       CREATE TABLE IF NOT EXISTS plugins (id TEXT PRIMARY KEY, payload TEXT NOT NULL, updated_at TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS eval_results (id TEXT PRIMARY KEY, payload TEXT NOT NULL, updated_at TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS traces (id TEXT PRIMARY KEY, payload TEXT NOT NULL, updated_at TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS sessions (id TEXT PRIMARY KEY, payload TEXT NOT NULL, updated_at TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS projects (id TEXT PRIMARY KEY, payload TEXT NOT NULL, updated_at TEXT NOT NULL);
     `);
+    this.backfillSessions();
+  }
+
+  private backfillSessions(): void {
+    const existing = new Set(this.list<SessionRecord>("sessions").map(session => session.id));
+    const grouped = new Map<string, Array<{ spec: RunSpec; status: RunStatus }>>();
+    for (const run of this.allRuns()) grouped.set(run.spec.sessionId, [...(grouped.get(run.spec.sessionId) ?? []), run]);
+    for (const [sessionId, runs] of grouped) {
+      const first = runs[0]!, last = runs.at(-1)!;
+      this.ensureProject(last.spec.workspacePath, first.spec.createdAt);
+      if (!existing.has(sessionId)) this.upsert("sessions", sessionId, SessionRecordSchema.parse({ id: sessionId, workspacePath: last.spec.workspacePath, profileId: last.spec.profileId, title: first.spec.request.slice(0, 300) || "新会话", createdAt: first.spec.createdAt, updatedAt: last.spec.createdAt }));
+    }
   }
 }
+
+function normalizeWorkspace(value: string): string { return value.replace(/\\/g, "/").replace(/\/+$/, "").toLocaleLowerCase(); }
+function projectId(workspacePath: string): string { return `project_${createHash("sha256").update(normalizeWorkspace(workspacePath)).digest("hex").slice(0, 24)}`; }
 
 function tokenize(value: string): string[] {
   return [...new Set(value.toLocaleLowerCase().match(/[\p{L}\p{N}_-]{2,}/gu) ?? [])].slice(0, 256);

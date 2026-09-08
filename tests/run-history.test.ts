@@ -95,3 +95,98 @@ describe("history switching state", () => {
     for (const status of ["completed", "cancelled", "failed", "paused", "review"] as const) expect(isLiveRun(status)).toBe(false);
   });
 });
+
+describe("persistent sessions and project recycle state", () => {
+  it("persists empty sessions, groups multiple runs, and restores soft-deleted records", async () => {
+    const root = await mkdtemp(join(tmpdir(), "harness-sessions-"));
+    const vault = await VaultCrypto.open(join(root, "key.json"), "fixture-password");
+    const path = join(root, "db.sqlite");
+    let database = await HarnessDatabase.open(path, vault);
+    try {
+      const createdAt = "2026-09-08T01:00:00.000Z";
+      const workspacePath = "D:/Code/SessionProject";
+      const project = database.ensureProject(workspacePath, createdAt);
+      database.createSession({ id: "session-a", workspacePath, profileId: "default", title: "新会话", createdAt, updatedAt: createdAt });
+      database.saveRun({ ...spec("turn-a", createdAt), sessionId: "session-a", workspacePath, request: "first turn" }, "completed");
+      database.saveRun({ ...spec("turn-b", "2026-09-08T01:01:00.000Z"), sessionId: "session-a", workspacePath, request: "second turn" }, "review");
+      database.touchSession("session-a", { title: "first turn", profileId: "default", updatedAt: "2026-09-08T01:01:00.000Z" });
+
+      database.close();
+      database = await HarnessDatabase.open(path, vault);
+      expect(database.listProjects(false)).toEqual([expect.objectContaining({ id: project.id, workspacePath })]);
+      expect(database.listSessions({ deleted: false, limit: 50, offset: 0 })).toMatchObject({
+        hasMore: false,
+        items: [{ id: "session-a", title: "first turn", runCount: 2, latestRunId: "turn-b", latestStatus: "review" }],
+      });
+      expect(database.getSessionDetail("session-a")?.runs.map((run) => run.spec.id)).toEqual(["turn-a", "turn-b"]);
+
+      database.deleteSession("session-a");
+      expect(database.listSessions({ deleted: false, limit: 50, offset: 0 }).items).toEqual([]);
+      expect(database.listSessions({ deleted: true, limit: 50, offset: 0 }).items[0]).toMatchObject({ id: "session-a" });
+      database.restoreSession("session-a");
+      expect(database.getSessionDetail("session-a")?.runs).toHaveLength(2);
+
+      database.deleteProject(project.id);
+      expect(database.listProjects(false)).toEqual([]);
+      expect(database.listProjects(true)[0]).toMatchObject({ id: project.id, workspacePath });
+      database.restoreProject(project.id);
+      expect(database.listProjects(false)[0]).toMatchObject({ id: project.id, workspacePath });
+    } finally {
+      database.close(); vault.dispose();
+      const rel = relative(tmpdir(), root);
+      if (!rel || rel.startsWith("..") || isAbsolute(rel)) throw new Error("Unsafe fixture cleanup");
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("migrates legacy runs into sessions without rewriting their payload", async () => {
+    const root = await mkdtemp(join(tmpdir(), "harness-session-migration-"));
+    const vault = await VaultCrypto.open(join(root, "key.json"), "fixture-password");
+    const path = join(root, "db.sqlite");
+    let database = await HarnessDatabase.open(path, vault);
+    try {
+      database.saveRun({ ...spec("legacy-a"), sessionId: "legacy-session", workspacePath: "D:/Legacy" }, "completed");
+      database.close();
+      database = await HarnessDatabase.open(path, vault);
+      expect(database.listSessions({ deleted: false, limit: 50, offset: 0 }).items[0]).toMatchObject({ id: "legacy-session", runCount: 1 });
+      expect(database.getRun("legacy-a")?.spec.sessionId).toBe("legacy-session");
+    } finally {
+      database.close(); vault.dispose();
+      const rel = relative(tmpdir(), root);
+      if (!rel || rel.startsWith("..") || isAbsolute(rel)) throw new Error("Unsafe fixture cleanup");
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("blocks deletion while running and purges run data without touching memories", async () => {
+    const root = await mkdtemp(join(tmpdir(), "harness-session-purge-"));
+    const vault = await VaultCrypto.open(join(root, "key.json"), "fixture-password");
+    const database = await HarnessDatabase.open(join(root, "db.sqlite"), vault);
+    try {
+      const createdAt = "2026-09-08T01:00:00.000Z";
+      const workspacePath = "D:/Code/PurgeProject";
+      const project = database.ensureProject(workspacePath, createdAt);
+      database.createSession({ id: "session-purge", workspacePath, profileId: "default", title: "purge", createdAt, updatedAt: createdAt });
+      database.saveRun({ ...spec("live", createdAt), sessionId: "session-purge", workspacePath }, "running");
+      expect(() => database.deleteSession("session-purge")).toThrow("active run");
+      expect(() => database.deleteProject(project.id)).toThrow("active run");
+      database.updateRunStatus("live", "completed");
+      database.appendEvent(event("live", 0));
+      database.saveMemory({ id: "keep-memory", content: "keep session knowledge", source: "run:live", scope: "session", scopeId: "session-purge", confidence: 1, status: "approved", pinned: false, approvedBy: "fixture", createdAt });
+      database.deleteSession("session-purge");
+
+      const result = database.purgeSession("session-purge");
+      expect(result).toMatchObject({ sessionId: "session-purge", runs: 1 });
+      expect(database.getSessionDetail("session-purge")).toBeUndefined();
+      expect(database.getRun("live")).toBeUndefined();
+      expect(database.listEvents("live")).toEqual([]);
+      expect(database.listMemories().map((memory) => memory.id)).toContain("keep-memory");
+      expect(database.searchMemories("session knowledge", ["session-purge"]).map((memory) => memory.id)).toContain("keep-memory");
+    } finally {
+      database.close(); vault.dispose();
+      const rel = relative(tmpdir(), root);
+      if (!rel || rel.startsWith("..") || isAbsolute(rel)) throw new Error("Unsafe fixture cleanup");
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+});
