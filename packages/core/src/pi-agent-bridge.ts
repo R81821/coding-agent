@@ -48,6 +48,7 @@ export interface PiAgentBridgeOptions {
   provider: ModelProvider;
   model: ModelDescriptor;
   initialMessages: ModelMessage[];
+  conversationHistory?: ModelMessage[];
   contracts: ToolContract[];
   resolveTool(name: string): ToolDefinition | undefined;
   externalSignal: AbortSignal;
@@ -124,6 +125,11 @@ export async function runWithPiAgent(
   if (options.resumeTranscript?.length)
     agent.state.messages = toPiMessages(
       normalizeToolMessageSequence(options.resumeTranscript),
+      options.model,
+    );
+  else if (options.conversationHistory?.length)
+    agent.state.messages = toPiMessages(
+      normalizeToolMessageSequence(options.conversationHistory),
       options.model,
     );
 
@@ -506,8 +512,8 @@ export function toHarnessMessages(
       ],
     });
   }
-  let attached = false;
-  for (const message of context.messages) {
+  const attachmentTarget = context.messages.findLastIndex((message) => message.role === "user");
+  for (const [messageIndex, message] of context.messages.entries()) {
     if (message.role === "user") {
       const text =
         typeof message.content === "string"
@@ -519,7 +525,7 @@ export function toHarnessMessages(
         role: "user",
         content: [
           { type: "text", text, trust: "user_request" },
-          ...(!attached
+          ...(messageIndex === attachmentTarget
             ? attachments.map((attachment) => ({
                 type: "image" as const,
                 attachment,
@@ -528,7 +534,6 @@ export function toHarnessMessages(
             : []),
         ],
       });
-      attached = true;
       continue;
     }
     if (message.role === "assistant") {

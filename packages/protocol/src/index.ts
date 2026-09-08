@@ -563,6 +563,15 @@ export type TaskSpec = z.infer<typeof TaskSpecSchema>;
 
 export const DaemonRequestSchema = z.discriminatedUnion("method", [
   z.object({ id: z.string(), method: z.literal("health") }),
+  z.object({ id: z.string(), method: z.literal("sessions.create"), params: SessionRecordSchema.omit({ deletedAt: true }) }),
+  z.object({ id: z.string(), method: z.literal("sessions.list"), params: z.object({ deleted: z.boolean().default(false), limit: z.number().int().positive().max(200).default(50), offset: z.number().int().nonnegative().default(0) }).default({ deleted: false, limit: 50, offset: 0 }) }),
+  z.object({ id: z.string(), method: z.literal("session.get"), params: z.object({ sessionId: z.string().min(1) }) }),
+  z.object({ id: z.string(), method: z.literal("session.delete"), params: z.object({ sessionId: z.string().min(1) }) }),
+  z.object({ id: z.string(), method: z.literal("session.restore"), params: z.object({ sessionId: z.string().min(1) }) }),
+  z.object({ id: z.string(), method: z.literal("session.purge"), params: z.object({ sessionId: z.string().min(1) }) }),
+  z.object({ id: z.string(), method: z.literal("projects.list"), params: z.object({ deleted: z.boolean().default(false) }).default({ deleted: false }) }),
+  z.object({ id: z.string(), method: z.literal("project.delete"), params: z.object({ projectId: z.string().min(1) }) }),
+  z.object({ id: z.string(), method: z.literal("project.restore"), params: z.object({ projectId: z.string().min(1) }) }),
   z.object({ id: z.string(), method: z.literal("run.start"), params: RunSpecSchema }),
   z.object({ id: z.string(), method: z.literal("runs.list"), params: z.object({ limit: z.number().int().positive().max(200).default(50), offset: z.number().int().nonnegative().default(0) }).optional() }),
   z.object({ id: z.string(), method: z.literal("run.get"), params: z.object({ runId: z.string().min(1) }) }),

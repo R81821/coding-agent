@@ -418,4 +418,60 @@ describe("HarnessEngine", () => {
     database.close();
     vault.dispose();
   });
+
+  it("sends prior turns from the same Session while excluding other Sessions", async () => {
+    const root = await mkdtemp(join(tmpdir(), "harness-session-context-test-"));
+    temporary.push(root);
+    const vault = await VaultCrypto.open(join(root, "key-envelope.json"), "correct-password");
+    const database = await HarnessDatabase.open(join(root, "harness.sqlite"), vault);
+    const createdAt = "2026-09-08T00:00:00.000Z";
+    database.ensureProject(root, createdAt);
+    database.createSession({ id: "session-main", workspacePath: root, profileId: "default", title: "Main", createdAt, updatedAt: createdAt });
+    database.createSession({ id: "session-other", workspacePath: root, profileId: "default", title: "Other", createdAt, updatedAt: createdAt });
+    const previous: RunSpec = { id: "run-previous", sessionId: "session-main", request: "remember the blue widget", workspacePath: root, profileId: "default", attachments: [], budget: DEFAULT_PROFILE.budget, grants: [], createdAt };
+    database.saveRun(previous, "completed");
+    database.appendEvent({ id: "event-previous", runId: previous.id, sequence: 0, at: createdAt, type: "result", text: "the widget is stored in module alpha", status: "completed" });
+    const other: RunSpec = { ...previous, id: "run-other", sessionId: "session-other", request: "cross-session secret", createdAt: "2026-09-08T00:00:01.000Z" };
+    database.saveRun(other, "completed");
+    database.appendEvent({ id: "event-other", runId: other.id, sequence: 0, at: other.createdAt, type: "result", text: "must stay isolated", status: "completed" });
+
+    const model = descriptor({ providerId: "fake", modelId: "fake-context-model", displayName: "Fake", capabilities: { vision: true, tools: false, parallelTools: false, structuredOutput: true, maxContextTokens: 32_000, dataPolicy: "local" } });
+    const requests: ModelRequest[] = [];
+    const provider: ModelProvider = {
+      id: "fake",
+      async listModels() { return [model]; },
+      async health() { return true; },
+      estimateCost() { return 0; },
+      async *stream(request: ModelRequest): AsyncIterable<ProviderStreamEvent> {
+        requests.push(request);
+        yield { type: "text_delta", delta: "continued with prior context" };
+      },
+    };
+    const engine = new HarnessEngine({ database, providers: [provider], tools: new ToolRegistry(), memory: new MemoryService(database), skills: new SkillService(join(root, "skills")), projectTrust: new ProjectTrustService(database) });
+    const profile = { ...DEFAULT_PROFILE, allowedProviders: ["fake"], toolNames: [] };
+    const current: RunSpec = { ...previous, id: "run-current", request: "where is it?", createdAt: "2026-09-08T00:00:02.000Z", attachments: [{ id: "attachment-current", sha256: "a".repeat(64), mimeType: "image/png", byteLength: 10, encryptedPath: "fixture", source: "clipboard", trust: "untrusted_attachment", allowedProviders: ["fake"], createdAt }] };
+    const result = new Promise<AgentEvent>((resolveResult, reject) => {
+      const timeout = setTimeout(() => reject(new Error("run timed out")), 5_000);
+      engine.on("event", (event: AgentEvent) => {
+        if (event.type === "result" && event.runId === current.id) {
+          clearTimeout(timeout);
+          resolveResult(event);
+        }
+      });
+    });
+
+    engine.start(current, profile);
+    await expect(result).resolves.toMatchObject({ status: "completed" });
+    const requestText = requests[0]?.messages.flatMap((message) => message.content.flatMap((part) => part.type === "text" ? [part.text] : [])).join("\n") ?? "";
+    expect(requestText).toContain("remember the blue widget");
+    expect(requestText).toContain("the widget is stored in module alpha");
+    expect(requestText).toContain("where is it?");
+    expect(requestText).not.toContain("cross-session secret");
+    expect(requestText).not.toContain("must stay isolated");
+    const userMessages = requests[0]?.messages.filter((message) => message.role === "user") ?? [];
+    expect(userMessages[0]?.content.some((part) => part.type === "image")).toBe(false);
+    expect(userMessages.at(-1)?.content.some((part) => part.type === "image" && part.attachment.id === "attachment-current")).toBe(true);
+    database.close();
+    vault.dispose();
+  });
 });

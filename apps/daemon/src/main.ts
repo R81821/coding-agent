@@ -3,7 +3,7 @@ import { existsSync, unlinkSync } from "node:fs";
 import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { createRuntime, profileFor, type HarnessRuntime } from "@harness/core";
+import { createRuntime, profileFor, validateSessionRunStart, type HarnessRuntime } from "@harness/core";
 import { FeishuConnector, PairingService, TelegramConnector, type MessageConnector, type RemoteMessage } from "@harness/extensions";
 import {
   DaemonRequestSchema,
@@ -84,7 +84,30 @@ async function dispatch(request: DaemonRequest, target: HarnessRuntime): Promise
   switch (request.method) {
     case "health":
       return { status: "ok", version: "1.2.7", activeRuns: "available", providerIds: target.providerIds, connectors: [...connectors.keys()] };
+    case "sessions.create":
+      return target.database.createSession(request.params);
+    case "sessions.list":
+      return target.database.listSessions(request.params);
+    case "session.get":
+      return target.database.getSessionDetail(request.params.sessionId);
+    case "session.delete":
+      return target.database.deleteSession(request.params.sessionId);
+    case "session.restore":
+      return target.database.restoreSession(request.params.sessionId);
+    case "session.purge":
+      return target.database.purgeSession(request.params.sessionId);
+    case "projects.list":
+      return target.database.listProjects(request.params.deleted);
+    case "project.delete":
+      return target.database.deleteProject(request.params.projectId);
+    case "project.restore":
+      return target.database.restoreProject(request.params.projectId);
     case "run.start": {
+      validateSessionRunStart(
+        target.database.getSessionDetail(request.params.sessionId),
+        [...target.database.listProjects(false), ...target.database.listProjects(true)],
+        request.params,
+      );
       target.engine.start(request.params, profileFor(target, request.params.profileId));
       return { runId: request.params.id };
     }
@@ -253,6 +276,14 @@ async function handleRemote(connector: MessageConnector, message: RemoteMessage)
   }
   const id = newId("run");
   const profile = profileFor(runtime, "default");
+  const sessionId = `${connector.id}:${message.chatId}`;
+  const project = runtime.database.ensureProject(workspacePath);
+  const existingSession = runtime.database.getSessionDetail(sessionId);
+  if (!existingSession) {
+    if (project.deletedAt) throw new Error("Remote workspace project is deleted in Harness");
+    const createdAt = nowIso();
+    runtime.database.createSession({ id: sessionId, workspacePath, profileId: profile.id, title: text.slice(0, 300) || `${connector.id} 会话`, createdAt, updatedAt: createdAt });
+  }
   const attachments = [];
   for (const remoteAttachment of message.attachments.slice(0, 4)) {
     const bytes = await connector.download(remoteAttachment.fileId);
@@ -265,7 +296,7 @@ async function handleRemote(connector: MessageConnector, message: RemoteMessage)
   }
   const run = {
     id,
-    sessionId: `${connector.id}:${message.chatId}`,
+    sessionId,
     request: text,
     workspacePath,
     profileId: profile.id,
@@ -274,6 +305,11 @@ async function handleRemote(connector: MessageConnector, message: RemoteMessage)
     grants: [],
     createdAt: nowIso()
   };
+  validateSessionRunStart(
+    runtime.database.getSessionDetail(sessionId),
+    [...runtime.database.listProjects(false), ...runtime.database.listProjects(true)],
+    run,
+  );
   remoteRuns.set(id, { connector, chatId: message.chatId });
   runtime.engine.start(run, profile);
   await connector.send(message.chatId, `任务已创建：${id}`);

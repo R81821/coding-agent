@@ -24,6 +24,7 @@ import { confinedPath } from "@harness/tools";
 import { ApprovalBroker } from "./approvals.js";
 import { buildInitialMessages } from "./context.js";
 import { runWithPiAgent } from "./pi-agent-bridge.js";
+import { buildSessionContext } from "./session-context.js";
 import { RunProgress } from "./run-progress.js";
 import { CodingWorkflow, compactObservation } from "./coding-workflow.js";
 import { reviewChanges } from "./independent-review.js";
@@ -144,6 +145,14 @@ export class HarnessEngine extends EventEmitter {
     if (this.active.has(spec.id))
       throw new Error(`Run is already active: ${spec.id}`);
     this.deps.database.saveRun(spec, "queued");
+    const session = this.deps.database.getSessionDetail(spec.sessionId)?.session;
+    if (session && !session.deletedAt) this.deps.database.touchSession(spec.sessionId, {
+      profileId: spec.profileId,
+      title: session.title === "新会话" && spec.request.trim()
+        ? spec.request.trim().slice(0, 300)
+        : session.title,
+      updatedAt: spec.createdAt,
+    });
     const state: ActiveRun = {
       spec,
       controller: new AbortController(),
@@ -311,6 +320,13 @@ export class HarnessEngine extends EventEmitter {
         trustedSkills,
         ...(trustedProjectInstructions ? { trustedProjectInstructions } : {}),
       });
+      const conversationHistory = recovery
+        ? []
+        : buildSessionContext(
+            this.deps.database.getSessionDetail(spec.sessionId),
+            spec.id,
+            48_000,
+          );
       const workflow = new CodingWorkflow(spec.request, (snapshot, detail) => {
         this.emitEvent(spec.id, state, { type: "workflow_updated", workflow: snapshot, detail });
       }, recovery?.workflow, profile.verificationPolicy);
@@ -326,7 +342,7 @@ export class HarnessEngine extends EventEmitter {
         needsStructuredOutput: false,
         estimatedInputTokens: Math.max(
           512,
-          Math.ceil(JSON.stringify(messages).length / 4),
+          Math.ceil(JSON.stringify([...messages, ...conversationHistory]).length / 4),
         ),
         estimatedOutputTokens: 4_096,
       };
@@ -360,6 +376,7 @@ export class HarnessEngine extends EventEmitter {
         provider: route.provider,
         model: route.model,
         initialMessages: messages,
+        ...(conversationHistory.length ? { conversationHistory } : {}),
         contracts,
         resolveTool: (name) => name === "update_workflow" ? workflowTool : this.deps.tools.get(name),
         externalSignal: state.controller.signal,

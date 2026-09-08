@@ -5,4 +5,5 @@ export * from "./engine.js";
 export * from "./pi-agent-bridge.js";
 export * from "./runtime.js";
 export * from "./project-trust.js";
+export * from "./session-context.js";
 export * from "./telemetry.js";
