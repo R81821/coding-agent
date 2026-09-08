@@ -13,6 +13,8 @@ Harness Agent 是面向 Windows 11 x64 的本地优先软件开发 Agent。它�
 - OpenAI Responses、Anthropic Messages、Gemini 和 OpenAI-compatible provider；按视觉、工具、数据策略、质量、成本、延迟和健康状态路由。
 - 受限文件读写、搜索、补丁、PTY 命令、Git diff、隔离浏览器 profile 与 Chromium DevTools 自动化。
 - AES-256-GCM 加密 SQLite/附件库，Argon2id 口令派生；长期记忆候选需显式批准。
+- 持久化多轮 Session：同一会话的每条消息保留独立 run，并在上下文预算内续接历史；会话按项目归档。
+- 会话与项目支持软删除和设置页恢复；只有已删除会话可永久清理运行历史，长期记忆始终保留，项目删除绝不触碰磁盘仓库。
 - `SKILL.md` 哈希信任、`AGENTS.md` 首次预览与变更后重新确认。
 - 独立 Git worktree 子任务、最多 1–8 并发、脏工作区内部快照与非 Git 降级。
 - Kanban、五段 Cron、Asia/Shanghai 默认时区、重启恢复和无人值守预授权。
@@ -130,6 +132,8 @@ Gateway 默认监听 `http://127.0.0.1:8787`。管理员先调用 `/admin/provid
 ## 数据与运行目录
 
 默认数据位于 `%LOCALAPPDATA%\HarnessAgent`。开发和自动化环境可通过 `HARNESS_APP_DATA_PATH` 覆盖；远程 Telegram/飞书任务必须显式设置 `HARNESS_REMOTE_WORKSPACE`。本地数据库、事件、记忆和附件均以保险库主密钥加密。
+
+会话创建、上下文续接、删除/恢复与永久删除边界见 [Session 生命周期](./docs/session-lifecycle.md)。
 
 安全模型、威胁边界和密钥处理见 [SECURITY.md](./SECURITY.md)。
 
