@@ -3,8 +3,8 @@ import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { isAbsolute, join, relative } from "node:path";
 import { tmpdir } from "node:os";
 import { HarnessDatabase, VaultCrypto } from "@harness/persistence";
-import { DEFAULT_PROFILE, DaemonRequestSchema, type AgentEvent, type RunHistoryItem, type RunSpec } from "@harness/protocol";
-import { groupRunHistory, isLiveRun, mergeRunEvents, mergeRunHistory, workspaceKey } from "../apps/desktop/src/run-history.js";
+import { DEFAULT_PROFILE, DaemonRequestSchema, type AgentEvent, type ProjectRecord, type RunHistoryItem, type RunSpec, type SessionDetail, type SessionSummary } from "@harness/protocol";
+import { groupRunHistory, groupSessionsByProject, isLiveRun, mergeRunEvents, mergeRunHistory, mergeSessionPages, sessionTurns, workspaceKey } from "../apps/desktop/src/run-history.js";
 import { sanitizeRendererRequest } from "../apps/desktop/src/renderer-ipc.js";
 
 function spec(id: string, createdAt = "2026-09-01T00:00:00.000Z"): RunSpec {
@@ -93,6 +93,54 @@ describe("history switching state", () => {
     expect(isLiveRun("running")).toBe(true);
     expect(isLiveRun("waiting_approval")).toBe(true);
     for (const status of ["completed", "cancelled", "failed", "paused", "review"] as const) expect(isLiveRun(status)).toBe(false);
+  });
+});
+
+describe("Session-oriented renderer state", () => {
+  const session = (id: string, workspacePath: string, updatedAt: string, latestStatus: SessionSummary["latestStatus"] = "completed"): SessionSummary => ({
+    id,
+    workspacePath,
+    profileId: "default",
+    title: `Session ${id}`,
+    createdAt: updatedAt,
+    updatedAt,
+    runCount: 1,
+    latestRunId: `run-${id}`,
+    latestStatus,
+  });
+  const project = (id: string, workspacePath: string): ProjectRecord => ({ id, workspacePath, createdAt: "2026-09-01T00:00:00.000Z", updatedAt: "2026-09-01T00:00:00.000Z" });
+
+  it("groups Session summaries under project records and keeps the current project first", () => {
+    const alpha = project("project-alpha", "D:/Code/Alpha");
+    const beta = project("project-beta", "D:/Code/Beta");
+    const groups = groupSessionsByProject([
+      session("alpha", "d:\\code\\alpha", "2026-09-03T00:00:00.000Z"),
+      session("beta", "D:/Code/Beta", "2026-09-02T00:00:00.000Z", "running"),
+    ], [beta, alpha], "D:/CODE/ALPHA/");
+
+    expect(groups.map((group) => group.project.id)).toEqual(["project-alpha", "project-beta"]);
+    expect(groups[0]?.items.map((item) => item.id)).toEqual(["alpha"]);
+    expect(groups[1]?.items[0]?.latestStatus).toBe("running");
+  });
+
+  it("merges Session pages by Session id and derives separated multi-run turns", () => {
+    const older = session("same", "D:/Code/Alpha", "2026-09-01T00:00:00.000Z");
+    const newer = { ...older, title: "Updated title", updatedAt: "2026-09-04T00:00:00.000Z", runCount: 2 };
+    expect(mergeSessionPages({ items: [older], hasMore: false }, { items: [newer], hasMore: false }, false).items).toEqual([newer]);
+
+    const firstSpec = { ...spec("turn-one"), sessionId: "same", request: "first prompt" };
+    const secondSpec = { ...spec("turn-two"), sessionId: "same", request: "second prompt", createdAt: "2026-09-02T00:00:00.000Z" };
+    const detail: SessionDetail = {
+      session: older,
+      runs: [
+        { spec: firstSpec, status: "completed", events: [event(firstSpec.id, 0)] },
+        { spec: secondSpec, status: "failed", events: [event(secondSpec.id, 0)] },
+      ],
+    };
+    expect(sessionTurns(detail)).toEqual([
+      { runId: firstSpec.id, request: "first prompt", status: "completed", events: [event(firstSpec.id, 0)] },
+      { runId: secondSpec.id, request: "second prompt", status: "failed", events: [event(secondSpec.id, 0)] },
+    ]);
   });
 });
 

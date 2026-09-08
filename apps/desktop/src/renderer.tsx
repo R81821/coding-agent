@@ -13,11 +13,14 @@ import type {
   PlanSpec,
   PluginRecord,
   Profile,
+  ProjectRecord,
   RunCheckpoint,
-  RunHistoryItem,
-  RunHistoryPage,
   RunSpec,
   RunStatus,
+  SessionDetail,
+  SessionPage,
+  SessionRecord,
+  SessionSummary,
   SkillManifest,
   TaskSpec,
 } from "@harness/protocol";
@@ -34,7 +37,7 @@ import { BuiToolChip } from "./ui/tool-chip.js";
 import { MemoryManager } from "./memory-manager.js";
 import { assistantMessages } from "./assistant-messages.js";
 import { MarkdownMessage } from "./markdown-message.js";
-import { groupRunHistory, isLiveRun, mergeRunEvents, mergeRunHistory, runStatusLabel, workspaceKey } from "./run-history.js";
+import { groupSessionsByProject, isLiveRun, mergeRunEvents, mergeSessionPages, runStatusLabel, sessionTurns, workspaceKey, type SessionTurn } from "./run-history.js";
 import {
   Activity,
   Bug,
@@ -88,7 +91,6 @@ function App() {
   const [unlockError, setUnlockError] = useState("");
   const [tab, setTab] = useState<Tab>("chat");
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
-  const [submittedPrompt, setSubmittedPrompt] = useState("");
   const [workspace, setWorkspace] = useState("");
   const [profiles, setProfiles] = useState<Profile[]>([]);
   const [profileId, setProfileId] = useState("default");
@@ -103,8 +105,11 @@ function App() {
   const [attachments, setAttachments] = useState<DesktopAttachment[]>([]);
   const [events, setEvents] = useState<AgentEvent[]>([]);
   const [activeRun, setActiveRun] = useState<string>();
-  const [runHistory, setRunHistory] = useState<RunHistoryPage>({ items: [], hasMore: false });
-  const historyRef = useRef<RunHistoryPage>({ items: [], hasMore: false });
+  const [activeSessionId, setActiveSessionId] = useState<string>();
+  const [sessionDetail, setSessionDetail] = useState<SessionDetail>();
+  const [sessionPage, setSessionPage] = useState<SessionPage>({ items: [], hasMore: false });
+  const sessionPageRef = useRef<SessionPage>({ items: [], hasMore: false });
+  const [projects, setProjects] = useState<ProjectRecord[]>([]);
   const historyRequest = useRef(0);
   const viewVersion = useRef(0);
   const [expandedProjects, setExpandedProjects] = useState<Set<string>>(new Set());
@@ -120,8 +125,8 @@ function App() {
   }>();
 
   const profile = profiles.find((item) => item.id === profileId);
-  const finalText = useMemo(() => assistantMessages(events).text, [events]);
-  const historyGroups = useMemo(() => groupRunHistory(runHistory.items, workspace), [runHistory.items, workspace]);
+  const conversationTurns = useMemo(() => sessionTurns(sessionDetail).map((turn) => turn.runId === activeRun ? { ...turn, events } : turn), [sessionDetail, activeRun, events]);
+  const historyGroups = useMemo(() => groupSessionsByProject(sessionPage.items, projects, workspace), [sessionPage.items, projects, workspace]);
   const currentProjectKey = workspace ? workspaceKey(workspace) : "";
 
   const refreshHistory = useCallback(async (append = false) => {
@@ -129,11 +134,15 @@ function App() {
     setHistoryLoading(true);
     setHistoryError("");
     try {
-      const page = await window.harness.request<RunHistoryPage>({ method: "runs.list", params: { limit: 50, offset: append ? historyRef.current.items.length : 0 } });
+      const [page, nextProjects] = await Promise.all([
+        window.harness.request<SessionPage>({ method: "sessions.list", params: { deleted: false, limit: 50, offset: append ? sessionPageRef.current.items.length : 0 } }),
+        window.harness.request<ProjectRecord[]>({ method: "projects.list", params: { deleted: false } }),
+      ]);
       if (requestVersion !== historyRequest.current) return;
-      const next = mergeRunHistory(historyRef.current, page, append);
-      historyRef.current = next;
-      setRunHistory(next);
+      const next = mergeSessionPages(sessionPageRef.current, page, append);
+      sessionPageRef.current = next;
+      setSessionPage(next);
+      setProjects(nextProjects);
     } catch (error) {
       if (requestVersion === historyRequest.current) setHistoryError(`无法加载历史记录：${error instanceof Error ? error.message : String(error)}`);
     } finally {
@@ -152,14 +161,21 @@ function App() {
   }, [workspace]);
 
   useEffect(() => {
-    if (seededExpansion.current || runHistory.items.length === 0) return;
+    if (seededExpansion.current || sessionPage.items.length === 0) return;
     seededExpansion.current = true;
-    const first = runHistory.items[0];
+    const first = sessionPage.items[0];
     if (first) {
       const key = workspaceKey(first.workspacePath);
       setExpandedProjects((current) => (current.has(key) ? current : new Set(current).add(key)));
     }
-  }, [runHistory.items, workspace]);
+  }, [sessionPage.items, workspace]);
+
+  useEffect(() => {
+    if (!unlocked || busy || activeSessionId || sessionPage.items.length === 0) return;
+    const remembered = localStorage.getItem("harness.activeSessionId");
+    const target = sessionPage.items.find((item) => item.id === remembered) ?? sessionPage.items[0];
+    if (target) void openSession(target);
+  }, [unlocked, busy, activeSessionId, sessionPage.items]);
 
   useEffect(() => {
     void window.harness.restoreUnlock().then((result) => {
@@ -258,6 +274,36 @@ function App() {
       }
     }
     setWorkspace(selected);
+    await createSessionForWorkspace(selected);
+  }
+
+  async function createSessionForWorkspace(workspacePath: string) {
+    if (!profile) return;
+    const createdAt = nowIso();
+    const session = await window.harness.request<SessionRecord>({
+      method: "sessions.create",
+      params: {
+        id: newId("session"),
+        workspacePath,
+        profileId: profile.id,
+        title: "新会话",
+        createdAt,
+        updatedAt: createdAt,
+      },
+    });
+    viewVersion.current += 1;
+    setTab("chat");
+    setWorkspace(session.workspacePath);
+    setProfileId(session.profileId);
+    setActiveSessionId(session.id);
+    setSessionDetail({ session, runs: [] });
+    setActiveRun(undefined);
+    setEvents([]);
+    setPrompt("");
+    setAttachments([]);
+    setApprovalPrompt(undefined);
+    localStorage.setItem("harness.activeSessionId", session.id);
+    await refreshHistory();
   }
 
   async function chooseImages() {
@@ -290,27 +336,29 @@ function App() {
   }
 
   async function send() {
-    if (!profile || !workspace || !prompt.trim() || busy) return;
+    if (!profile || !workspace || !activeSessionId || !sessionDetail || !prompt.trim() || busy) return;
     const viewToken = ++viewVersion.current;
-    setSubmittedPrompt(prompt.trim());
+    const request = prompt.trim();
     const runId = newId("run");
+    const runSpec: RunSpec = {
+      id: runId,
+      sessionId: activeSessionId,
+      request,
+      workspacePath: workspace,
+      profileId: profile.id,
+      attachments: attachments.map((item) => item.attachment),
+      budget: profile.budget,
+      grants: [],
+      createdAt: nowIso(),
+    };
     setBusy(true);
     setEvents([]);
     setActiveRun(runId);
+    setSessionDetail((current) => current ? { ...current, runs: [...current.runs, { spec: runSpec, status: "queued", events: [] }] } : current);
     try {
       await window.harness.request({
         method: "run.start",
-        params: {
-          id: runId,
-          sessionId: newId("session"),
-          request: prompt.trim(),
-          workspacePath: workspace,
-          profileId: profile.id,
-          attachments: attachments.map((item) => item.attachment),
-          budget: profile.budget,
-          grants: [],
-          createdAt: nowIso(),
-        },
+        params: runSpec,
       });
       void refreshHistory();
       if (viewToken !== viewVersion.current) return;
@@ -339,41 +387,40 @@ function App() {
     }
   }
 
-  function newTask() {
-    viewVersion.current += 1;
-    setTab("chat");
-    setEvents([]);
-    setSubmittedPrompt("");
-    setActiveRun(undefined);
-    setPrompt("");
-    setAttachments([]);
-    setApprovalPrompt(undefined);
+  async function newTask() {
+    if (busy || !profile) return;
     setHistoryError("");
+    if (!workspace) {
+      await chooseWorkspace();
+      return;
+    }
+    await createSessionForWorkspace(workspace);
   }
 
-  async function openHistoricalRun(item: RunHistoryItem) {
+  async function openSession(item: SessionSummary) {
     if (busy) return;
     const viewToken = ++viewVersion.current;
     setBusy(true);
     setHistoryError("");
     try {
-      const [stored, storedEvents] = await Promise.all([
-        window.harness.request<{ spec: RunSpec; status: RunStatus } | undefined>({ method: "run.get", params: { runId: item.id } }),
-        window.harness.request<AgentEvent[]>({ method: "run.events", params: { runId: item.id, afterSequence: -1 } }),
-      ]);
+      const stored = await window.harness.request<SessionDetail | undefined>({ method: "session.get", params: { sessionId: item.id } });
       if (viewToken !== viewVersion.current) return;
       if (!stored) throw new Error("该历史任务已不存在");
+      if (stored.session.deletedAt) throw new Error("该会话已在回收站中");
+      const latest = stored.runs.at(-1);
       setTab("chat");
-      setWorkspace(stored.spec.workspacePath);
-      setProfileId(stored.spec.profileId);
-      setActiveRun(stored.spec.id);
-      setSubmittedPrompt(stored.spec.request);
-      setEvents(mergeRunEvents([], storedEvents, stored.spec.id));
+      setWorkspace(stored.session.workspacePath);
+      setProfileId(stored.session.profileId);
+      setActiveSessionId(stored.session.id);
+      setSessionDetail(stored);
+      setActiveRun(latest?.spec.id);
+      setEvents(latest ? latest.events : []);
       setPrompt("");
       setAttachments([]);
       setApprovalPrompt(undefined);
-      if (isLiveRun(stored.status)) {
-        await pollRun(stored.spec.id, storedEvents.reduce((max, event) => Math.max(max, event.sequence), -1), viewToken);
+      localStorage.setItem("harness.activeSessionId", stored.session.id);
+      if (latest && isLiveRun(latest.status)) {
+        await pollRun(latest.spec.id, latest.events.reduce((max, event) => Math.max(max, event.sequence), -1), viewToken);
       }
       await refreshHistory();
     } catch (error) {
@@ -394,6 +441,12 @@ function App() {
       if (viewToken !== viewVersion.current) return;
       if (batch.length) {
         setEvents((current) => viewToken === viewVersion.current ? mergeRunEvents(current, batch, runId) : current);
+        setSessionDetail((current) => current ? {
+          ...current,
+          runs: current.runs.map((run) => run.spec.id === runId
+            ? { ...run, events: mergeRunEvents(run.events, batch, runId), status: batch.findLast((event) => event.type === "result")?.type === "result" ? batch.findLast((event) => event.type === "result")!.status : run.status }
+            : run),
+        } : current);
         sequence = Math.max(...batch.map((event) => event.sequence), sequence);
         finished = batch.some((event) => event.type === "result");
         const toolApproval = batch.find(
@@ -586,7 +639,7 @@ function App() {
           </div>
         </div>
         <BuiButton className="new-task-button" variant="ghost" disabled={busy}
-          onClick={newTask}>
+          onClick={() => void newTask()}>
           <SquarePen size={18} /> 新建任务
         </BuiButton>
         <div className="sidebar-scroll">
@@ -620,30 +673,29 @@ function App() {
           {!historyGroups.length && !historyLoading && !historyError && <p className="sidebar-hint">{workspace ? "当前项目还没有会话" : "打开项目后，会话会自动按项目归档在这里"}</p>}
           {historyGroups.map((group) => {
             const isCurrent = group.key === currentProjectKey;
-            if (!isCurrent && group.items.length === 0) return null;
             const expanded = expandedProjects.has(group.key);
             return (
               <div key={group.key} className="project-group">
-                <button type="button" className={`project-folder${expanded ? " expanded" : ""}`} aria-expanded={expanded} title={group.workspacePath} onClick={() => setExpandedProjects((current) => {
+                <button type="button" className={`project-folder${expanded ? " expanded" : ""}`} aria-expanded={expanded} title={group.project.workspacePath} onClick={() => setExpandedProjects((current) => {
                   const next = new Set(current);
                   if (next.has(group.key)) next.delete(group.key); else next.add(group.key);
                   return next;
                 })}>
                   <ChevronRight size={14} className="folder-chevron" />
                   <FolderOpen size={15} className="folder-icon" />
-                  <span className="project-folder-name">{group.workspacePath ? basename(group.workspacePath) : "未归组会话"}</span>
+                  <span className="project-folder-name">{group.project.workspacePath ? basename(group.project.workspacePath) : "未归组会话"}</span>
                   {isCurrent && <span className="project-folder-tag">当前</span>}
                   {group.items.length > 0 && <span className="project-folder-count">{group.items.length}</span>}
                 </button>
                 {expanded && (
                   <div className="project-group-items">
                     {group.items.map((item) => (
-                      <button key={item.id} className={`project-session history-session${activeRun === item.id ? " active" : ""}`} aria-current={activeRun === item.id ? "page" : undefined} disabled={busy} onClick={() => void openHistoricalRun(item)} title={`${item.request}\n${item.workspacePath}`}>
+                      <button key={item.id} className={`project-session history-session${activeSessionId === item.id ? " active" : ""}`} aria-current={activeSessionId === item.id ? "page" : undefined} disabled={busy} onClick={() => void openSession(item)} title={`${item.title}\n${item.workspacePath}`}>
                         <MessageSquare size={14} />
-                        <span className="history-session-content"><span>{item.request}</span><small>{runStatusLabel[item.status]}</small></span>
+                        <span className="history-session-content"><span>{item.title}</span><small>{item.latestStatus ? runStatusLabel[item.latestStatus] : "新会话"} · {item.runCount} 轮</small></span>
                       </button>
                     ))}
-                    {!group.items.length && <p className="sidebar-hint">发送任务后会自动保存在这里</p>}
+                    {!group.items.length && <p className="sidebar-hint">点击项目旁的 + 新建会话</p>}
                   </div>
                 )}
               </div>
@@ -652,7 +704,7 @@ function App() {
           {historyLoading && <p className="sidebar-hint">正在加载历史记录…</p>}
           {historyError && <p className="sidebar-hint history-error" role="alert">{historyError}</p>}
           {historyError && <BuiButton variant="ghost" size="sm" disabled={historyLoading} onClick={() => void refreshHistory()}>重试加载</BuiButton>}
-          {runHistory.hasMore && <BuiButton variant="ghost" size="sm" disabled={busy || historyLoading} onClick={() => void refreshHistory(true)}>加载更早的会话</BuiButton>}
+          {sessionPage.hasMore && <BuiButton variant="ghost" size="sm" disabled={busy || historyLoading} onClick={() => void refreshHistory(true)}>加载更早的会话</BuiButton>}
         </section>
         <details className="sidebar-tools">
           <summary>工作台工具 <ChevronDown size={14} /></summary>
@@ -695,8 +747,8 @@ function App() {
               attachments={attachments}
               setAttachments={setAttachments}
               events={events}
-              finalText={finalText}
-              submittedPrompt={submittedPrompt}
+              turns={conversationTurns}
+              hasSession={Boolean(activeSessionId)}
               busy={busy}
               onSend={send}
               onChooseImages={chooseImages}
@@ -828,8 +880,8 @@ function ChatView(props: {
   attachments: DesktopAttachment[];
   setAttachments: React.Dispatch<React.SetStateAction<DesktopAttachment[]>>;
   events: AgentEvent[];
-  finalText: string;
-  submittedPrompt: string;
+  turns: SessionTurn[];
+  hasSession: boolean;
   busy: boolean;
   onSend: () => void;
   onChooseImages: () => void;
@@ -837,8 +889,9 @@ function ChatView(props: {
   onChooseWorkspace: () => void;
 }) {
   const conversationRef = useRef<HTMLDivElement>(null);
-  const progressMessages = useMemo(() => assistantMessages(props.events).progress, [props.events]);
   const followLatestRef = useRef(true);
+  const eventCount = props.turns.reduce((total, turn) => total + turn.events.length, 0);
+  const currentFinalText = assistantMessages(props.events).text;
   const route = props.events.find((event) => event.type === "route") as
     Extract<AgentEvent, { type: "route" }> | undefined;
   const status = [...props.events]
@@ -849,7 +902,7 @@ function ChatView(props: {
   useEffect(() => {
     const conversation = conversationRef.current;
     if (!conversation) return;
-    if (props.events.length === 0) {
+    if (props.turns.length === 0) {
       followLatestRef.current = true;
       conversation.scrollTop = 0;
       return;
@@ -859,12 +912,12 @@ function ChatView(props: {
       conversation.scrollTop = conversation.scrollHeight;
     });
     return () => cancelAnimationFrame(frame);
-  }, [props.events.length, props.finalText]);
+  }, [eventCount, currentFinalText, props.turns.length]);
 
   return (
     <div className="chat-layout">
       <div
-        className={`conversation${!props.events.length && !props.submittedPrompt ? " conversation-empty" : ""}`}
+        className={`conversation${props.turns.length === 0 ? " conversation-empty" : ""}`}
         ref={conversationRef}
         onScroll={(event) => {
           const element = event.currentTarget;
@@ -873,7 +926,7 @@ function ChatView(props: {
           followLatestRef.current = remaining <= 96;
         }}
       >
-        {!props.events.length && !props.submittedPrompt && (
+        {props.turns.length === 0 && (
           <section className="workspace-welcome">
             <Terminal className="welcome-symbol" size={54} strokeWidth={1.25} aria-hidden="true" />
             <h2>{props.workspace ? <>我们应该在 <span title={props.workspace}>{basename(props.workspace)}</span> 中构建什么？</> : "今天，我们一起构建什么？"}</h2>
@@ -890,49 +943,9 @@ function ChatView(props: {
             </div>
           </section>
         )}
-        {props.submittedPrompt && <article className="user-message" aria-label="你的任务">{props.submittedPrompt}</article>}
-        {route && (
-          <BuiGlassPanel className="mb-3 flex items-center gap-3 px-4 py-3">
-            <span className="text-[10px] font-semibold tracking-widest text-accent-text">
-              AUTO ROUTE
-            </span>
-            <strong className="text-sm text-text">
-              {route.providerId} / {route.modelId}
-            </strong>
-            <small className="ml-auto text-xs text-text-muted">{route.reason}</small>
-          </BuiGlassPanel>
-        )}
-        <WorkflowProgress events={props.events} />
-        {props.busy && !props.finalText && (
-          <div className="mb-3">
-            <BuiLoadingState label="Agent 正在思考与执行…" />
-          </div>
-        )}
-        {props.finalText && (
-          <article className="assistant-message mb-3 flex items-start gap-3">
-            <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-accent-soft text-sm font-semibold text-accent-text">
-              H
-            </div>
-            <MarkdownMessage text={props.finalText} />
-          </article>
-        )}
-        {progressMessages.length > 0 && (
-          <details className="glass mb-3 px-4 py-3">
-            <summary className="cursor-pointer text-xs text-text-muted">查看过程记录（{progressMessages.length} 轮）</summary>
-            {progressMessages.map((text, index) => (
-              <div key={index} className="mt-3 border-t border-line pt-3"><MarkdownMessage text={text} compact /></div>
-            ))}
-          </details>
-        )}
-        <div className="flex flex-col gap-2">
-          {buildTimeline(props.events).map((item) =>
-            item.kind === "tool_group" ? (
-              <ToolEventGroup key={item.id} tools={item.tools} />
-            ) : (
-              <EventRow key={item.event.id} event={item.event} />
-            ),
-          )}
-        </div>
+        {props.turns.map((turn, index) => (
+          <ConversationTurnView key={turn.runId} turn={turn} busy={props.busy && index === props.turns.length - 1} />
+        ))}
       </div>
       <div className="composer-wrap">
         <div className="composer-project-bar">
@@ -945,9 +958,9 @@ function ChatView(props: {
           onChange={props.setPrompt}
           onSubmit={props.onSend}
           placeholder={
-            props.workspace ? "描述你的想法，或粘贴错误截图…" : "先选择项目，再开始对话…"
+            !props.workspace ? "先选择项目，再开始对话…" : props.hasSession ? "描述你的想法，或粘贴错误截图…" : "点击新建任务创建会话…"
           }
-          disabled={!props.workspace || props.busy}
+          disabled={!props.workspace || !props.hasSession || props.busy}
           busy={props.busy}
           {...(props.profile
             ? {
@@ -1022,6 +1035,42 @@ function ChatView(props: {
         )}
       </div>
     </div>
+  );
+}
+
+function ConversationTurnView({ turn, busy }: { turn: SessionTurn; busy: boolean }) {
+  const { text: finalText, progress: progressMessages } = assistantMessages(turn.events);
+  const route = turn.events.find((event) => event.type === "route") as Extract<AgentEvent, { type: "route" }> | undefined;
+  return (
+    <section className="conversation-turn" data-run-id={turn.runId}>
+      <article className="user-message" aria-label="你的任务">{turn.request}</article>
+      {route && (
+        <BuiGlassPanel className="mb-3 flex items-center gap-3 px-4 py-3">
+          <span className="text-[10px] font-semibold tracking-widest text-accent-text">AUTO ROUTE</span>
+          <strong className="text-sm text-text">{route.providerId} / {route.modelId}</strong>
+          <small className="ml-auto text-xs text-text-muted">{route.reason}</small>
+        </BuiGlassPanel>
+      )}
+      <WorkflowProgress events={turn.events} />
+      {busy && !finalText && <div className="mb-3"><BuiLoadingState label="Agent 正在思考与执行…" /></div>}
+      {finalText && (
+        <article className="assistant-message mb-3 flex items-start gap-3">
+          <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-accent-soft text-sm font-semibold text-accent-text">H</div>
+          <MarkdownMessage text={finalText} />
+        </article>
+      )}
+      {progressMessages.length > 0 && (
+        <details className="glass mb-3 px-4 py-3">
+          <summary className="cursor-pointer text-xs text-text-muted">查看过程记录（{progressMessages.length} 轮）</summary>
+          {progressMessages.map((text, index) => <div key={index} className="mt-3 border-t border-line pt-3"><MarkdownMessage text={text} compact /></div>)}
+        </details>
+      )}
+      <div className="flex flex-col gap-2">
+        {buildTimeline(turn.events).map((item) => item.kind === "tool_group"
+          ? <ToolEventGroup key={item.id} tools={item.tools} />
+          : <EventRow key={item.event.id} event={item.event} />)}
+      </div>
+    </section>
   );
 }
 

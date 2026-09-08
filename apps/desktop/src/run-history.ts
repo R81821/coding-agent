@@ -1,9 +1,22 @@
-import type { AgentEvent, RunHistoryItem, RunHistoryPage, RunStatus } from "@harness/protocol";
+import type { AgentEvent, ProjectRecord, RunHistoryItem, RunHistoryPage, RunStatus, SessionDetail, SessionPage, SessionSummary } from "@harness/protocol";
 
 export interface ProjectHistoryGroup {
   key: string;
   workspacePath: string;
   items: RunHistoryItem[];
+}
+
+export interface ProjectSessionGroup {
+  key: string;
+  project: ProjectRecord;
+  items: SessionSummary[];
+}
+
+export interface SessionTurn {
+  runId: string;
+  request: string;
+  status: RunStatus;
+  events: AgentEvent[];
 }
 
 export function workspaceKey(path: string): string {
@@ -25,11 +38,60 @@ export function groupRunHistory(items: RunHistoryItem[], currentWorkspace = ""):
   return [current, ...[...groups.values()].filter((group) => group.key !== currentKey)];
 }
 
+export function groupSessionsByProject(
+  sessions: SessionSummary[],
+  projects: ProjectRecord[],
+  currentWorkspace = "",
+): ProjectSessionGroup[] {
+  const groups = new Map<string, ProjectSessionGroup>();
+  for (const project of projects) {
+    const key = workspaceKey(project.workspacePath);
+    groups.set(key, { key, project, items: [] });
+  }
+  for (const session of sessions) {
+    const key = workspaceKey(session.workspacePath);
+    const group = groups.get(key) ?? {
+      key,
+      project: {
+        id: `workspace:${key}`,
+        workspacePath: session.workspacePath,
+        createdAt: session.createdAt,
+        updatedAt: session.updatedAt,
+      },
+      items: [],
+    };
+    group.items.push(session);
+    groups.set(key, group);
+  }
+  for (const group of groups.values()) {
+    group.items.sort((left, right) => right.updatedAt.localeCompare(left.updatedAt) || right.id.localeCompare(left.id));
+  }
+  const all = [...groups.values()];
+  if (!currentWorkspace) return all;
+  const currentKey = workspaceKey(currentWorkspace);
+  return [...all.filter((group) => group.key === currentKey), ...all.filter((group) => group.key !== currentKey)];
+}
+
 export function mergeRunHistory(current: RunHistoryPage, incoming: RunHistoryPage, append: boolean): RunHistoryPage {
   const records = new Map(current.items.map((item) => [item.id, item]));
   for (const item of incoming.items) records.set(item.id, item);
   const items = [...records.values()].sort((a, b) => b.createdAt.localeCompare(a.createdAt) || b.id.localeCompare(a.id));
   return { items, hasMore: append || current.items.length <= incoming.items.length ? incoming.hasMore : current.hasMore };
+}
+
+export function mergeSessionPages(current: SessionPage, incoming: SessionPage, append: boolean): SessionPage {
+  const records = new Map(current.items.map((item) => [item.id, item]));
+  for (const item of incoming.items) records.set(item.id, item);
+  const items = [...records.values()].sort((left, right) => right.updatedAt.localeCompare(left.updatedAt) || right.id.localeCompare(left.id));
+  return { items, hasMore: append || current.items.length <= incoming.items.length ? incoming.hasMore : current.hasMore };
+}
+
+export function sessionTurns(detail: SessionDetail | undefined): SessionTurn[] {
+  if (!detail) return [];
+  return detail.runs
+    .slice()
+    .sort((left, right) => left.spec.createdAt.localeCompare(right.spec.createdAt) || left.spec.id.localeCompare(right.spec.id))
+    .map((run) => ({ runId: run.spec.id, request: run.spec.request, status: run.status, events: run.events }));
 }
 
 export function mergeRunEvents(current: AgentEvent[], incoming: AgentEvent[], runId: string): AgentEvent[] {

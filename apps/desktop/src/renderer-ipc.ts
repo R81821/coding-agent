@@ -3,6 +3,15 @@ import type { DaemonRequest } from "@harness/protocol";
 /** Daemon methods the renderer may invoke. Anything else is rejected at the IPC boundary. */
 const RENDERER_ALLOWED_METHODS: ReadonlySet<DaemonRequest["method"]> = new Set([
   "health",
+  "sessions.create",
+  "sessions.list",
+  "session.get",
+  "session.delete",
+  "session.restore",
+  "session.purge",
+  "projects.list",
+  "project.delete",
+  "project.restore",
   "run.start",
   "runs.list",
   "run.get",

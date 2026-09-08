@@ -4,6 +4,9 @@ import { sanitizeRendererRequest } from "../apps/desktop/src/renderer-ipc.js";
 describe("sanitizeRendererRequest", () => {
   it("allows whitelisted methods", () => {
     expect(sanitizeRendererRequest("run.start", { id: "r1" }).method).toBe("run.start");
+    for (const method of ["sessions.create", "sessions.list", "session.get", "session.delete", "session.restore", "session.purge", "projects.list", "project.delete", "project.restore"]) {
+      expect(sanitizeRendererRequest(method, {}).method).toBe(method);
+    }
   });
 
   it("rejects non-whitelisted methods", () => {
