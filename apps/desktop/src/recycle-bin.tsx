@@ -52,8 +52,8 @@ export function RecycleBin({ onChanged }: { onChanged: () => Promise<void> }) {
         <div className="recycle-list">
           {sessions.items.map((session) => (
             <div className="recycle-row deleted-session" data-session-id={session.id} key={session.id}>
-              <div><strong>{session.title}</strong><small>{session.workspacePath} · {session.runCount} 轮</small></div>
-              <BuiButton className="restore-session" variant="ghost" size="sm" disabled={Boolean(busyId)} onClick={() => void act(session.id, () => window.harness.request({ method: "session.restore", params: { sessionId: session.id } }))}><RotateCcw size={14} />恢复</BuiButton>
+              <div><strong>{session.title}</strong><small>{session.workspacePath} · {session.runCount} 轮{projects.some((project) => workspaceKey(project.workspacePath) === workspaceKey(session.workspacePath)) ? " · 请先恢复项目" : ""}</small></div>
+              <BuiButton className="restore-session" variant="ghost" size="sm" title={projects.some((project) => workspaceKey(project.workspacePath) === workspaceKey(session.workspacePath)) ? "请先恢复所属项目" : "恢复会话"} disabled={Boolean(busyId) || projects.some((project) => workspaceKey(project.workspacePath) === workspaceKey(session.workspacePath))} onClick={() => void act(session.id, () => window.harness.request({ method: "session.restore", params: { sessionId: session.id } }))}><RotateCcw size={14} />恢复</BuiButton>
               <BuiButton className="purge-session" variant="ghost" size="sm" disabled={Boolean(busyId)} onClick={() => {
                 if (window.confirm("永久删除后，该会话及运行记录无法恢复；长期记忆仍会保留。确定永久删除吗？")) void act(session.id, () => window.harness.request({ method: "session.purge", params: { sessionId: session.id } }));
               }}><Trash2 size={14} />永久删除</BuiButton>
@@ -75,4 +75,8 @@ export function RecycleBin({ onChanged }: { onChanged: () => Promise<void> }) {
       </section>
     </article>
   );
+}
+
+function workspaceKey(value: string): string {
+  return value.replace(/\\/g, "/").replace(/\/+$/, "").toLocaleLowerCase();
 }
