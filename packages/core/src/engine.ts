@@ -11,6 +11,7 @@ import type {
   RunCheckpoint,
   RunSpec,
   RunStatus,
+  RunStopInfo,
   ToolCall,
   VerificationRun,
 } from "@harness/protocol";
@@ -25,6 +26,7 @@ import { ApprovalBroker } from "./approvals.js";
 import { buildInitialMessages } from "./context.js";
 import { runWithPiAgent } from "./pi-agent-bridge.js";
 import { buildSessionContext } from "./session-context.js";
+import { BudgetExceededError, buildRunStop } from "./run-stop.js";
 import { RunProgress } from "./run-progress.js";
 import { CodingWorkflow, compactObservation } from "./coding-workflow.js";
 import { reviewChanges } from "./independent-review.js";
@@ -33,7 +35,7 @@ import type { ProjectTrustService } from "./project-trust.js";
 
 const transitions: Record<RunStatus, RunStatus[]> = {
   queued: ["planning", "cancelled", "failed"],
-  planning: ["running", "failed", "cancelled"],
+  planning: ["running", "review", "failed", "cancelled"],
   running: [
     "waiting_approval",
     "verifying",
@@ -124,7 +126,7 @@ interface ActiveRun {
   pendingNonIdempotent: Map<string, ToolCall>;
   hadSideEffect: boolean;
   consecutiveToolErrors: number;
-  toolRecoveryLimitReached: boolean;
+  repairAttemptsUsed: number;
 }
 
 export class HarnessEngine extends EventEmitter {
@@ -169,7 +171,7 @@ export class HarnessEngine extends EventEmitter {
       pendingNonIdempotent: new Map(),
       hadSideEffect: false,
       consecutiveToolErrors: 0,
-      toolRecoveryLimitReached: false,
+      repairAttemptsUsed: 0,
     };
     this.active.set(spec.id, state);
     void this.execute(spec, profile, state).finally(() =>
@@ -204,7 +206,7 @@ export class HarnessEngine extends EventEmitter {
       pendingNonIdempotent: new Map(),
       hadSideEffect: checkpoint.toolCalls > 0,
       consecutiveToolErrors: 0,
-      toolRecoveryLimitReached: false,
+      repairAttemptsUsed: checkpoint.repairAttemptsUsed ?? this.deps.database.listEvents(runId).filter(event => event.type === "repair_started").length,
     };
     this.active.set(runId, state);
     void this.execute(stored.spec, profile, state, checkpoint).finally(() => this.active.delete(runId));
@@ -357,18 +359,22 @@ export class HarnessEngine extends EventEmitter {
       if (!recovery) this.status(spec.id, state, "running");
       let finalText = "";
       let stopReason: string | undefined;
+      let stopCode: RunStopInfo["code"] = "review_incomplete";
+      let summaryError: string | undefined;
+      const stop = (code: RunStopInfo["code"], message: string) => { stopCode = code; stopReason = message; };
       let summarizing = false;
-      let yieldForVerification = false;
+      let verificationRequested = false;
       const progress = new RunProgress();
       if (state.turns >= spec.budget.maxTurns || (state.toolCalls > 0 && state.toolCalls >= spec.budget.maxToolCalls)) {
         this.status(spec.id, state, "review");
-        this.emitEvent(spec.id, state, { type: "result", status: "review", text: "本轮预算已用完，历史结果已保留。请缩小任务范围后开始新任务。" });
+        const code = state.turns >= spec.budget.maxTurns ? "model_turn_limit" : "tool_call_limit";
+        this.emitEvent(spec.id, state, { type: "result", status: "review", text: "本轮预算已用完，历史结果已保留。", stop: buildRunStop(code, code === "model_turn_limit" ? "模型轮次已用完" : "工具调用额度已用完", spec, state, workflow.snapshot()) });
         return;
       }
       const resiliencePolicy = profile.resiliencePolicy ?? {
         maxProviderAttempts: 3,
         providerRetryBaseDelayMs: 500,
-        maxToolSelfCorrections: 3,
+        maxToolSelfCorrections: null,
       };
       const bridgeResult = await runWithPiAgent({
         runId: spec.id,
@@ -395,6 +401,8 @@ export class HarnessEngine extends EventEmitter {
           verificationPolicy: profile.verificationPolicy,
           remainingToolCalls: Math.max(0, spec.budget.maxToolCalls - state.toolCalls),
           remainingTurns: Math.max(0, spec.budget.maxTurns - state.turns),
+          repairAttemptsUsed: state.repairAttemptsUsed,
+          remainingRepairAttempts: null,
           recentObservations: { trust: "untrusted_tool", items: progress.snapshot() },
           guidance: spec.budget.maxToolCalls - state.toolCalls <= Math.max(4, Math.ceil(spec.budget.maxToolCalls * 0.2))
             ? "Budget is nearly exhausted. Synthesize concrete findings now. Do not restart repository exploration; clearly state unresolved scope."
@@ -402,13 +410,13 @@ export class HarnessEngine extends EventEmitter {
         }),
         beforeModelRequest: () => {
           this.checkBudget(spec, state);
-          if (state.turns > spec.budget.maxTurns) throw new Error("Model-turn budget exceeded");
+          if (state.turns > spec.budget.maxTurns) throw new BudgetExceededError("model_turn_limit", "模型轮次额度已用完");
         },
         beforeToolCall: async (call) => {
           if (summarizing || stopReason) return { block: true, terminate: true, reason: stopReason ?? "Only a final summary is allowed." };
           if (state.toolCalls >= spec.budget.maxToolCalls) {
-            stopReason = "已达到工具调用额度，保留现有发现并结束本轮探索。";
-            return { block: true, terminate: true, reason: stopReason };
+            stop("tool_call_limit", "工具调用额度已用完，保留现有结果供复核。");
+            return { block: true, terminate: true, reason: stopReason! };
           }
           if (call.name === "update_workflow") { state.toolCalls += 1; return {}; }
           const tool = this.deps.tools.get(call.name);
@@ -425,7 +433,6 @@ export class HarnessEngine extends EventEmitter {
             progress.invalidate();
           }
           workflow.starting(call, tool);
-          if ((tool.assessRisk?.(call.input) ?? tool.contract.risk) !== "read" || call.name === "delegate") yieldForVerification = true;
           this.saveCheckpoint(spec.id, state, "tool_batch");
           try {
             const result = await tool.execute(call.input, {
@@ -446,7 +453,9 @@ export class HarnessEngine extends EventEmitter {
               if (typeof search.searchId === "string") this.emitEvent(spec.id, state, { type: "search_usage", providerId: "parallel", searchId: search.searchId, resultCount: Array.isArray(search.results) ? search.results.length : 0, usage: search.usage ?? {} });
             }
             workflow.observe(call, result);
-            stopReason ??= progress.record(call, tool, result);
+            if (call.name === "update_workflow" && call.input.action === "request_verification" && !result.isError) verificationRequested = true;
+            const repetition = progress.record(call, tool, result);
+            if (repetition && !stopReason) stop("repeated_observation", repetition);
             state.pendingNonIdempotent.delete(call.id);
             this.saveCheckpoint(spec.id, state, "tool_batch");
             return call.name === "terminal" ? { ...result, output: { observation: compactObservation(result.output), isError: result.isError === true } } : result;
@@ -455,7 +464,8 @@ export class HarnessEngine extends EventEmitter {
               error: error instanceof Error ? error.message : String(error),
             };
             workflow.observe(call, { output, isError: true });
-            stopReason ??= progress.record(call, tool, { output, isError: true });
+            const repetition = progress.record(call, tool, { output, isError: true });
+            if (repetition && !stopReason) stop("repeated_observation", repetition);
             this.emitEvent(spec.id, state, {
               type: "tool_finished",
               callId: call.id,
@@ -475,12 +485,13 @@ export class HarnessEngine extends EventEmitter {
           }
           if (summarizing) return true;
           if (context.toolResults.length > 0) {
-            if (state.toolRecoveryLimitReached) stopReason ??= "工具错误恢复次数已耗尽，需复核未解决的问题。";
-            if (state.toolCalls >= spec.budget.maxToolCalls) stopReason ??= "已达到工具调用额度，保留现有发现并结束本轮探索。";
+            if (!stopReason && state.toolCalls >= spec.budget.maxToolCalls) stop("tool_call_limit", "工具调用额度已用完，保留现有结果供复核。");
             // Keep the last available model turn for a tool-free evidence summary.
-            if (state.turns >= spec.budget.maxTurns - 1) stopReason ??= "已达到探索轮次上限，保留剩余轮次整理结果。";
+            if (!stopReason && state.turns >= spec.budget.maxTurns - 1) stop("model_turn_limit", "模型操作轮次已用完，保留最后一轮整理结果。");
           }
-          return !!stopReason || yieldForVerification;
+          const requested = verificationRequested;
+          verificationRequested = false;
+          return !!stopReason || requested;
         },
         onTranscript: async (transcript, reason) => {
           state.transcript = transcript;
@@ -500,23 +511,14 @@ export class HarnessEngine extends EventEmitter {
           if (event.type !== "tool_execution_end") return;
           if (!event.isError) {
             state.consecutiveToolErrors = 0;
-            state.toolRecoveryLimitReached = false;
             return;
           }
           state.consecutiveToolErrors += 1;
-          const maxAttempts = resiliencePolicy.maxToolSelfCorrections;
-          if (maxAttempts === 0 || state.consecutiveToolErrors >= maxAttempts) {
-            state.toolRecoveryLimitReached = true;
-          }
-          if (state.consecutiveToolErrors <= maxAttempts) {
-            this.emitEvent(spec.id, state, {
-              type: "self_correction_started",
-              trigger: "tool_error",
-              attempt: state.consecutiveToolErrors,
-              maxAttempts,
-              summary: `${event.toolName} failed; the structured error was returned to the agent so it can diagnose the cause and change its next action.`,
-            });
-          }
+          this.emitEvent(spec.id, state, {
+            type: "self_correction_started", trigger: "tool_error",
+            attempt: state.consecutiveToolErrors, maxAttempts: null,
+            summary: `${event.toolName} failed; inspect the structured error and revise the action. Recovery is limited by the remaining run budget, not a retry count.`,
+          });
         },
         onCompaction: async (compaction) => {
           const record = {
@@ -567,102 +569,114 @@ export class HarnessEngine extends EventEmitter {
         afterAgentRun: async (control) => {
           const finishStoppedRun = async () => {
             if (!stopReason || summarizing || state.turns >= spec.budget.maxTurns || state.controller.signal.aborted) return;
-            this.checkBudget(spec, state);
+            if (state.spentUsd >= spec.budget.maxUsd || Date.now() - state.startedAt >= spec.budget.maxDurationMs) return;
             summarizing = true;
-            await control.promptSummary(`Runtime stopping condition: ${stopReason}\nNo tools are available. Answer the original user request using only evidence already collected. State concrete findings and file paths, then unresolved questions and uninspected scope. Do not say you will keep exploring or claim the task is complete. Use the user's language.`);
+            try {
+              await control.promptSummary(`Runtime stopping condition: ${stopReason}\nNo tools are available. Answer the original user request using only evidence already collected. State concrete findings and file paths, then unresolved questions and uninspected scope. Do not say you will keep exploring or claim the task is complete. Use the user's language.`);
+            } catch (error) { summaryError = error instanceof Error ? error.message : String(error); }
           };
           if (stopReason) { await finishStoppedRun(); return; }
-          const maxRepairs = profile.verificationPolicy.maxRepairAttempts;
-          for (let round = 0; round <= maxRepairs + 1; round += 1) {
-            this.checkBudget(spec, state);
-            if (workflow.baseCanFinish() && workflow.requiresIndependentReview && !workflow.canFinish()) {
-              if (state.turns >= spec.budget.maxTurns) { stopReason = "独立评审尚未完成，模型轮次额度已用完。"; return; }
-              const diffObservation = workflow.state.observations.findLast(item => item.tool === "git_diff" && item.epoch === workflow.state.epoch && item.revision === workflow.state.revision && !item.failed && item.complete);
-              const reviewEvents = this.deps.database.listEvents(spec.id);
-              const diffEvent = reviewEvents.findLast(event => event.type === "tool_finished" && event.callId === diffObservation?.id);
-              if (!diffEvent || diffEvent.type !== "tool_finished") { stopReason = "独立评审缺少完整 diff 记录。"; return; }
-              const checkIds = [workflow.state.localCheck.runId, workflow.state.broaderCheck.runId];
-              const verificationRuns = this.deps.database.listVerificationRuns(spec.id).filter(run => checkIds.includes(run.id) && run.epoch === workflow.state.epoch && run.revision === workflow.state.revision);
-              const evidenceIds = [...new Set([...workflow.state.requirementReceipts.flatMap(receipt => [...receipt.observationIds, receipt.diffObservationId]), ...workflow.state.reviewEvidenceIds])];
-              const observations = evidenceIds.map(id => {
-                const observed = workflow.state.observations.find(item => item.id === id && item.epoch === workflow.state.epoch && item.revision === workflow.state.revision && !item.failed && item.complete);
-                if (!observed) return undefined;
-                const event = reviewEvents.findLast(item => item.type === "tool_finished" && item.callId === id && !item.isError);
-                const verification = verificationRuns.find(item => item.id === id);
-                if (!event && !verification) return undefined;
-                return { ...observed, output: event?.type === "tool_finished" ? event.output : verification };
-              });
-              if (verificationRuns.length !== checkIds.length || observations.some(item => !item)) { stopReason = "独立评审引用的原始证据缺失，需要重新收集。"; return; }
-              workflow.move("final_review", "触发独立只读评审，检查需求、回归与边界条件");
-              state.turns += 1;
-              try {
-                const result = await reviewChanges({
-                  provider: route.provider, model: route.model, runId: spec.id, state: workflow.snapshot(), diff: diffEvent.output, observations, verificationRuns,
-                  signal: AbortSignal.any([state.controller.signal, AbortSignal.timeout(Math.max(1, Math.min(60000, spec.budget.maxDurationMs - (Date.now() - state.startedAt))))]),
-                  remainingUsd: Math.max(0, spec.budget.maxUsd - state.spentUsd),
-                  onUsage: usage => { state.spentUsd += usage.estimatedUsd; state.inputTokens += usage.inputTokens; state.outputTokens += usage.outputTokens; this.emitEvent(spec.id, state, { type: "usage", usage }); this.checkBudget(spec, state); },
+          try {
+            for (;;) {
+              this.checkBudget(spec, state);
+              if (workflow.baseCanFinish() && workflow.requiresIndependentReview && !workflow.canFinish()) {
+                if (state.turns >= spec.budget.maxTurns) { stop("model_turn_limit", "独立评审尚未完成，模型轮次额度已用完。"); return; }
+                const diffObservation = workflow.state.observations.findLast(item => item.tool === "git_diff" && item.epoch === workflow.state.epoch && item.revision === workflow.state.revision && !item.failed && item.complete);
+                const reviewEvents = this.deps.database.listEvents(spec.id);
+                const diffEvent = reviewEvents.findLast(event => event.type === "tool_finished" && event.callId === diffObservation?.id);
+                if (!diffEvent || diffEvent.type !== "tool_finished") { stopReason = "独立评审缺少完整 diff 记录。"; return; }
+                const checkIds = [workflow.state.localCheck.runId, workflow.state.broaderCheck.runId];
+                const verificationRuns = this.deps.database.listVerificationRuns(spec.id).filter(run => checkIds.includes(run.id) && run.epoch === workflow.state.epoch && run.revision === workflow.state.revision);
+                const evidenceIds = [...new Set([...workflow.state.requirementReceipts.flatMap(receipt => [...receipt.observationIds, receipt.diffObservationId]), ...workflow.state.reviewEvidenceIds])];
+                const observations = evidenceIds.map(id => {
+                  const observed = workflow.state.observations.find(item => item.id === id && item.epoch === workflow.state.epoch && item.revision === workflow.state.revision && !item.failed && item.complete);
+                  if (!observed) return undefined;
+                  const event = reviewEvents.findLast(item => item.type === "tool_finished" && item.callId === id && !item.isError);
+                  const verification = verificationRuns.find(item => item.id === id);
+                  if (!event && !verification) return undefined;
+                  return { ...observed, output: event?.type === "tool_finished" ? event.output : verification };
                 });
-                this.checkBudget(spec, state);
-                workflow.recordIndependentReview(result.passed, result.summary);
-              } catch (error) { stopReason = "独立评审未完成：" + (error instanceof Error ? error.message : String(error)); return; }
-              finally { this.saveCheckpoint(spec.id, state, "verification"); }
-            }
-            if (workflow.canFinish()) return;
-            let passed = workflow.checksCurrent();
-            if (!passed && !workflow.state.diagnosisRequired) {
-              yieldForVerification = false;
-              this.status(spec.id, state, "verifying");
-              workflow.move("local_verification", "先运行局部验证；失败时不运行扩大验证");
-              const local = await this.verify(spec, profile, state, round, "local");
-              workflow.move("inspect_result", local.outcome === "skipped" ? "只读任务跳过代码验证" : local.passed ? "局部验证通过" : "局部验证失败");
-              passed = local.passed || (!workflow.needsChange && local.outcome === "skipped");
-              if (passed) {
-                workflow.move("broader_verification", this.verificationItems(profile, state).some(item => item.stage === "broader") ? "局部验证通过，运行扩大验证" : "未配置扩大验证项；保留局部验证证据，进入需求核对");
-                await this.verify(spec, profile, state, round, "broader");
-                passed = workflow.checksCurrent();
+                if (verificationRuns.length !== checkIds.length || observations.some(item => !item)) { stopReason = "独立评审引用的原始证据缺失，需要重新收集。"; return; }
+                workflow.move("final_review", "触发独立只读评审，检查需求、回归与边界条件");
+                state.turns += 1;
+                try {
+                  const result = await reviewChanges({
+                    provider: route.provider, model: route.model, runId: spec.id, state: workflow.snapshot(), diff: diffEvent.output, observations, verificationRuns,
+                    signal: AbortSignal.any([state.controller.signal, AbortSignal.timeout(Math.max(1, Math.min(60000, spec.budget.maxDurationMs - (Date.now() - state.startedAt))))]),
+                    remainingUsd: Math.max(0, spec.budget.maxUsd - state.spentUsd),
+                    onUsage: usage => { state.spentUsd += usage.estimatedUsd; state.inputTokens += usage.inputTokens; state.outputTokens += usage.outputTokens; this.emitEvent(spec.id, state, { type: "usage", usage }); this.checkBudget(spec, state); },
+                  });
+                  this.checkBudget(spec, state);
+                  workflow.recordIndependentReview(result.passed, result.summary);
+                } catch (error) { stop(error instanceof BudgetExceededError ? error.code : "review_incomplete", "独立评审未完成：" + (error instanceof Error ? error.message : String(error))); return; }
+                finally { this.saveCheckpoint(spec.id, state, "verification"); }
               }
-              this.saveCheckpoint(spec.id, state, "verification");
+              if (workflow.canFinish()) return;
+              let passed = workflow.checksCurrent();
+              if (!passed && !workflow.state.diagnosisRequired) {
+                this.status(spec.id, state, "verifying");
+                workflow.move("local_verification", "先运行局部验证；失败时不运行扩大验证");
+                const local = await this.verify(spec, profile, state, state.repairAttemptsUsed, "local");
+                workflow.move("inspect_result", local.outcome === "skipped" ? "只读任务跳过代码验证" : local.passed ? "局部验证通过" : "局部验证失败");
+                passed = local.passed || (!workflow.needsChange && local.outcome === "skipped");
+                if (passed) {
+                  workflow.move("broader_verification", this.verificationItems(profile, state).some(item => item.stage === "broader") ? "局部验证通过，运行扩大验证" : "未配置扩大验证项；保留局部验证证据，进入需求核对");
+                  await this.verify(spec, profile, state, state.repairAttemptsUsed, "broader");
+                  passed = workflow.checksCurrent();
+                }
+                this.saveCheckpoint(spec.id, state, "verification");
+              }
+              if (!workflow.needsChange && passed) {
+                workflow.move("requirements_check", "只读任务：记录结论，不要求代码修改验证");
+                workflow.move("final_review", "运行时检查结束状态与验证结果");
+                return;
+              }
+              if (workflow.needsChange && !this.verificationItems(profile, state).some(item => (item.stage ?? "local") === "local" && item.required)) {
+                stop("verification_config_missing", "缺少必需的局部验证配置，请在计划中提出局部验证命令或在 Profile 中配置。");
+                return;
+              }
+              if (workflow.canFinish()) return;
+              if (state.toolCalls >= spec.budget.maxToolCalls && state.toolCalls > 0) {
+                stop("tool_call_limit", "工具调用额度已用完，验证或评审尚未完成。"); return;
+              }
+              if (state.turns >= spec.budget.maxTurns) {
+                stop("model_turn_limit", "模型轮次额度已用完，验证或评审尚未完成。"); return;
+              }
+              if (state.status !== "running") this.status(spec.id, state, "running");
+              if (!passed || workflow.state.diagnosisRequired) {
+                state.repairAttemptsUsed += 1;
+                this.emitEvent(spec.id, state, { type: "repair_started", attempt: state.repairAttemptsUsed, maxAttempts: null });
+                this.saveCheckpoint(spec.id, state, "verification");
+                this.emitEvent(spec.id, state, { type: "self_correction_started", trigger: "verification_failure", attempt: state.repairAttemptsUsed, maxAttempts: null, summary: workflow.strategy() });
+              } else workflow.move("requirements_check", "验证通过；读取当前 git_diff，核对全部验收条件并执行最终评审");
+              await control.promptUntrusted(JSON.stringify({
+                workflow: workflow.snapshot(),
+                nextAction: passed && !workflow.state.diagnosisRequired
+                  ? "Use git_diff for current changes. Call update_workflow requirements with passed and one structured evidence receipt per requirementId: summary, observationIds, verificationIds (successful local/broader run IDs) and diffObservationId. Then call review with passed, evidenceIds including the current diff, and a summary covering requirement mismatch, regressions, edge cases and unrelated changes. If requirements or review fail, report passed=false, diagnose and revise with a minimal patch. Finally provide the user a clear result."
+                  : "Inspect activeFailureId and its fresh observation in working memory. For repeated failures collect new successful repository evidence; at level 3 also supply alternatives and an experiment (question, expectedResults, observationIds) with expanded search. Call diagnose with context, steps, a revised cause and evidenceIds including current failure or newer observations. Make a minimal coherent fix, including any required scripts, then call request_verification; runtime will rerun local checks before broader checks.",
+              }));
+              state.transcript = control.transcript();
+              if (stopReason) { await finishStoppedRun(); return; }
             }
-            if (!workflow.needsChange && passed) {
-              workflow.move("requirements_check", "只读任务：记录结论，不要求代码修改验证");
-              workflow.move("final_review", "运行时检查结束状态与验证结果");
-              return;
-            }
-            if (workflow.needsChange && !this.verificationItems(profile, state).some(item => (item.stage ?? "local") === "local" && item.required)) {
-              stopReason = "缺少必需的局部验证配置，不能将修改标记为完成。请在计划中提出局部验证命令，或在 Profile 中配置。";
-              return;
-            }
-            if (workflow.canFinish()) return;
-            if (round >= maxRepairs + 1 || (!passed && round >= maxRepairs) || state.turns >= spec.budget.maxTurns) {
-              stopReason = "验证、需求核对或最终评审尚未完成，修复轮次或模型额度已用完。";
-              return;
-            }
-            if (state.status !== "running") this.status(spec.id, state, "running");
-            if (!passed || workflow.state.diagnosisRequired) {
-              this.emitEvent(spec.id, state, { type: "repair_started", attempt: round + 1, maxAttempts: maxRepairs + 1 });
-              this.emitEvent(spec.id, state, { type: "self_correction_started", trigger: "verification_failure", attempt: round + 1, maxAttempts: maxRepairs + 1, summary: workflow.strategy() });
-            } else workflow.move("requirements_check", "验证通过；读取当前 git_diff，核对全部验收条件并执行最终评审");
-            await control.promptUntrusted(JSON.stringify({
-              workflow: workflow.snapshot(),
-              nextAction: passed && !workflow.state.diagnosisRequired
-                ? "Use git_diff for current changes. Call update_workflow requirements with passed and one structured evidence receipt per requirementId: summary, observationIds, verificationIds (successful local/broader run IDs) and diffObservationId. Then call review with passed, evidenceIds including the current diff, and a summary covering requirement mismatch, regressions, edge cases and unrelated changes. If requirements or review fail, report passed=false, diagnose and revise with a minimal patch. Finally provide the user a clear result."
-                : "Inspect activeFailureId and its fresh observation in working memory. For repeated failures collect new successful repository evidence; at level 3 also supply alternatives and an experiment (question, expectedResults, observationIds) with expanded search. Call diagnose with context, steps, a revised cause and evidenceIds including current failure or newer observations. Make a minimal fix; runtime will rerun local checks before broader checks.",
-            }));
-            state.transcript = control.transcript();
-            if (stopReason) { await finishStoppedRun(); return; }
-          }
+          } finally { await finishStoppedRun(); }
         },
       });
       state.transcript = bridgeResult.transcript;
       if (state.controller.signal.aborted) throw state.controller.signal.reason ?? new Error("Run cancelled");
-      if (bridgeResult.errorMessage && !stopReason) throw new Error(bridgeResult.errorMessage);
+      if (bridgeResult.errorMessage && !stopReason) {
+        this.checkBudget(spec, state);
+        if (state.turns > spec.budget.maxTurns) throw new BudgetExceededError("model_turn_limit", "模型轮次额度已用完");
+        throw new Error(bridgeResult.errorMessage);
+      }
       if (stopReason) {
         this.status(spec.id, state, "review");
         this.emitEvent(spec.id, state, {
           type: "result",
           text: `${finalText.trim() || progress.fallback()}\n\n本轮待复核：${stopReason}${bridgeResult.errorMessage ? `\n收尾未完成：${bridgeResult.errorMessage}` : ""}`,
           status: "review",
+          stop: buildRunStop(stopCode, stopReason, spec, state, workflow.snapshot(), summaryError ?? bridgeResult.errorMessage),
         });
+        this.saveCheckpoint(spec.id, state, "manual");
         return;
       }
       const verified = workflow.needsChange ? workflow.canFinish() : workflow.checksCurrent();
@@ -690,19 +704,31 @@ export class HarnessEngine extends EventEmitter {
       });
     } catch (error) {
       const cancelled = state.controller.signal.aborted;
-      const status: RunStatus = cancelled ? "cancelled" : "failed";
+      // The model bridge serializes exceptions; recover budget identity from runtime counters.
+      let failure = error;
+      if (!cancelled && !(failure instanceof BudgetExceededError)) {
+        try {
+          this.checkBudget(spec, state);
+          if (state.turns > spec.budget.maxTurns) failure = new BudgetExceededError("model_turn_limit", "模型轮次额度已用完");
+        } catch (budgetError) {
+          if (budgetError instanceof BudgetExceededError) failure = budgetError;
+        }
+      }
+      const status: RunStatus = cancelled ? "cancelled" : failure instanceof BudgetExceededError ? "review" : "failed";
       if (transitions[state.status].includes(status))
         this.status(spec.id, state, status);
       this.emitEvent(spec.id, state, {
         type: "error",
         code: cancelled ? "RUN_CANCELLED" : "RUN_FAILED",
-        message: error instanceof Error ? error.message : String(error),
+        message: failure instanceof Error ? failure.message : String(failure),
         retryable: !cancelled,
       });
+      this.saveCheckpoint(spec.id, state, "manual");
       this.emitEvent(spec.id, state, {
         type: "result",
-        text: cancelled ? "Run cancelled." : "Run failed.",
+        text: cancelled ? "Run cancelled." : failure instanceof Error ? failure.message : "Run failed.",
         status,
+        ...(!cancelled ? { stop: buildRunStop(failure instanceof BudgetExceededError ? failure.code : "provider_error", failure instanceof Error ? failure.message : String(failure), spec, state, state.workflow?.snapshot()) } : {}),
       });
     }
   }
@@ -936,6 +962,7 @@ export class HarnessEngine extends EventEmitter {
       usage: { inputTokens: state.inputTokens, outputTokens: state.outputTokens, estimatedUsd: state.spentUsd },
       turns: state.turns,
       toolCalls: state.toolCalls,
+      repairAttemptsUsed: state.repairAttemptsUsed,
       pendingNonIdempotentToolCalls: [...state.pendingNonIdempotent.values()],
       ...(state.workflow ? { workflow: state.workflow.snapshot() } : {}),
       createdAt: nowIso(),
@@ -947,11 +974,11 @@ export class HarnessEngine extends EventEmitter {
 
   private checkBudget(spec: RunSpec, state: ActiveRun): void {
     if (state.toolCalls > spec.budget.maxToolCalls)
-      throw new Error("Tool-call budget exceeded");
+      throw new BudgetExceededError("tool_call_limit", "Tool-call budget exceeded");
     if (state.spentUsd > spec.budget.maxUsd)
-      throw new Error("Cost budget exceeded");
+      throw new BudgetExceededError("cost_limit", "Cost budget exceeded");
     if (Date.now() - state.startedAt > spec.budget.maxDurationMs)
-      throw new Error("Run duration budget exceeded");
+      throw new BudgetExceededError("duration_limit", "Run duration budget exceeded");
     if (state.controller.signal.aborted)
       throw state.controller.signal.reason ?? new Error("Run cancelled");
   }

@@ -44,7 +44,7 @@ describe("encrypted persistence", () => {
       resiliencePolicy: {
         maxProviderAttempts: 3,
         providerRetryBaseDelayMs: 500,
-        maxToolSelfCorrections: 3,
+        maxToolSelfCorrections: null,
       },
     });
     expect(database.searchMemories("permission engine", ["project-1"])).toMatchObject([{ id: "memory-1" }]);

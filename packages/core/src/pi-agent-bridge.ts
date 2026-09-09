@@ -143,7 +143,11 @@ export async function runWithPiAgent(
   if (options.externalSignal.aborted) abort();
 
   try {
-    if (options.resumeTranscript?.length) await agent.continue();
+    if (options.resumeTranscript?.length) {
+      if (agent.state.messages.at(-1)?.role === "assistant") {
+        await agent.prompt("Runtime recovery: continue the original task using retained evidence. Workspace state may have changed; inspect current evidence and request verification before claiming completion. Do not replay non-idempotent operations blindly.");
+      } else await agent.continue();
+    }
     else await agent.prompt(extractUserPrompt(options.initialMessages));
     if (!agent.state.errorMessage && !options.externalSignal.aborted) await options.afterAgentRun?.({
       promptUntrusted: async (text) => {

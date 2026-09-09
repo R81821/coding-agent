@@ -6,7 +6,7 @@ import type { ToolDefinition, ToolResult } from "@harness/tools";
 
 const text = z.string().trim().min(1).max(3000);
 const updateSchema = z.object({
-  action: z.enum(["understand", "plan", "diagnose", "requirements", "review"]),
+  action: z.enum(["understand", "plan", "diagnose", "requirements", "review", "request_verification"]),
   intent: z.enum(["analysis", "change"]).optional(),
   requirements: z.array(text).min(1).max(20).optional(),
   verification: z.array(z.object({ stage: z.enum(["local", "broader"]), command: text, cwd: z.string().default("."), timeoutMs: z.number().int().positive().max(3600000).default(120000) })).max(12).optional(),
@@ -54,7 +54,7 @@ export class CodingWorkflow {
   get needsChange(): boolean { return this.state.intent === "change" || this.state.revision > 0; }
   tool(): ToolDefinition {
     return {
-      contract: { name: "update_workflow", description: "Record task understanding and acceptance requirements (understand), then gather repository evidence. Record context, small steps, cause and actual observation evidenceIds (plan); propose verification items (stage local/broader, command, cwd, timeoutMs) matching the repository when Profile checks are insufficient. Runtime authorizes commands independently. After a failure use diagnose with revised cause and fresh evidenceIds from the current failure or later observations. Repeated failures require fresh successful repository checks; at level 3 provide alternatives and experiment (question, expectedResults, observationIds). After runtime verification and git_diff, report one structured evidence object per requirementId (summary, observationIds, verificationIds, diffObservationId), then summary, evidenceIds including current diff, and passed (review). Only current epoch/revision successful evidence is accepted. Cannot grant permissions or mark checks passed. Prefer minimal apply_patch edits; never unrelated rewrites.", inputSchema: z.toJSONSchema(updateSchema, { io: "input" }), risk: "read", idempotent: false, timeoutMs: 1000 },
+      contract: { name: "update_workflow", description: "Record task understanding and acceptance requirements (understand), then gather repository evidence. Record context, small steps, cause and actual observation evidenceIds (plan); propose verification items (stage local/broader, command, cwd, timeoutMs) matching the repository when Profile checks are insufficient. Runtime authorizes commands independently. After a failure use diagnose with revised cause and fresh evidenceIds from the current failure or later observations. Repeated failures require fresh successful repository checks; at level 3 provide alternatives and experiment (question, expectedResults, observationIds). Complete a small coherent batch of edits (including required test scripts), then call request_verification to let runtime run checks. Terminal commands alone do not trigger verification. After runtime verification and git_diff, report one structured evidence object per requirementId (summary, observationIds, verificationIds, diffObservationId), then summary, evidenceIds including current diff, and passed (review). Only current epoch/revision successful evidence is accepted. Cannot grant permissions or mark checks passed. Prefer minimal apply_patch edits; never unrelated rewrites.", inputSchema: z.toJSONSchema(updateSchema, { io: "input" }), risk: "read", idempotent: false, timeoutMs: 1000 },
       execute: async input => { this.update(input); return { output: this.snapshot() }; },
     };
   }
@@ -220,7 +220,13 @@ export class CodingWorkflow {
       this.move(value.action === "diagnose" ? "update_hypothesis" : "plan_hypothesis", value.cause);
       return;
     }
-    if (!this.checksCurrent() || this.state.diffRevision !== this.state.revision) throw new Error("Current revision must pass runtime verification and have a complete git_diff before requirement checks or final review.");
+    if (value.action === "request_verification") {
+      if (value.passed !== undefined) throw new Error("Only runtime can report verification results.");
+      if (this.state.diagnosisRequired) throw new Error("Diagnose the current failure before requesting verification.");
+      if (this.needsChange && !this.state.plan.length) throw new Error("Record a plan before requesting verification.");
+      return;
+    }
+    if (!this.checksCurrent() || this.state.diffRevision !== this.state.revision) throw new Error("Call request_verification for runtime verification, then read a complete git_diff for the current revision before requirement checks or final review.");
     if (value.action === "requirements") {
       if (value.passed === false) { this.fail(value.summary ?? "Acceptance requirements not met; revise the hypothesis.", "requirements"); return; }
       if (value.passed !== true || value.evidence?.length !== this.state.requirements.length || !value.evidence.length) throw new Error("Provide passed and one evidence entry per recorded requirement.");

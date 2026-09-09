@@ -37,6 +37,7 @@ import { BuiToolChip } from "./ui/tool-chip.js";
 import { MemoryManager } from "./memory-manager.js";
 import { assistantMessages } from "./assistant-messages.js";
 import { MarkdownMessage } from "./markdown-message.js";
+import { RunStopCard } from "./components/RunStopCard.js";
 import { RecycleBin } from "./recycle-bin.js";
 import { groupSessionsByProject, isLiveRun, mergeRunEvents, mergeSessionPages, runStatusLabel, sessionTurns, workspaceKey, type SessionTurn } from "./run-history.js";
 import {
@@ -1101,6 +1102,7 @@ function ChatView(props: {
 
 function ConversationTurnView({ turn, busy }: { turn: SessionTurn; busy: boolean }) {
   const { text: finalText, progress: progressMessages } = assistantMessages(turn.events);
+  const result = turn.events.findLast((event) => event.type === "result");
   const route = turn.events.find((event) => event.type === "route") as Extract<AgentEvent, { type: "route" }> | undefined;
   return (
     <section className="conversation-turn" data-run-id={turn.runId}>
@@ -1113,6 +1115,7 @@ function ConversationTurnView({ turn, busy }: { turn: SessionTurn; busy: boolean
         </BuiGlassPanel>
       )}
       <WorkflowProgress events={turn.events} />
+      {result?.stop && <RunStopCard stop={result.stop} />}
       {busy && !finalText && <div className="mb-3"><BuiLoadingState label="Agent 正在思考与执行…" /></div>}
       {finalText && (
         <article className="assistant-message mb-3 flex items-start gap-3">
@@ -1179,11 +1182,18 @@ function EventRow({ event }: { event: AgentEvent }) {
           REFLECT
         </span>
         <strong className="text-sm text-text">
-          自我修正 {event.attempt}/{event.maxAttempts}
+          {event.maxAttempts == null ? `第 ${event.attempt} 次自我修正` : `自我修正 ${event.attempt}/${event.maxAttempts}`}
         </strong>
         <small className="ml-auto max-w-[45%] truncate text-xs text-text-muted">
           {event.summary}
         </small>
+      </div>
+    );
+  if (event.type === "repair_started")
+    return (
+      <div className="glass flex items-center gap-3 border-warning/30 px-4 py-2.5">
+        <span className="text-[10px] font-semibold tracking-widest text-warning">REPAIR</span>
+        <strong className="text-sm text-text">第 {event.attempt} 次修复</strong>
       </div>
     );
   if (event.type === "approval_required")
@@ -1247,7 +1257,8 @@ function buildTimeline(events: AgentEvent[]): TimelineItem[] {
       event.type === "approval_required" ||
       event.type === "error" ||
       event.type === "provider_retry" ||
-      event.type === "self_correction_started"
+      event.type === "self_correction_started" ||
+      event.type === "repair_started"
     ) {
       timeline.push({ kind: "event", event });
     }
@@ -1834,8 +1845,7 @@ function ProfilesView({
               <div className="flex justify-between gap-2">
                 <dt className="shrink-0 text-text-muted">Verification</dt>
                 <dd className="truncate text-text">
-                  {profile.verificationPolicy.items.length} 项 · 最多{" "}
-                  {profile.verificationPolicy.maxRepairAttempts} 次修复
+                  {profile.verificationPolicy.items.length} 项 · 修复次数不限
                 </dd>
               </div>
               <div className="flex justify-between gap-2">
@@ -1856,10 +1866,8 @@ function VerificationEditor({ profile, refresh }: { profile?: Profile; refresh: 
   const [commands, setCommands] = useState("");
   const [broaderCommands, setBroaderCommands] = useState("");
   const [broaderPolicy, setBroaderPolicy] = useState<"required" | "optional" | "disabled">("optional");
-  const [repairLimit, setRepairLimit] = useState(2);
   const [reviewPolicy, setReviewPolicy] = useState<"standard" | "risk_based">("standard");
   useEffect(() => {
-    setRepairLimit(profile?.verificationPolicy.maxRepairAttempts ?? 2);
     setBroaderPolicy(profile?.verificationPolicy.broaderPolicy ?? "optional");
     setReviewPolicy(profile?.verificationPolicy.reviewPolicy ?? "standard");
     setCommands(profile?.verificationPolicy.items.filter(item => (item.stage ?? "local") === "local").map(item => item.command).join("\n") ?? "");
@@ -1885,7 +1893,7 @@ function VerificationEditor({ profile, refresh }: { profile?: Profile; refresh: 
         placeholder={"局部验证：先语法、再相关测试\npnpm typecheck"}
       />
       <div className="mt-3 flex flex-wrap gap-4 text-xs text-text">
-        <label>最多修复次数 <select aria-label="最多修复次数" value={repairLimit} onChange={event => setRepairLimit(Number(event.target.value))}>{[0, 1, 2, 3, 4, 5].map(value => <option key={value} value={value}>{value}</option>)}</select></label>
+        <span>修复次数不限，受运行总预算约束</span>
         <label>扩大验证策略 <select aria-label="扩大验证策略" value={broaderPolicy} onChange={event => setBroaderPolicy(event.target.value as typeof broaderPolicy)}><option value="optional">可选（无配置时明确跳过）</option><option value="required">必需（无配置时不能完成）</option><option value="disabled">禁用（记录策略原因）</option></select></label>
         <label>独立只读评审 <select aria-label="独立只读评审" value={reviewPolicy} onChange={event => setReviewPolicy(event.target.value as typeof reviewPolicy)}><option value="standard">不额外启用</option><option value="risk_based">敏感路径、大补丁、多文件或修改范围不明时启用</option></select></label>
       </div>
@@ -1910,7 +1918,8 @@ function VerificationEditor({ profile, refresh }: { profile?: Profile; refresh: 
               method: "profiles.upsert",
               params: {
                 ...profile,
-                verificationPolicy: { ...profile.verificationPolicy, items, broaderPolicy, reviewPolicy, maxRepairAttempts: repairLimit },
+                verificationPolicy: { ...profile.verificationPolicy, items, broaderPolicy, reviewPolicy, maxRepairAttempts: null },
+                resiliencePolicy: { ...profile.resiliencePolicy, maxToolSelfCorrections: null },
               },
             });
             await refresh();

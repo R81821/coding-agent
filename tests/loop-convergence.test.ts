@@ -65,6 +65,40 @@ async function scenario(options: {
 }
 
 describe("agent loop convergence", () => {
+  it("continues past three consecutive tool errors", async () => {
+    const observed = await scenario({ tools: [{ ...readTool, async execute() { throw new Error("missing fixture"); } }], respond: (_request, turn) => turn <= 4 ? [read(`r${turn}`, `${turn}.ts`)] : [say("Inspected missing files; no changes made.")] });
+    expect(observed.executions).toHaveLength(4);
+    expect(observed.requests).toHaveLength(5);
+    const corrections = observed.events.filter(e => e.type === "self_correction_started");
+    expect(corrections).toHaveLength(4);
+    expect(corrections.every(e => e.type === "self_correction_started" && e.maxAttempts === null)).toBe(true);
+  });
+  it("enforces the new 128 tool default even for an oversized batch", async () => {
+    const observed = await scenario({ respond: request => request.tools.length ? Array.from({length:129}, (_,i) => read(`r${i}`, `${i}.ts`)) : [say("Tool budget reached.")] });
+    expect(observed.executions).toHaveLength(128);
+    expect(observed.result.stop).toMatchObject({ code: "tool_call_limit", usage: {toolCalls: {used:128,limit:128}, repairs:{used:0,limit:null}} });
+  });
+  it("enforces the new 64 model default including the final summary", async () => {
+    const observed = await scenario({ respond: (request, turn) => request.tools.length ? [read(`r${turn}`, `${turn}.ts`)] : [say("Remaining work requires another run.")] });
+    expect(observed.requests).toHaveLength(64);
+    expect(observed.result.stop).toMatchObject({ code: "model_turn_limit", usage: {modelTurns: {used:64,limit:64}} });
+  });
+  it("reports cost exhaustion without an extra summary model call", async () => {
+    const observed = await scenario({ budget: {maxUsd:1}, respond: () => [{type:"usage", usage:{inputTokens:1,outputTokens:1,estimatedUsd:2}}] });
+    expect(observed.requests).toHaveLength(1);
+    expect(observed.result.stop?.code).toBe("cost_limit");
+  });
+  it("classifies cost exhaustion during a repair model call", async () => {
+    const terminal: ToolDefinition = { ...terminalTool, async execute() { return {output:{exitCode:1,stderr:"fixture failure"},isError:true}; } };
+    const observed = await scenario({ tools:[readTool,terminal], budget:{maxUsd:1}, verification:{items:[{id:"check",command:"fixture",cwd:".",timeoutMs:1000,required:true,expectedExitCodes:[0]}],maxRepairAttempts:null}, respond: (_request,turn) => turn <= 3 ? workflowPrelude(turn) : turn === 4 ? [{type:"tool_call",toolCall:{id:"command",name:"terminal",input:{command:"fixture"}}}] : turn === 5 ? [say("The failure needs diagnosis.")] : [{type:"usage",usage:{inputTokens:1,outputTokens:1,estimatedUsd:2}}] });
+    expect(observed.events.some(e => e.type === "repair_started")).toBe(true);
+    expect(observed.result).toMatchObject({status:"review",stop:{code:"cost_limit"}});
+  });
+  it("preserves the stop cause when the summary provider fails", async () => {
+    const observed = await scenario({ budget:{maxToolCalls:1}, respond: request => { if (!request.tools.length) throw new Error("summary unavailable"); return [read("r1")]; } });
+    expect(observed.executions).toHaveLength(1);
+    expect(observed.result.stop).toMatchObject({code:"tool_call_limit",summaryError:expect.stringContaining("summary unavailable")});
+  });
   it("reports a real shell exit failure without losing process output", async () => {
     const result = await terminalTool.execute({ command: "exit 1" }, { runId: "fixture", workspacePath: tmpdir(), grants: [{ toolNames: ["terminal"], pathGlobs: ["**"], commandPrefixes: ["exit 1"], networkDomains: [], maxRisk: "high" }], signal: new AbortController().signal });
     expect(result.isError).toBe(true);

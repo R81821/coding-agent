@@ -1,6 +1,6 @@
 import { join } from "node:path";
 import { homedir } from "node:os";
-import { DEFAULT_PROFILE, newId, nowIso, type AgentEvent, type Profile, type RunSpec, type TaskSpec } from "@harness/protocol";
+import { newId, nowIso, type AgentEvent, type Profile, type RunSpec, type TaskSpec } from "@harness/protocol";
 import { EncryptedBlobStore, ensureV2Storage, HarnessDatabase, VaultCrypto } from "@harness/persistence";
 import { createConfiguredProviders, ParallelSearchProvider } from "@harness/providers";
 import { createDefaultToolRegistry, createWebSearchTool, type ToolDefinition } from "@harness/tools";
@@ -9,6 +9,7 @@ import { HarnessEngine } from "./engine.js";
 import { ProjectTrustService } from "./project-trust.js";
 import { configureTelemetry } from "./telemetry.js";
 import { HarnessEvalRunner } from "@harness/evals";
+import { loadProfilesWithBudgetMigration } from "./budget-migration.js";
 
 export interface HarnessRuntime {
   providerIds: string[];
@@ -38,11 +39,7 @@ export async function createRuntime(options: { appDataPath?: string; passphrase:
     env,
     attachmentResolver: async (attachment) => ({ mimeType: attachment.mimeType, base64: (await blobs.read(attachment)).toString("base64") })
   });
-  const profiles = new Map(database.listProfiles().map((profile) => [profile.id, profile]));
-  if (!profiles.has(DEFAULT_PROFILE.id)) {
-    database.saveProfile(DEFAULT_PROFILE);
-    profiles.set(DEFAULT_PROFILE.id, DEFAULT_PROFILE);
-  }
+  const profiles = loadProfilesWithBudgetMigration(database);
   const memory = new MemoryService(database);
   const telemetry = configureTelemetry(profiles.values());
   const skills = new SkillService(join(appData, "skills"));

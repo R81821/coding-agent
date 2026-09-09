@@ -174,7 +174,7 @@ export const VerificationMatrixSchema = z.object({
   broaderPolicy: z.enum(["required", "optional", "disabled"]).optional(),
   reviewPolicy: z.enum(["standard", "risk_based"]).optional(),
   items: z.array(VerificationItemSchema).default([]),
-  maxRepairAttempts: z.number().int().min(0).max(5).default(2)
+  maxRepairAttempts: z.number().int().min(0).max(5).nullable().default(null)
 });
 export type VerificationMatrix = z.infer<typeof VerificationMatrixSchema>;
 
@@ -219,6 +219,7 @@ export const ContextSnapshotSchema = z.object({
 export type ContextSnapshot = z.infer<typeof ContextSnapshotSchema>;
 
 export const RunCheckpointSchema = z.object({
+  repairAttemptsUsed: z.number().int().nonnegative().optional(),
   workflow: WorkflowStateSchema.optional(),
   id: z.string(),
   runId: z.string(),
@@ -338,6 +339,21 @@ export const ModelRequestSchema = z.object({
 export type ModelRequest = z.infer<typeof ModelRequestSchema>;
 
 const eventBase = { id: z.string(), runId: z.string(), at: z.string().datetime(), sequence: z.number().int().nonnegative() };
+const RunUsageCounterSchema = z.object({ used: z.number().nonnegative(), limit: z.number().nonnegative() });
+export const RunStopInfoSchema = z.object({
+  code: z.enum(["model_turn_limit", "tool_call_limit", "cost_limit", "duration_limit", "repeated_observation", "verification_config_missing", "review_incomplete", "provider_error"]),
+  message: z.string(), phase: z.string(),
+  usage: z.object({
+    toolCalls: RunUsageCounterSchema, modelTurns: RunUsageCounterSchema,
+    repairs: z.object({ used: z.number().int().nonnegative(), limit: z.null() }),
+    usd: RunUsageCounterSchema, durationMs: RunUsageCounterSchema,
+  }),
+  pending: z.array(z.string()),
+  lastFailure: z.object({ tool: z.string().optional(), message: z.string() }).optional(),
+  summaryError: z.string().optional(),
+});
+export type RunStopInfo = z.infer<typeof RunStopInfoSchema>;
+
 export const AgentEventSchema = z.discriminatedUnion("type", [
   z.object({ ...eventBase, type: z.literal("workflow_updated"), workflow: WorkflowStateSchema, detail: z.string() }),
   z.object({ ...eventBase, type: z.literal("status"), status: RunStatusSchema }),
@@ -356,7 +372,7 @@ export const AgentEventSchema = z.discriminatedUnion("type", [
   z.object({ ...eventBase, type: z.literal("context_compacted"), record: CompactionRecordSchema }),
   z.object({ ...eventBase, type: z.literal("verification_started"), verificationRunId: z.string(), attempt: z.number().int().nonnegative() }),
   z.object({ ...eventBase, type: z.literal("verification_finished"), verification: VerificationRunSchema }),
-  z.object({ ...eventBase, type: z.literal("repair_started"), attempt: z.number().int().positive(), maxAttempts: z.number().int().positive() }),
+  z.object({ ...eventBase, type: z.literal("repair_started"), attempt: z.number().int().positive(), maxAttempts: z.number().int().positive().nullable() }),
   z.object({
     ...eventBase,
     type: z.literal("provider_retry"),
@@ -372,7 +388,7 @@ export const AgentEventSchema = z.discriminatedUnion("type", [
     type: z.literal("self_correction_started"),
     trigger: z.enum(["tool_error", "verification_failure"]),
     attempt: z.number().int().positive(),
-    maxAttempts: z.number().int().positive(),
+    maxAttempts: z.number().int().positive().nullable(),
     summary: z.string(),
   }),
   z.object({ ...eventBase, type: z.literal("plugin_event"), pluginId: z.string(), action: z.string(), detail: z.string().optional() }),
@@ -380,7 +396,7 @@ export const AgentEventSchema = z.discriminatedUnion("type", [
   z.object({ ...eventBase, type: z.literal("recovery_event"), checkpointId: z.string().optional(), action: z.enum(["restored", "paused_non_idempotent", "failed"]), detail: z.string() }),
   z.object({ ...eventBase, type: z.literal("usage"), usage: UsageSchema }),
   z.object({ ...eventBase, type: z.literal("error"), code: z.string(), message: z.string(), retryable: z.boolean() }),
-  z.object({ ...eventBase, type: z.literal("result"), text: z.string(), status: RunStatusSchema })
+  z.object({ ...eventBase, type: z.literal("result"), text: z.string(), status: RunStatusSchema, stop: RunStopInfoSchema.optional() })
 ]);
 export type AgentEvent = z.infer<typeof AgentEventSchema>;
 export type AgentEventInput = AgentEvent extends infer Event ? Event extends AgentEvent ? Omit<Event, "id" | "runId" | "at" | "sequence"> : never : never;
@@ -402,8 +418,8 @@ export const PermissionGrantSchema = z.object({
 export type PermissionGrant = z.infer<typeof PermissionGrantSchema>;
 
 export const RunBudgetSchema = z.object({
-  maxTurns: z.number().int().positive().max(100).default(24),
-  maxToolCalls: z.number().int().nonnegative().max(200).default(64),
+  maxTurns: z.number().int().positive().max(100).default(64),
+  maxToolCalls: z.number().int().nonnegative().max(200).default(128),
   maxDurationMs: z.number().int().positive().default(1_800_000),
   maxUsd: z.number().positive().default(5)
 });
@@ -442,6 +458,7 @@ export type ProjectRecord = z.infer<typeof ProjectRecordSchema>;
 
 
 export const ProfileSchema = z.object({
+  budgetPolicyVersion: z.number().int().nonnegative().optional(),
   id: z.string(),
   name: z.string(),
   systemPrompt: z.string(),
@@ -467,15 +484,15 @@ export const ProfileSchema = z.object({
     requiredForDelegation: z.boolean().default(true),
     maxParallelAgents: z.number().int().min(1).max(8).default(4)
   }).default({ requiredForWrites: true, requiredForCommands: true, requiredForExternalBrowserActions: true, requiredForDelegation: true, maxParallelAgents: 4 }),
-  verificationPolicy: VerificationMatrixSchema.default({ items: [], maxRepairAttempts: 2 }),
+  verificationPolicy: VerificationMatrixSchema.default({ items: [], maxRepairAttempts: null }),
   resiliencePolicy: z.object({
     maxProviderAttempts: z.number().int().min(1).max(5).default(3),
     providerRetryBaseDelayMs: z.number().int().min(0).max(10_000).default(500),
-    maxToolSelfCorrections: z.number().int().min(0).max(10).default(3),
+    maxToolSelfCorrections: z.number().int().min(0).max(10).nullable().default(null),
   }).default({
     maxProviderAttempts: 3,
     providerRetryBaseDelayMs: 500,
-    maxToolSelfCorrections: 3,
+    maxToolSelfCorrections: null,
   }),
   searchProviders: z.array(z.string()).default([]),
   pluginIds: z.array(z.string()).default([]),
@@ -633,11 +650,11 @@ export const DEFAULT_PROFILE: Profile = ProfileSchema.parse({
   memoryScopes: ["session", "project"],
   skillIds: [],
   sandbox: "auto",
-  budget: { maxTurns: 24, maxToolCalls: 64, maxDurationMs: 1_800_000, maxUsd: 5 },
+  budget: { maxTurns: 64, maxToolCalls: 128, maxDurationMs: 1_800_000, maxUsd: 5 },
   contextPolicy: { compactAtRatio: 0.7, maxAfterCompactionRatio: 0.8, outputReserveRatio: 0.2, retainRecentTurns: 2, resendImagesOnVisualRecheckOnly: true },
   planningPolicy: { requiredForWrites: true, requiredForCommands: true, requiredForExternalBrowserActions: true, requiredForDelegation: true, maxParallelAgents: 4 },
-  verificationPolicy: { items: [], maxRepairAttempts: 2 },
-  resiliencePolicy: { maxProviderAttempts: 3, providerRetryBaseDelayMs: 500, maxToolSelfCorrections: 3 },
+  verificationPolicy: { items: [], maxRepairAttempts: null },
+  resiliencePolicy: { maxProviderAttempts: 3, providerRetryBaseDelayMs: 500, maxToolSelfCorrections: null },
   searchProviders: ["parallel"],
   pluginIds: [],
   telemetryPolicy: { localTraces: true, otlpEnabled: false },

@@ -5,6 +5,7 @@ import { z } from "zod";
 import { IsolatedBrowser } from "./browser-cdp.js";
 import { grantsAllow } from "./grants.js";
 import { confinedPath } from "./paths.js";
+import { validatePatchPaths } from "./patch-validation.js";
 import { runProcess } from "./process.js";
 import type { ToolDefinition } from "./types.js";
 
@@ -81,7 +82,7 @@ export const applyPatchTool: ToolDefinition = {
   },
   async execute(input, context) {
     const parsed = patchInput.parse(input);
-    if (/^(?:---|\+\+\+)\s+(?:[A-Za-z]:|\/|\\\\)/m.test(parsed.patch) || parsed.patch.includes("../")) throw new Error("Patch contains an absolute or parent-traversing path");
+    validatePatchPaths(parsed.patch);
     const check = await runProcess("git", ["apply", "--check", "--whitespace=nowarn", "-"], { cwd: context.workspacePath, signal: context.signal, timeoutMs: 30_000, stdin: parsed.patch });
     if (check.exitCode !== 0) throw new Error(`Patch validation failed: ${check.stderr || check.stdout}`);
     const applied = await runProcess("git", ["apply", "--whitespace=nowarn", "-"], { cwd: context.workspacePath, signal: context.signal, timeoutMs: 30_000, stdin: parsed.patch });
