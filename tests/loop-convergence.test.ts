@@ -65,6 +65,16 @@ async function scenario(options: {
 }
 
 describe("agent loop convergence", () => {
+  it("delivers action-specific workflow errors through the real bridge and charges the attempted call", async () => {
+    const observed = await scenario({ budget: { maxTurns: 4 }, respond: (_request, turn) => turn <= 2 ? workflowPrelude(turn) : turn === 3
+      ? [{ type: "tool_call", toolCall: { id: "incomplete-plan", name: "update_workflow", input: { action: "plan", context: "source read", steps: ["small fix"] } } }]
+      : [say("Plan fields need correction.")] });
+    const messages = JSON.stringify(observed.requests[3]?.messages);
+    expect(messages).toContain("workflow_input_invalid");
+    expect(messages).toContain("missingFields");
+    expect(observed.events).toEqual(expect.arrayContaining([expect.objectContaining({ type: "tool_finished", callId: "incomplete-plan", isError: true, output: expect.objectContaining({ missingFields: ["cause", "evidenceIds"] }) })]));
+    expect(Math.max(...observed.checkpoints.map(checkpoint => checkpoint.toolCalls))).toBe(3);
+  });
   it("continues past three consecutive tool errors", async () => {
     const observed = await scenario({ tools: [{ ...readTool, async execute() { throw new Error("missing fixture"); } }], respond: (_request, turn) => turn <= 4 ? [read(`r${turn}`, `${turn}.ts`)] : [say("Inspected missing files; no changes made.")] });
     expect(observed.executions).toHaveLength(4);

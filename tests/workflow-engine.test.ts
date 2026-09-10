@@ -1,3 +1,4 @@
+import { applyContextDiff } from "../packages/core/src/prompt-cache.js";
 import { describe, expect, it } from "vitest";
 import { mkdtemp, rm, readFile, writeFile } from "node:fs/promises";
 import { execFile as execFileCallback } from "node:child_process";
@@ -13,7 +14,7 @@ import { DEFAULT_PROFILE, newId, nowIso, type AgentEvent, type RunSpec, type Wor
 import { terminalTool, ToolRegistry } from "@harness/tools";
 import { workflowCall, workflowPrelude, workflowReadTool } from "./workflow-fixture.js";
 
-async function runScenario(mode: "pass" | "local-failure" | "broader-failure" | "review-failure" | "early-done" | "reedit" | "no-verification" | "timeout" | "dynamic-verification" | "denied-verification" | "check-budget" | "outside-check" | "independent-pass" | "independent-fail" | "independent-malformed" | "independent-tool-call" | "broader-required" | "broader-optional" | "broader-disabled" | "deep-failure" | "probe-before-script" | "five-failures" | "real-probe" | "resume-repairs") {
+async function runScenario(mode: "pass" | "local-failure" | "broader-failure" | "review-failure" | "early-done" | "reedit" | "no-verification" | "timeout" | "dynamic-verification" | "denied-verification" | "check-budget" | "outside-check" | "independent-pass" | "independent-fail" | "independent-malformed" | "independent-tool-call" | "broader-required" | "broader-optional" | "broader-disabled" | "deep-failure" | "probe-before-script" | "five-failures" | "real-probe" | "resume-repairs" | "late-verification" | "final-without-verification") {
   const root = await mkdtemp(join(tmpdir(), "harness-workflow-"));
   if (mode === "real-probe") {
     await promisify(execFileCallback)("git", ["init", "-q", root]);
@@ -37,14 +38,20 @@ async function runScenario(mode: "pass" | "local-failure" | "broader-failure" | 
           yield { type: "text_delta", delta: mode === "independent-malformed" ? "invalid JSON" : JSON.stringify({ passed: mode !== "independent-fail" || reviews > 1, summary: reviews === 1 && mode === "independent-fail" ? "Missing edge case" : "Independent diff review passed" }) };
           yield { type: "usage", usage: { inputTokens: 20, outputTokens: 10, estimatedUsd: 0 } }; return;
         }
-        const runtime = request.messages.flatMap(message => message.content.flatMap(part => part.type === "text" && part.text.startsWith("Trusted runtime context") ? [part.text] : [])).at(-1);
-        if (runtime) last = JSON.parse(runtime.slice(runtime.indexOf("\n") + 1)).workingMemory;
+        let runtimeState: unknown;
+        for (const message of request.messages) for (const part of message.content) {
+          if (part.type !== "text" || !part.text.startsWith("Trusted runtime context")) continue;
+          const frame = JSON.parse(part.text.slice(part.text.indexOf("\n") + 1));
+          runtimeState = frame.kind === "base_snapshot" ? frame.snapshot : applyContextDiff(runtimeState, frame.dirtyDiff);
+        }
+        if (runtimeState) last = (runtimeState as { workingMemory: WorkflowState }).workingMemory;
         turn += 1;
         if (turn <= 3) {
           const events = workflowPrelude(turn);
           if (mode === "dynamic-verification" && turn === 3) for (const event of events) if (event.type === "tool_call" && event.toolCall) event.toolCall.input.verification = [{ stage: "local", command: "fixture local" }, { stage: "broader", command: "fixture broader" }];
           yield* events; return;
         }
+        if (mode === "final-without-verification" && turn === 5) { yield { type: "text_delta", delta: "Probe passed; done." }; return; }
         if (mode === "early-done" || (mode === "timeout" && mutations > 0)) { yield { type: "text_delta", delta: "Looks done." }; return; }
         const state = last!;
         if (["probe-before-script", "real-probe"].includes(mode) && turn === 4) { yield workflowCall("probe", "terminal", { command: "fixture probe" }); return; }
@@ -60,7 +67,7 @@ async function runScenario(mode: "pass" | "local-failure" | "broader-failure" | 
           yield workflowCall(`patch-${turn}`, "apply_patch", { patch: mode === "real-probe" ? "diff --git a/probe.js b/probe.js\nnew file mode 100644\n--- /dev/null\n+++ b/probe.js\n@@ -0,0 +1 @@\n+export const value = 42;\n" : mode.startsWith("independent") ? "+++ b/src/auth.ts\n-old\n+new" : "+++ b/src/value.ts\n-old\n+new" }); return;
         }
         if (state.localCheck?.status !== "passed" || state.localCheck.revision !== state.revision || state.broaderCheck?.status === "pending") {
-          yield workflowCall(`verify-${turn}`, "update_workflow", { action: "request_verification" }); return;
+          yield workflowCall(`verify-${turn}`, "update_workflow", { action: "request_verification", ...(["late-verification", "final-without-verification"].includes(mode) && turn >= 6 ? { verification: [{ stage: "local", command: "fixture local" }, { stage: "broader", command: "fixture broader" }] } : {}) }); return;
         }
         if (state.diffRevision !== state.revision) { yield workflowCall(`diff-${turn}`, "git_diff", {}); return; }
         if (state.requirementsRevision !== state.revision) {
@@ -85,7 +92,7 @@ async function runScenario(mode: "pass" | "local-failure" | "broader-failure" | 
         return { output: { exitCode: shouldFail ? 1 : 0, stdout: "test output", stderr: shouldFail ? "FAILED value: boundary mismatch" : "", timedOut: mode === "timeout" }, isError: shouldFail };
       },
     });
-    const profile = { ...DEFAULT_PROFILE, allowedProviders: ["fake"], toolNames: ["read_file", "search_text", "apply_patch", "git_diff", "terminal"], verificationPolicy: { maxRepairAttempts: mode === "deep-failure" ? 4 : 2, broaderPolicy: mode === "broader-required" ? "required" as const : mode === "broader-disabled" ? "disabled" as const : "optional" as const, reviewPolicy: mode.startsWith("independent") ? "risk_based" as const : "standard" as const, items: ["no-verification", "dynamic-verification"].includes(mode) ? [] : (["local", "broader"] as const).filter(stage => !["broader-optional", "broader-required"].includes(mode) || stage === "local").map(stage => ({ id: stage, stage, command: `fixture ${stage}`, cwd: mode === "outside-check" ? ".." : ".", timeoutMs: 1000, required: true, expectedExitCodes: [0] })) } };
+    const profile = { ...DEFAULT_PROFILE, allowedProviders: ["fake"], toolNames: ["read_file", "search_text", "apply_patch", "git_diff", "terminal"], verificationPolicy: { maxRepairAttempts: mode === "deep-failure" ? 4 : 2, broaderPolicy: mode === "broader-required" ? "required" as const : mode === "broader-disabled" ? "disabled" as const : "optional" as const, reviewPolicy: mode.startsWith("independent") ? "risk_based" as const : "standard" as const, items: ["no-verification", "dynamic-verification", "late-verification", "final-without-verification"].includes(mode) ? [] : (["local", "broader"] as const).filter(stage => !["broader-optional", "broader-required"].includes(mode) || stage === "local").map(stage => ({ id: stage, stage, command: `fixture ${stage}`, cwd: mode === "outside-check" ? ".." : ".", timeoutMs: 1000, required: true, expectedExitCodes: [0] })) } };
     const run: RunSpec = { id: newId("run"), sessionId: "workflow", request: "Fix value without changing compatibility", workspacePath: root, profileId: profile.id, attachments: [], budget: { ...profile.budget, maxTurns: ["five-failures", "resume-repairs"].includes(mode) ? 64 : 40, maxToolCalls: mode === "check-budget" ? 6 : 128 }, grants: [{ toolNames: mode === "denied-verification" ? ["apply_patch"] : ["apply_patch", "terminal"], pathGlobs: ["**"], commandPrefixes: ["fixture"], networkDomains: [], maxRisk: "high" }], createdAt: nowIso() };
     const engine = new HarnessEngine({ database, providers: [provider], tools, memory: new MemoryService(database), skills: new SkillService(join(root, "skills")), projectTrust: new ProjectTrustService(database) });
     const result = await new Promise<Extract<AgentEvent, { type: "result" }>>((done, reject) => {
@@ -123,6 +130,15 @@ async function runScenario(mode: "pass" | "local-failure" | "broader-failure" | 
 }
 
 describe("real engine workflow", () => {
+  it.each(["late-verification", "final-without-verification"] as const)("recovers %s in the same run without treating configuration as a code failure", async mode => {
+    const result = await runScenario(mode);
+    expect(result.result.status, JSON.stringify(result.result.stop)).toBe("completed");
+    expect(result.checks).toEqual(["fixture local", "fixture broader"]);
+    expect(result.mutations).toBe(1);
+    expect(result.checkpoint?.repairAttemptsUsed).toBe(0);
+    expect(result.checkpoint?.workflow?.failures).toBe(0);
+    expect(result.verificationRuns.every(run => run.outcome === "passed")).toBe(true);
+  });
   it("creates a real probe with a null-sentinel patch before running verification", async () => {
     const result = await runScenario("real-probe");
     expect(result.result.status, JSON.stringify({stop:result.result.stop,errors:result.events.filter(e => e.type === "tool_finished" && e.isError)})).toBe("completed");
@@ -198,7 +214,9 @@ describe("real engine workflow", () => {
     expect(result.events.some(event => event.type === "verification_finished" && event.verification.stage === "broader" && event.verification.passed === false && event.verification.outcome === "skipped")).toBe(true);
   });
   it("does not complete if required broader verification has no configured items", async () => {
-    const result = await runScenario("broader-required"); expect(result.result.status).toBe("review"); expect(result.checkpoint?.workflow?.broaderCheck.status).toBe("failed");
+    const result = await runScenario("broader-required"); expect(result.result.status).toBe("review"); expect(result.checkpoint?.workflow?.broaderCheck.status).toBe("pending");
+    expect(result.checkpoint?.repairAttemptsUsed).toBe(0);
+    expect(result.verificationRuns).toEqual([]);
   });
   it("requires expanded search and experiment evidence before repairing a third recurring failure", async () => {
     const result = await runScenario("deep-failure"); expect(result.result.status).toBe("completed"); expect(result.mutations).toBe(4);

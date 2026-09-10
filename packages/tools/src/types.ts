@@ -17,6 +17,8 @@ export interface ToolResult {
 export interface ToolDefinition {
   contract: ToolContract;
   execute(input: Record<string, unknown>, context: ToolContext): Promise<ToolResult>;
+  /** Uses its own full input validation so errors can include state-specific recovery data. */
+  handlesInputValidation?: boolean;
   assessRisk?(input: Record<string, unknown>): RiskLevel;
 }
 
@@ -36,6 +38,6 @@ export class ToolRegistry {
   unregister(name: string): boolean { return this.tools.delete(name); }
 
   contracts(allowedNames?: string[]): ToolContract[] {
-    return [...this.tools.values()].filter((tool) => !allowedNames || allowedNames.includes(tool.contract.name)).map((tool) => tool.contract);
+    return [...this.tools.values()].filter((tool) => !allowedNames || (allowedNames.includes(tool.contract.name) || (tool.contract.name === "read_range" && allowedNames.includes("read_file")))).map((tool) => tool.contract);
   }
 }

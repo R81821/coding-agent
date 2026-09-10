@@ -16,6 +16,15 @@ const updateSchema = z.object({
   alternatives: z.array(text).min(2).max(4).optional(),
   experiment: z.object({ question: text, expectedResults: z.array(text).min(2).max(4), observationIds: z.array(z.string()).min(1).max(8) }).optional(), passed: z.boolean().optional(), summary: text.optional(),
 });
+const requiredFields: Record<string, string[]> = {
+  understand: ["intent", "requirements"], plan: ["context", "steps", "cause", "evidenceIds"],
+  diagnose: ["context", "steps", "cause", "evidenceIds"], requirements: ["passed"], review: ["passed"], request_verification: [],
+};
+const workflowInputSchema = {
+  ...z.toJSONSchema(updateSchema, { io: "input" }),
+  anyOf: Object.entries(requiredFields).map(([action, fields]) => ({ properties: { action: { const: action } }, required: ["action", ...fields] })),
+};
+class MissingVerificationConfigError extends Error {}
 const recon = new Set(["read_file", "list_files", "search_text", "read_range", "search_symbol", "repository_map", "find_references"]);
 export function compactObservation(value: unknown, limit = 6000): string {
   const record = value && typeof value === "object" ? value as Record<string, unknown> : undefined;
@@ -31,7 +40,7 @@ export function compactObservation(value: unknown, limit = 6000): string {
 /** Runtime-owned gates. Model reports never set verification or revision counters. */
 export class CodingWorkflow {
   readonly state: WorkflowState;
-  constructor(objective: string, private readonly publish: (state: WorkflowState, detail: string) => void, recovered?: WorkflowState, policy: { broaderPolicy?: "required" | "optional" | "disabled" | undefined; reviewPolicy?: "standard" | "risk_based" | undefined } = {}) {
+  constructor(objective: string, private readonly publish: (state: WorkflowState, detail: string) => void, recovered?: WorkflowState, private readonly policy: { items?: { stage?: "local" | "broader" | undefined; required: boolean }[]; broaderPolicy?: "required" | "optional" | "disabled" | undefined; reviewPolicy?: "standard" | "risk_based" | undefined } = {}) {
     this.state = WorkflowStateSchema.parse(recovered ? structuredClone(recovered) : {
       phase: "task_understanding", objective: objective.slice(0, 6000), requirements: [], context: "", plan: [], hypotheses: [], verification: [], observations: [], relevantFiles: [], changedFiles: [], revision: 0,
       localRevision: -1, broaderRevision: -1, diffRevision: -1, requirementsRevision: -1, reviewedRevision: -1,
@@ -54,8 +63,28 @@ export class CodingWorkflow {
   get needsChange(): boolean { return this.state.intent === "change" || this.state.revision > 0; }
   tool(): ToolDefinition {
     return {
-      contract: { name: "update_workflow", description: "Record task understanding and acceptance requirements (understand), then gather repository evidence. Record context, small steps, cause and actual observation evidenceIds (plan); propose verification items (stage local/broader, command, cwd, timeoutMs) matching the repository when Profile checks are insufficient. Runtime authorizes commands independently. After a failure use diagnose with revised cause and fresh evidenceIds from the current failure or later observations. Repeated failures require fresh successful repository checks; at level 3 provide alternatives and experiment (question, expectedResults, observationIds). Complete a small coherent batch of edits (including required test scripts), then call request_verification to let runtime run checks. Terminal commands alone do not trigger verification. After runtime verification and git_diff, report one structured evidence object per requirementId (summary, observationIds, verificationIds, diffObservationId), then summary, evidenceIds including current diff, and passed (review). Only current epoch/revision successful evidence is accepted. Cannot grant permissions or mark checks passed. Prefer minimal apply_patch edits; never unrelated rewrites.", inputSchema: z.toJSONSchema(updateSchema, { io: "input" }), risk: "read", idempotent: false, timeoutMs: 1000 },
-      execute: async input => { this.update(input); return { output: this.snapshot() }; },
+      contract: { name: "update_workflow", description: "Record task understanding and acceptance requirements (understand), then gather repository evidence. Record context, small steps, cause and actual observation evidenceIds (plan); propose verification items (stage local/broader, command, cwd, timeoutMs) matching the repository when Profile checks are insufficient. Runtime authorizes commands independently. After a failure use diagnose with revised cause and fresh evidenceIds from the current failure or later observations. Repeated failures require fresh successful repository checks; at level 3 provide alternatives and experiment (question, expectedResults, observationIds). Complete a small coherent batch of edits (including required test scripts), then call request_verification to let runtime run checks. Terminal commands alone do not trigger verification. request_verification accepts verification items to fill missing configuration in the same run; keep required scripts until these commands execute. Missing configuration is recoverable, not a code failure. After runtime verification and git_diff, report one structured evidence object per requirementId (summary, observationIds, verificationIds, diffObservationId), then summary, evidenceIds including current diff, and passed (review). Only current epoch/revision successful evidence is accepted. Cannot grant permissions or mark checks passed. Prefer minimal apply_patch edits; never unrelated rewrites.", inputSchema: workflowInputSchema, risk: "read", idempotent: false, timeoutMs: 1000 },
+      handlesInputValidation: true,
+      execute: async input => {
+        try {
+          this.update(input);
+          return { output: { ...this.snapshot(), missingVerificationStages: this.missingVerificationStages() } };
+        } catch (error) {
+          const fields = requiredFields[String(input.action)] ?? ["action"];
+          return { isError: true, output: {
+            code: error instanceof MissingVerificationConfigError ? "verification_config_missing" : error instanceof z.ZodError || fields.some(field => input[field] === undefined) ? "workflow_input_invalid" : "workflow_gate_rejected",
+            error: error instanceof Error ? error.message : String(error), recoverable: true, action: input.action,
+            requiredFields: fields, missingFields: fields.filter(field => input[field] === undefined),
+            ...(error instanceof z.ZodError ? { invalidFields: error.issues.map(issue => ({ path: issue.path.join("."), message: issue.message })) } : {}),
+            activeFailureId: this.state.activeFailureId,
+            availableEvidenceIds: (input.action === "diagnose" ? this.diagnosisEvidence() : this.state.observations.filter(item => item.epoch === this.state.epoch)).map(item => item.id),
+            missingVerificationStages: this.missingVerificationStages(),
+            nextAction: error instanceof MissingVerificationConfigError
+              ? "Supply verification items (stage, command, cwd, timeoutMs) in request_verification; keep scripts available. Runtime still authorizes and executes each command."
+              : "Correct the reported fields. For diagnose cite availableEvidenceIds and a revised cause; repeated failures still require fresh repository inspection.",
+          } };
+        }
+      },
     };
   }
   before(call: ToolCall, tool: ToolDefinition): string | undefined {
@@ -101,7 +130,7 @@ export class CodingWorkflow {
     if (call.name === "update_workflow") return;
     const failed = result.isError === true;
     const target = compactObservation(call.input, 500);
-    this.record(call.id, call.name, target, compactObservation(result.output, 1200), failed, "tool", result.truncated !== true);
+    const observation = this.record(call.id, call.name, target, compactObservation(result.output, 1200), failed, "tool", result.truncated !== true);
     this.state.activity = call.name + " " + target;
     if (recon.has(call.name) && !failed) {
       if (typeof call.input.path === "string") this.state.relevantFiles = [...new Set([...this.state.relevantFiles, call.input.path])].slice(-80);
@@ -109,12 +138,12 @@ export class CodingWorkflow {
       if (this.state.requirements.length && !this.state.plan.length) this.move("repository_recon", "取得证据 " + call.id);
     }
     if (call.name === "git_diff") this.state.diffRevision = !failed && !result.truncated ? this.state.revision : -1;
-    const source = "tool:" + call.name + ":" + JSON.stringify({ path: call.input.path, cwd: call.input.cwd, command: call.input.command });
-    if (failed && this.needsChange) this.fail(call.name + ": " + compactObservation(result.output, 1800), source);
+    const source = "tool:" + call.name + ":" + JSON.stringify({ path: call.input.path, cwd: call.input.cwd, command: call.input.command, stdinDigest: typeof call.input.stdin === "string" ? createHash("sha256").update(call.input.stdin).digest("hex") : undefined });
+    if (failed && this.needsChange) this.fail(call.name + ": " + compactObservation(result.output, 1800), source, observation);
     else if (!failed) this.resolveSource(source);
     this.publish(this.snapshot(), "工具活动：" + call.name);
   }
-  fail(reason: string, source = "workflow"): void {
+  fail(reason: string, source = "workflow", origin?: WorkflowState["observations"][number]): void {
     this.state.failures += 1;
     this.state.diagnosisRequired = true;
     this.state.lastFailure = reason.slice(0, 3000);
@@ -132,6 +161,7 @@ export class CodingWorkflow {
     chain.lastRevision = this.state.revision;
     chain.failureId = this.state.activeFailureId = newId("failure");
     this.state.activeChainId = chain.id;
+    if (origin) origin.failureId = chain.failureId;
     const observed = this.record(chain.failureId, source, source, reason, true, "failure");
     chain.lastSequence = observed.sequence;
     this.move("diagnose", this.strategy());
@@ -147,11 +177,11 @@ export class CodingWorkflow {
     const current = { status: outcome, revision: this.state.revision, epoch: this.state.epoch, runId: run.id, reason: run.skipReason ?? "" };
     if (stage === "local") { this.state.localCheck = current; this.state.localRevision = outcome === "passed" ? this.state.revision : -1; }
     else { this.state.broaderCheck = current; this.state.broaderRevision = outcome === "passed" ? this.state.revision : -1; }
-    this.record(run.id, "verification:" + stage, stage, JSON.stringify({ outcome, results: run.results.map(item => ({ ...item, output: compactObservation(item.output, 1000) })) }), outcome !== "passed", "verification");
+    const observation = this.record(run.id, "verification:" + stage, stage, JSON.stringify({ outcome, results: run.results.map(item => ({ ...item, output: compactObservation(item.output, 1000) })) }), outcome !== "passed", "verification");
     for (const item of run.results) if (item.passed) this.resolveSource("verification:" + stage + ":" + item.itemId);
     if (outcome === "failed") {
       const failed = run.results.find(item => !item.passed);
-      this.fail(failed?.output || run.skipReason || "Required verification is missing", "verification:" + stage + ":" + (failed?.itemId ?? "configuration"));
+      this.fail(failed?.output || run.skipReason || "Required verification is missing", "verification:" + stage + ":" + (failed?.itemId ?? "configuration"), observation);
       // Keep the observed failed stage visible after other gates are invalidated.
       if (stage === "local") this.state.localCheck = current; else this.state.broaderCheck = current;
     }
@@ -170,10 +200,30 @@ export class CodingWorkflow {
     this.state.independentReview = review;
     this.move(passed ? "final_review" : "diagnose", "独立只读评审：" + summary);
   }
+  private diagnosisEvidence() {
+    const chain = this.state.failureChains.find(item => item.id === this.state.activeChainId);
+    return this.state.observations.filter(item => chain && item.epoch === this.state.epoch &&
+      (item.sequence >= chain.lastSequence || (item.failed && item.failureId === chain.failureId)));
+  }
+  missingVerificationStages(): ("local" | "broader")[] {
+    const items = [...(this.policy.items ?? []), ...this.state.verification.map(item => ({ ...item, required: true }))];
+    const missing: ("local" | "broader")[] = [];
+    if (this.needsChange && !items.some(item => (item.stage ?? "local") === "local" && item.required)) missing.push("local");
+    if (this.state.broaderPolicy === "required" && !items.some(item => item.stage === "broader")) missing.push("broader");
+    return missing;
+  }
+  private addVerification(items: z.infer<typeof updateSchema>["verification"]): void {
+    if (!items) return;
+    const additions = items.filter((item, index) => ![...this.state.verification, ...items.slice(0, index)].some(existing => existing.command === item.command && existing.cwd === item.cwd && existing.stage === item.stage));
+    if (this.state.verification.length + additions.length > 12) throw new Error("At most 12 task verification commands are allowed.");
+    if (additions.length) { this.state.verification.push(...additions); this.invalidate(); }
+  }
   private evidence(ids: string[] | undefined): void {
     if (!ids?.length || ids.some(id => !this.state.observations.some(o => o.id === id))) throw new Error("evidenceIds must reference actual observed tool call IDs in working context.");
   }
   update(input: Record<string, unknown>): void {
+    const missing = (requiredFields[String(input.action)] ?? []).filter(field => input[field] === undefined);
+    if (missing.length) throw new Error(String(input.action) + " requires missing fields: " + missing.join(", "));
     const value = updateSchema.parse(input);
     if (value.action === "understand") {
       if (this.state.requirements.length || this.state.revision > 0) throw new Error("Acceptance requirements are already recorded; do not remove or rewrite them during repair.");
@@ -186,7 +236,8 @@ export class CodingWorkflow {
       return;
     }
     if (value.action === "plan" || value.action === "diagnose") {
-      if (!this.state.requirements.length || !value.context || !value.steps || !value.cause) throw new Error("Record understanding first; plan/diagnose requires context, steps, cause and evidenceIds.");
+      if (!this.state.requirements.length) throw new Error("Record understanding first with intent and requirements.");
+      if (!value.context || !value.steps || !value.cause) throw new Error("plan/diagnose requires nonempty context, steps and cause.");
       this.evidence(value.evidenceIds);
       if (!this.state.observations.some(o => recon.has(o.tool) && !o.failed)) throw new Error("Successful repository reconnaissance is required before planning.");
       if (this.state.diagnosisRequired && value.action !== "diagnose") throw new Error("Use diagnose to update the failed hypothesis.");
@@ -195,7 +246,7 @@ export class CodingWorkflow {
         const chain = this.state.failureChains.find(item => item.id === this.state.activeChainId);
         if (!this.state.diagnosisRequired || !chain) throw new Error("No current failure requires diagnosis.");
         const cited = value.evidenceIds!.map(id => this.state.observations.find(item => item.id === id)!);
-        const fresh = cited.filter(item => item.epoch === this.state.epoch && item.sequence >= chain.lastSequence);
+        const fresh = cited.filter(item => this.diagnosisEvidence().includes(item));
         if (!fresh.length) throw new Error("Diagnosis requires this failure's evidence or observations collected after it.");
         const exploration = fresh.filter(item => !item.failed && item.sequence > chain.lastSequence && recon.has(item.tool));
         if (chain.count >= 2 && !exploration.length) throw new Error("Repeated failure requires fresh successful repository inspection.");
@@ -206,11 +257,7 @@ export class CodingWorkflow {
           if (!exploration.some(item => /search|references|map/.test(item.tool)) || !experiments.some(item => !item.failed && item.epoch === this.state.epoch && item.sequence > chain.lastSequence)) throw new Error("Deep diagnosis needs fresh expanded search and observed experiment results.");
         }
       }
-      if (value.verification) {
-        const additions = value.verification.filter(item => !this.state.verification.some(existing => existing.command === item.command && existing.cwd === item.cwd && existing.stage === item.stage));
-        if (this.state.verification.length + additions.length > 12) throw new Error("At most 12 task verification commands are allowed.");
-        if (additions.length) { this.state.verification.push(...additions); this.invalidate(); }
-      }
+      this.addVerification(value.verification);
       this.state.context = value.context;
       this.state.plan = value.steps;
       this.move("build_working_context", "整理相关代码、证据与待处理问题");
@@ -224,6 +271,9 @@ export class CodingWorkflow {
       if (value.passed !== undefined) throw new Error("Only runtime can report verification results.");
       if (this.state.diagnosisRequired) throw new Error("Diagnose the current failure before requesting verification.");
       if (this.needsChange && !this.state.plan.length) throw new Error("Record a plan before requesting verification.");
+      this.addVerification(value.verification);
+      const missing = this.missingVerificationStages();
+      if (missing.length) throw new MissingVerificationConfigError("Missing required verification configuration for " + missing.join(", ") + ". Supply verification items in request_verification before running checks.");
       return;
     }
     if (!this.checksCurrent() || this.state.diffRevision !== this.state.revision) throw new Error("Call request_verification for runtime verification, then read a complete git_diff for the current revision before requirement checks or final review.");

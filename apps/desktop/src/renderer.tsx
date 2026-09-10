@@ -37,6 +37,7 @@ import { BuiToolChip } from "./ui/tool-chip.js";
 import { MemoryManager } from "./memory-manager.js";
 import { assistantMessages } from "./assistant-messages.js";
 import { MarkdownMessage } from "./markdown-message.js";
+import { PromptCacheStats } from "./components/PromptCacheStats.js";
 import { RunStopCard } from "./components/RunStopCard.js";
 import { RecycleBin } from "./recycle-bin.js";
 import { groupSessionsByProject, isLiveRun, mergeRunEvents, mergeSessionPages, runStatusLabel, sessionTurns, workspaceKey, type SessionTurn } from "./run-history.js";
@@ -774,7 +775,7 @@ function App() {
         </details>
         </div>
         <div className="sidebar-foot">
-          <BuiButton variant="ghost" onClick={() => setTab("settings")} className="sidebar-settings"><Settings size={17} /><span>设置</span><small>v1.3.1</small></BuiButton>
+          <BuiButton variant="ghost" onClick={() => setTab("settings")} className="sidebar-settings"><Settings size={17} /><span>设置</span><small>v1.3.2</small></BuiButton>
           <div className="sidebar-connection"><span className="status-dot" />本地运行时已解锁</div>
         </div>
       </aside>
@@ -1114,6 +1115,7 @@ function ConversationTurnView({ turn, busy }: { turn: SessionTurn; busy: boolean
           <small className="ml-auto text-xs text-text-muted">{route.reason}</small>
         </BuiGlassPanel>
       )}
+      <PromptCacheStats usages={turn.events.flatMap(event => event.type === "usage" ? [event.usage] : [])} />
       <WorkflowProgress events={turn.events} />
       {result?.stop && <RunStopCard stop={result.stop} />}
       {busy && !finalText && <div className="mb-3"><BuiLoadingState label="Agent 正在思考与执行…" /></div>}
@@ -1855,6 +1857,10 @@ function ProfilesView({
                 </dd>
               </div>
             </dl>
+            <label className="mt-3 flex items-start gap-2 text-xs text-text-muted">
+              <input type="checkbox" checked={profile.responsesContinuation !== false} onChange={event => { void window.harness.request({ method: "profiles.upsert", params: { ...profile, responsesContinuation: event.target.checked } }).then(refresh).catch(error => window.alert(String(error))); }} />
+              <span>Responses 连续响应（服务端保存响应上下文）。关闭后使用本地完整历史发送。</span>
+            </label>
           </article>
         ))}
       </div>

@@ -1,4 +1,4 @@
-import { applyPatchTool, browserTool, gitDiffTool, listFilesTool, readFileTool, searchTextTool, terminalTool } from "./builtins.js";
+import { applyPatchTool, browserTool, gitDiffTool, listFilesTool, readFileTool, readRangeTool, searchTextTool, terminalTool } from "./builtins.js";
 import { ToolRegistry } from "./types.js";
 
 export * from "./types.js";
@@ -12,6 +12,7 @@ export * from "./grants.js";
 export function createDefaultToolRegistry(): ToolRegistry {
   return new ToolRegistry()
     .register(readFileTool)
+    .register(readRangeTool)
     .register(listFilesTool)
     .register(searchTextTool)
     .register(applyPatchTool)

@@ -1,3 +1,4 @@
+import { AGENT_VERSION, promptCacheKey, repositoryBaseSnapshot } from "./prompt-cache.js";
 import { EventEmitter } from "node:events";
 import { createHash } from "node:crypto";
 import { isAbsolute, relative, resolve } from "node:path";
@@ -315,6 +316,7 @@ export class HarnessEngine extends EventEmitter {
       );
       const trustedProjectInstructions =
         await this.deps.projectTrust.loadInstructions(spec.workspacePath);
+      const repositorySnapshot = await repositoryBaseSnapshot(spec.workspacePath);
       const messages = buildInitialMessages({
         run: spec,
         profile,
@@ -382,6 +384,8 @@ export class HarnessEngine extends EventEmitter {
         provider: route.provider,
         model: route.model,
         initialMessages: messages,
+        promptCacheKey: promptCacheKey(AGENT_VERSION, repositorySnapshot.repoId),
+        responsesContinuation: profile.responsesContinuation !== false,
         ...(conversationHistory.length ? { conversationHistory } : {}),
         contracts,
         resolveTool: (name) => name === "update_workflow" ? workflowTool : this.deps.tools.get(name),
@@ -395,10 +399,12 @@ export class HarnessEngine extends EventEmitter {
         ...(state.transcript.length ? { resumeTranscript: state.transcript } : {}),
         contextPolicy: profile.contextPolicy,
         getPinnedContext: () => JSON.stringify({
+          projectBaseSnapshot: repositorySnapshot,
           approvedPlan: state.plan?.status === "approved" ? state.plan : undefined,
           permissionSnapshot: spec.grants,
           workingMemory: { trust: "untrusted_tool", ...workflow.snapshot() },
           verificationPolicy: profile.verificationPolicy,
+          missingVerificationStages: workflow.missingVerificationStages(),
           remainingToolCalls: Math.max(0, spec.budget.maxToolCalls - state.toolCalls),
           remainingTurns: Math.max(0, spec.budget.maxTurns - state.turns),
           repairAttemptsUsed: state.repairAttemptsUsed,
@@ -408,6 +414,12 @@ export class HarnessEngine extends EventEmitter {
             ? "Budget is nearly exhausted. Synthesize concrete findings now. Do not restart repository exploration; clearly state unresolved scope."
             : "Reuse observations already collected; avoid repeated reads without new evidence.",
         }),
+        beforeCompactionRequest: () => {
+          this.checkBudget(spec, state);
+          if (state.turns >= spec.budget.maxTurns - 1) return false;
+          state.turns += 1;
+          return true;
+        },
         beforeModelRequest: () => {
           this.checkBudget(spec, state);
           if (state.turns > spec.budget.maxTurns) throw new BudgetExceededError("model_turn_limit", "模型轮次额度已用完");
@@ -612,6 +624,20 @@ export class HarnessEngine extends EventEmitter {
                 finally { this.saveCheckpoint(spec.id, state, "verification"); }
               }
               if (workflow.canFinish()) return;
+              const missingVerificationStages = workflow.missingVerificationStages();
+              if (missingVerificationStages.length && !workflow.state.diagnosisRequired) {
+                if (state.toolCalls >= spec.budget.maxToolCalls) { stop("tool_call_limit", "工具调用额度已用完，仍缺少验证配置。"); return; }
+                if (state.turns >= spec.budget.maxTurns) { stop("model_turn_limit", "模型轮次额度已用完，仍缺少验证配置。"); return; }
+                if (state.status !== "running") this.status(spec.id, state, "running");
+                await control.promptUntrusted(JSON.stringify({
+                  code: "verification_config_missing", recoverable: true, missingVerificationStages,
+                  nextAction: "Verification configuration is missing, not a code failure. Keep any required scripts available. Call update_workflow action=request_verification with verification items (stage, command, cwd, timeoutMs) matching the repository. Runtime will authorize and run them, then require diff and requirement review. Do not report completion before checks run.",
+                  workflow: workflow.snapshot(),
+                }));
+                state.transcript = control.transcript();
+                if (stopReason) { await finishStoppedRun(); return; }
+                continue;
+              }
               let passed = workflow.checksCurrent();
               if (!passed && !workflow.state.diagnosisRequired) {
                 this.status(spec.id, state, "verifying");
@@ -629,10 +655,6 @@ export class HarnessEngine extends EventEmitter {
               if (!workflow.needsChange && passed) {
                 workflow.move("requirements_check", "只读任务：记录结论，不要求代码修改验证");
                 workflow.move("final_review", "运行时检查结束状态与验证结果");
-                return;
-              }
-              if (workflow.needsChange && !this.verificationItems(profile, state).some(item => (item.stage ?? "local") === "local" && item.required)) {
-                stop("verification_config_missing", "缺少必需的局部验证配置，请在计划中提出局部验证命令或在 Profile 中配置。");
                 return;
               }
               if (workflow.canFinish()) return;

@@ -114,6 +114,7 @@ export const ToolCallSchema = z.object({
 export type ToolCall = z.infer<typeof ToolCallSchema>;
 
 export const UsageSchema = z.object({
+  cachedInputTokens: z.number().int().nonnegative().optional(),
   inputTokens: z.number().int().nonnegative(),
   outputTokens: z.number().int().nonnegative(),
   estimatedUsd: z.number().nonnegative()
@@ -328,6 +329,7 @@ export const EvalResultSchema = z.object({
 export type EvalResult = z.infer<typeof EvalResultSchema>;
 
 export const ModelRequestSchema = z.object({
+  promptCacheKey: z.string().max(64).optional(),
   runId: z.string(),
   model: ModelDescriptorSchema,
   messages: z.array(ModelMessageSchema),
@@ -470,6 +472,7 @@ export const ProfileSchema = z.object({
   skillIds: z.array(z.string()),
   sandbox: z.enum(["local", "docker", "auto"]),
   budget: RunBudgetSchema,
+  responsesContinuation: z.boolean().optional(),
   contextPolicy: z.object({
     compactAtRatio: z.number().min(0.5).max(0.9).default(0.7),
     maxAfterCompactionRatio: z.number().min(0.5).max(0.9).default(0.8),
@@ -646,7 +649,7 @@ export const DEFAULT_PROFILE: Profile = ProfileSchema.parse({
   allowedProviders: ["openai", "anthropic", "gemini", "openai-compatible", "gateway"],
   preferredModels: [],
   routeWeights: { quality: 0.5, cost: 0.25, latency: 0.25 },
-  toolNames: ["read_file", "list_files", "search_text", "apply_patch", "terminal", "git_diff", "browser", "web_search", "delegate"],
+  toolNames: ["read_file", "read_range", "list_files", "search_text", "apply_patch", "terminal", "git_diff", "browser", "web_search", "delegate"],
   memoryScopes: ["session", "project"],
   skillIds: [],
   sandbox: "auto",
@@ -675,3 +678,5 @@ export function newId(prefix: string): string {
 export function nowIso(): string {
   return new Date().toISOString();
 }
+
+export * from "./prompt-cache.js";

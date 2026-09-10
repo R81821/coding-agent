@@ -1,4 +1,6 @@
-import { readFile, stat } from "node:fs/promises";
+import { createReadStream } from "node:fs";
+import { createInterface } from "node:readline";
+import { readFile, stat, open } from "node:fs/promises";
 import { join } from "node:path";
 import fg from "fast-glob";
 import { z } from "zod";
@@ -9,11 +11,11 @@ import { validatePatchPaths } from "./patch-validation.js";
 import { runProcess } from "./process.js";
 import type { ToolDefinition } from "./types.js";
 
-const readFileInput = z.object({ path: z.string(), maxBytes: z.number().int().positive().max(5_000_000).default(500_000) });
+const readFileInput = z.object({ path: z.string(), maxBytes: z.number().int().positive().max(5_000_000).default(16_384) });
 export const readFileTool: ToolDefinition = {
   contract: {
     name: "read_file",
-    description: "Read a UTF-8 file inside the trusted workspace.",
+    description: "Read a bounded UTF-8 overview (default 16 KiB). First locate files with search_text (grep), then use read_range for exact code spans. Increase maxBytes only when the full file is necessary.",
     inputSchema: { type: "object", properties: { path: { type: "string" }, maxBytes: { type: "integer", minimum: 1, maximum: 5_000_000 } }, required: ["path"], additionalProperties: false },
     risk: "read",
     idempotent: true,
@@ -22,10 +24,40 @@ export const readFileTool: ToolDefinition = {
   async execute(input, context) {
     const parsed = readFileInput.parse(input);
     const path = await confinedPath(context.workspacePath, parsed.path);
-    const data = await readFile(path);
-    const truncated = data.byteLength > parsed.maxBytes;
-    return { output: data.subarray(0, parsed.maxBytes).toString("utf8"), truncated };
+    const handle = await open(path, "r");
+    try {
+      const size = (await handle.stat()).size;
+      const data = Buffer.alloc(Math.min(size, parsed.maxBytes));
+      const { bytesRead } = await handle.read(data, 0, data.length, 0);
+      const content = data.subarray(0, bytesRead).toString("utf8");
+      const truncated = size > bytesRead;
+      return { output: truncated ? { path: parsed.path, content, bytesRead, totalBytes: size, nextAction: "Use search_text to find matches, then read_range with startLine/endLine for the relevant code." } : content, truncated };
+    } finally { await handle.close(); }
   }
+};
+
+const rangeInput = z.object({ path: z.string(), startLine: z.number().int().min(1), endLine: z.number().int().min(1) }).refine(value => value.endLine >= value.startLine && value.endLine - value.startLine < 500, "Request 1 to 500 lines in increasing order");
+export const readRangeTool: ToolDefinition = {
+  contract: { name: "read_range", description: "Read exact UTF-8 code lines after search_text/read_file. Inclusive one-based startLine/endLine; at most 500 lines and 64 KiB output.", inputSchema: { type: "object", properties: { path: { type: "string" }, startLine: { type: "integer", minimum: 1 }, endLine: { type: "integer", minimum: 1 } }, required: ["path", "startLine", "endLine"], additionalProperties: false }, risk: "read", idempotent: true, timeoutMs: 10000 },
+  async execute(input, context) {
+    const parsed = rangeInput.parse(input);
+    const path = await confinedPath(context.workspacePath, parsed.path);
+    const stream = createReadStream(path, { encoding: "utf8", signal: context.signal });
+    const lines = createInterface({ input: stream, crlfDelay: Infinity });
+    const selected: string[] = []; let lineNumber = 0, bytes = 0, truncated = false;
+    try {
+      for await (const line of lines) {
+        lineNumber += 1;
+        if (lineNumber < parsed.startLine) continue;
+        const numbered = lineNumber + ": " + line;
+        bytes += Buffer.byteLength(numbered);
+        if (bytes > 65536) { truncated = true; break; }
+        selected.push(numbered);
+        if (lineNumber >= parsed.endLine) break;
+      }
+    } finally { lines.close(); stream.destroy(); }
+    return { output: { path: parsed.path, startLine: parsed.startLine, endLine: parsed.startLine + selected.length - 1, content: selected.join("\n") }, truncated };
+  },
 };
 
 const listInput = z.object({ glob: z.string().default("**/*"), limit: z.number().int().positive().max(5_000).default(500) });
@@ -91,21 +123,21 @@ export const applyPatchTool: ToolDefinition = {
   }
 };
 
-const terminalInput = z.object({ command: z.string().min(1), timeoutMs: z.number().int().positive().max(3_600_000).default(120_000) });
-const destructivePatterns = [/\brm\s+-rf\b/i, /\bgit\s+reset\s+--hard\b/i, /\bformat\s+[a-z]:/i, /\bRemove-Item\b.*\b-Recurse\b.*\b-Force\b/i, /\bshutdown\b/i];
+const terminalInput = z.object({ command: z.string().min(1), stdin: z.string().max(1_000_000).optional(), timeoutMs: z.number().int().positive().max(3_600_000).default(120_000) });
+const destructivePatterns = [/\brm\s+-rf\b/i, /\bgit\s+reset\s+--hard\b/i, /\bformat\s+[a-z]:/i, /\bRemove-Item\b.*\s-Recurse\b.*\s-Force\b/i, /\bshutdown\b/i];
 export const terminalTool: ToolDefinition = {
   contract: {
     name: "terminal",
     description: process.platform === "win32"
-      ? "Run a command using Windows PowerShell 5.1 (powershell.exe). Use PowerShell syntax; &&, /dev/null, and Unix ls flags are not supported. Prefer list_files, search_text and read_file for repository inspection."
-      : "Run a command in the workspace using /bin/sh.",
-    inputSchema: { type: "object", properties: { command: { type: "string" }, timeoutMs: { type: "integer", maximum: 3600000 } }, required: ["command"], additionalProperties: false },
+      ? "Run a command using Windows PowerShell 5.1 (powershell.exe). Use PowerShell syntax; &&, /dev/null, and Unix ls flags are not supported. For Python scripts use command e.g. & .venv/Scripts/python.exe -X utf8 - and put the full source in stdin. Do not embed quoted or multiline source in python -c; PowerShell 5.1 corrupts native argument quotes. Keep test scripts available until verification finishes. Prefer list_files, search_text and read_file for repository inspection."
+      : "Run a command in the workspace using /bin/sh. Use stdin for script source with a command such as python -X utf8 -.",
+    inputSchema: { type: "object", properties: { command: { type: "string" }, stdin: { type: "string", maxLength: 1000000, description: "UTF-8 standard input, passed without shell interpolation. Use a single interpreter command reading stdin, e.g. python -X utf8 -." }, timeoutMs: { type: "integer", maximum: 3600000 } }, required: ["command"], additionalProperties: false },
     risk: "high",
     idempotent: false,
     timeoutMs: 3_600_000
   },
   assessRisk(input) {
-    const command = String(input.command ?? "");
+    const command = String(input.command ?? "") + "\n" + String(input.stdin ?? "");
     return destructivePatterns.some((pattern) => pattern.test(command)) ? "destructive" : "high";
   },
   async execute(input, context) {
@@ -115,7 +147,7 @@ export const terminalTool: ToolDefinition = {
     if (denied) throw new Error(denied);
     const shell = process.platform === "win32" ? "powershell.exe" : "/bin/sh";
     const args = process.platform === "win32" ? ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", parsed.command] : ["-lc", parsed.command];
-    const result = await runProcess(shell, args, { cwd: context.workspacePath, signal: context.signal, timeoutMs: parsed.timeoutMs });
+    const result = await runProcess(shell, args, { cwd: context.workspacePath, signal: context.signal, timeoutMs: parsed.timeoutMs, ...(parsed.stdin !== undefined ? { stdin: parsed.stdin } : {}) });
     return { output: result, truncated: result.truncated, isError: result.exitCode !== 0 || result.timedOut };
   }
 };

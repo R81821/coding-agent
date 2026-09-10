@@ -20,6 +20,55 @@ function verified(flow: CodingWorkflow) {
   flow.update({ action: "review", passed: true, evidenceIds: ["diff"], summary: "Minimal diff; compatibility and edge cases checked" });
 }
 describe("coding workflow gates", () => {
+  it("reports action-specific missing fields without blaming recorded understanding", async () => {
+    const flow = planned();
+    const result = await flow.tool().execute({ action: "plan", context: "new context", steps: ["small fix"] }, {} as never);
+    expect(result.isError).toBe(true);
+    expect(result.output).toMatchObject({ code: "workflow_input_invalid", action: "plan", missingFields: ["cause", "evidenceIds"], recoverable: true });
+    expect(JSON.stringify(result.output)).not.toContain("Record understanding first");
+    expect(flow.state.hypotheses).toHaveLength(1);
+  });
+  it("accepts the original failed tool call as diagnosis evidence", () => {
+    const flow = planned();
+    flow.observe({ id: "failed-patch", name: "apply_patch", input: call.input }, { isError: true, output: "Patch validation failed" });
+    flow.update({ action: "diagnose", context: "patch hunk is stale", steps: ["reread the changed hunk"], cause: "stale patch context", evidenceIds: ["failed-patch"] });
+    expect(flow.state.diagnosisRequired).toBe(false);
+  });
+  it("returns usable current evidence IDs when rejecting stale evidence", async () => {
+    const flow = planned();
+    flow.observe({ id: "failed-patch", name: "apply_patch", input: call.input }, { isError: true, output: "Patch validation failed" });
+    const result = await flow.tool().execute({ action: "diagnose", context: "patch mismatch", steps: ["fix hunk"], cause: "stale hunk", evidenceIds: ["read-1"] }, {} as never);
+    expect(result.isError).toBe(true);
+    expect(result.output).toMatchObject({ availableEvidenceIds: expect.arrayContaining(["failed-patch", flow.state.activeFailureId]) });
+    expect((result.output as { availableEvidenceIds: string[] }).availableEvidenceIds).not.toContain("read-1");
+    expect(flow.state.diagnosisRequired).toBe(true);
+  });
+  it("registers missing verification on the request without creating a failure or rewriting the plan", () => {
+    const flow = planned(); const hypothesis = flow.snapshot().hypotheses;
+    expect(() => flow.update({ action: "request_verification" })).toThrow("verification");
+    flow.update({ action: "request_verification", verification: [{ stage: "local", command: "node --check value.js" }] });
+    expect(flow.state.verification).toMatchObject([{ command: "node --check value.js", cwd: "." }]);
+    expect(flow.state.hypotheses).toEqual(hypothesis);
+    expect(flow.state.failures).toBe(0);
+    expect(flow.canFinish()).toBe(false);
+  });
+  it("still rejects malformed input and model-authored verification results", async () => {
+    const flow = planned();
+    const badType = await flow.tool().execute({ action: "request_verification", verification: "node test.js" }, {} as never);
+    expect(badType).toMatchObject({ isError: true, output: { code: "workflow_input_invalid" } });
+    const forged = await flow.tool().execute({ action: "request_verification", passed: true }, {} as never);
+    expect(forged).toMatchObject({ isError: true, output: { code: "workflow_gate_rejected", error: "Only runtime can report verification results." } });
+    expect(flow.state.verification).toEqual([]);
+    expect(flow.canFinish()).toBe(false);
+  });
+  it("keeps script source out of failure-chain identity and distinguishes different scripts", () => {
+    const flow = planned();
+    const script = 'print("' + "private-probe-".repeat(3000) + '")';
+    flow.observe({ id: "python-1", name: "terminal", input: { command: "python -", stdin: script } }, { isError: true, output: "SyntaxError" });
+    flow.observe({ id: "python-2", name: "terminal", input: { command: "python -", stdin: "other script" } }, { isError: true, output: "SyntaxError" });
+    expect(flow.state.failureChains).toHaveLength(2);
+    expect(flow.state.failureChains.every(chain => chain.source.length < 300)).toBe(true);
+  });
   it("blocks editing before understanding, reconnaissance and an evidence-backed hypothesis", () => {
     const flow = new CodingWorkflow("fix", () => {});
     expect(flow.before(call, patch)).toContain("understand");
