@@ -547,6 +547,11 @@ export class HarnessEngine extends EventEmitter {
             });
             state.pendingNonIdempotent.delete(call.id);
             this.saveCheckpoint(spec.id, state, "tool_batch");
+            // A thrown failure carries no result reference on the wire: pi turns the exception into a
+            // bare error message. Hand the model the same evidence envelope a structured failure
+            // returns so a failed call is still retrievable by read_evidence. The legacy path keeps
+            // throwing, because its recovery and tests depend on the exception.
+            if (modern) return { output: { evidenceId: call.id, result: compactObservation(output, 6000), isError: true }, isError: true };
             throw error;
           }
         },

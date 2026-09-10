@@ -60,6 +60,12 @@ async function analysisRun(respond: (request: ModelRequest, turn: number) => Pro
   }
 }
 
+/** The harness tool result part the model actually receives for one call. */
+function toolOutput(request: ModelRequest | undefined, toolCallId: string): string {
+  const parts = (request?.messages ?? []).flatMap((message) => message.content);
+  return JSON.stringify(parts.filter((part) => part.type === "tool_result" && part.toolCallId === toolCallId));
+}
+
 describe("1.4.0 modern analysis path end to end", () => {
   it("completes a read-only analysis with no phantom revision and no update_workflow", async () => {
     const observed = await analysisRun((_request, turn) => turn === 1
@@ -117,5 +123,25 @@ describe("1.4.0 modern analysis path end to end", () => {
     expect(JSON.stringify(observed.requests.at(-1)?.messages)).toContain("analysis_mode_read_only");
     const revisions = observed.checkpoints.map((checkpoint) => checkpoint.workflow?.revision).filter((revision) => revision !== undefined);
     expect(new Set(revisions)).toEqual(new Set([0]));
+  });
+
+  it("returns a short diagnostic plus an evidence reference when a tool throws", async () => {
+    const observed = await analysisRun((_request, turn) => turn === 1
+      ? [call("missing", "read_file", { path: "does-not-exist.ts" })]
+      : turn === 2
+        ? [call("recall", "read_evidence", { id: "missing" })]
+        : [say("该文件不存在，未能检查其内容。")]);
+
+    expect(observed.result).toMatchObject({ status: "completed", text: "该文件不存在，未能检查其内容。" });
+    // A thrown tool failure must still be recorded as an errored call.
+    expect(observed.events).toEqual(expect.arrayContaining([expect.objectContaining({ type: "tool_finished", callId: "missing", isError: true })]));
+    // The model receives a retrievable reference and the short diagnostic, never full run state.
+    const failure = toolOutput(observed.requests.at(-1), "missing");
+    expect(failure).toContain("evidenceId");
+    expect(failure).toContain("missing");
+    expect(failure).toMatch(/no such file|ENOENT/i);
+    expect(failure).not.toContain("workingMemory");
+    // read_evidence resolves that reference back to the original failure output.
+    expect(toolOutput(observed.requests.at(-1), "recall")).toMatch(/no such file|ENOENT/i);
   });
 });
