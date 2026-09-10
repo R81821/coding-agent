@@ -688,7 +688,10 @@ button.primary:disabled {
   inset: 0;
   z-index: 1000;
   display: grid;
-  place-items: center;
+  /* `safe` keeps the dialog's top reachable when it is taller than the window: plain centering
+     pushes both edges out of the scrollable area and the decision buttons become unreachable. */
+  place-items: safe center;
+  overflow-y: auto;
   padding: 28px;
   background: rgba(1, 12, 26, 0.76);
   backdrop-filter: blur(5px);

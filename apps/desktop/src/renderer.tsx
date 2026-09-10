@@ -1389,9 +1389,9 @@ function ApprovalPromptDialog({
     <div className="approval-overlay" role="dialog" aria-modal="true">
       <BuiGlassPanel
         strong
-        className={`w-[560px] max-w-[92vw] border ${riskBorder} p-5`}
+        className={`flex max-h-full w-[560px] max-w-[92vw] flex-col overflow-hidden border ${riskBorder} p-5`}
       >
-        <header className="flex items-start justify-between gap-3">
+        <header className="flex shrink-0 items-start justify-between gap-3">
           <div>
             <small className="text-[10px] font-semibold tracking-widest text-text-muted">
               WAITING APPROVAL
@@ -1405,13 +1405,13 @@ function ApprovalPromptDialog({
           </BuiButton>
         </header>
         {isTool ? (
-          <div className="mt-4 flex flex-col gap-3">
+          <div className="mt-4 flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto">
             <p className="flex items-center gap-2 text-sm">
               <BuiBadge tone={riskTone(risk)}>{risk}</BuiBadge>
               <strong className="font-mono text-text">{prompt.approval.toolName}</strong>
             </p>
             <p className="text-sm text-text-muted">{prompt.approval.reason}</p>
-            <pre className="overflow-auto rounded-xl bg-black/30 p-3 font-mono text-xs text-text-muted">
+            <pre className="max-h-[40vh] overflow-auto rounded-xl bg-black/30 p-3 font-mono text-xs text-text-muted">
               {formatToolContext(prompt.approval.normalizedInput)}
             </pre>
             <footer className="mt-1 flex justify-end gap-2">
@@ -1430,7 +1430,7 @@ function ApprovalPromptDialog({
             </footer>
           </div>
         ) : (
-          <div className="mt-4 flex flex-col gap-3">
+          <div className="mt-4 flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto">
             <p className="text-sm text-text">{prompt.plan.goal}</p>
             <ol className="flex flex-col gap-2">
               {prompt.plan.steps.map((step, index) => (
@@ -1669,8 +1669,8 @@ function ApprovalsView({
             </small>
           </div>
           <p className="mt-2 text-sm text-text-muted">{approval.reason}</p>
-          <pre className="mt-2 overflow-auto rounded-xl bg-black/30 p-3 font-mono text-xs text-text-muted">
-            {JSON.stringify(approval.normalizedInput, null, 2)}
+          <pre className="mt-2 max-h-[40vh] overflow-auto rounded-xl bg-black/30 p-3 font-mono text-xs text-text-muted">
+            {formatToolContext(approval.normalizedInput)}
           </pre>
           {approval.status === "pending" && (
             <footer className="mt-3 flex justify-end gap-2">
