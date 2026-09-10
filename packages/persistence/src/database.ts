@@ -34,6 +34,13 @@ interface GenericRow { id: string; payload: string }
 type GenericTable = "profiles" | "approvals" | "memories" | "skills" | "tasks" | "attachments" | "plans" | "checkpoints" | "compactions" | "verification_runs" | "plugins" | "eval_results" | "traces" | "sessions" | "projects";
 const liveStatuses = new Set<RunStatus>(["queued", "planning", "running", "waiting_approval", "verifying"]);
 
+/** The tool call an event belongs to: `tool_started` carries it inside `call`, `tool_finished` beside it. */
+function toolCallId(event: AgentEvent): string | undefined {
+  if (event.type === "tool_started") return event.call.id;
+  if (event.type === "tool_finished") return event.callId;
+  return undefined;
+}
+
 export class HarnessDatabase {
   private readonly db: SQLiteFile;
 
@@ -216,6 +223,41 @@ export class HarnessDatabase {
   appendEvent(event: AgentEvent): void {
     this.db.prepare("INSERT OR IGNORE INTO events (run_id, sequence, type, payload, created_at) VALUES (?, ?, ?, ?, ?)")
       .run(event.runId, event.sequence, event.type, this.crypto.encryptJson(event, `event:${event.runId}:${event.sequence}`), event.at);
+    const callId = toolCallId(event);
+    if (callId) this.rememberEvidence(event.runId, callId, event.sequence);
+  }
+
+  /**
+   * Resolve the recorded evidence of one tool call without scanning the run's history: the index
+   * points straight at the sequence, so a lookup reads and decrypts a single row.
+   */
+  getToolEvidence(runId: string, callId: string): AgentEvent | undefined {
+    const pointed = this.evidenceAt(runId, callId);
+    if (pointed) return pointed;
+    // A database written before the index existed has no pointers yet: resolve them once for this
+    // run (never for the whole history) and remember them for the next lookup.
+    let matched: AgentEvent | undefined;
+    const rows = this.db.prepare("SELECT sequence, payload FROM events WHERE run_id=? AND type IN ('tool_started','tool_finished') ORDER BY sequence").all(runId) as unknown as Array<EventRow & { sequence: number }>;
+    for (const row of rows) {
+      const event = this.crypto.decryptJson<AgentEvent>(row.payload, `event:${runId}:${row.sequence}`);
+      const call = toolCallId(event);
+      if (!call) continue;
+      this.rememberEvidence(runId, call, row.sequence);
+      if (event.type === "tool_finished" && call === callId) matched = event;
+    }
+    return matched;
+  }
+
+  private rememberEvidence(runId: string, callId: string, sequence: number): void {
+    this.db.prepare("INSERT INTO tool_evidence (run_id, call_id, sequence) VALUES (?, ?, ?) ON CONFLICT(run_id, call_id) DO UPDATE SET sequence=excluded.sequence")
+      .run(runId, callId, sequence);
+  }
+
+  private evidenceAt(runId: string, callId: string): AgentEvent | undefined {
+    const pointer = this.db.prepare("SELECT sequence FROM tool_evidence WHERE run_id=? AND call_id=?").get(runId, callId) as { sequence: number } | undefined;
+    if (!pointer) return undefined;
+    const row = this.db.prepare("SELECT sequence, payload FROM events WHERE run_id=? AND sequence=?").get(runId, pointer.sequence) as (EventRow & { sequence: number }) | undefined;
+    return row ? this.crypto.decryptJson<AgentEvent>(row.payload, `event:${runId}:${row.sequence}`) : undefined;
   }
 
   listEvents(runId: string, afterSequence = -1): AgentEvent[] {
@@ -355,6 +397,7 @@ export class HarnessDatabase {
       CREATE TABLE IF NOT EXISTS runs (id TEXT PRIMARY KEY, status TEXT NOT NULL, payload TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS events (run_id TEXT NOT NULL, sequence INTEGER NOT NULL, type TEXT NOT NULL, payload TEXT NOT NULL, created_at TEXT NOT NULL, PRIMARY KEY (run_id, sequence), FOREIGN KEY (run_id) REFERENCES runs(id));
       CREATE INDEX IF NOT EXISTS events_run_type ON events(run_id, type);
+      CREATE TABLE IF NOT EXISTS tool_evidence (run_id TEXT NOT NULL, call_id TEXT NOT NULL, sequence INTEGER NOT NULL, PRIMARY KEY (run_id, call_id));
       CREATE TABLE IF NOT EXISTS profiles (id TEXT PRIMARY KEY, payload TEXT NOT NULL, updated_at TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS approvals (id TEXT PRIMARY KEY, payload TEXT NOT NULL, updated_at TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS memories (id TEXT PRIMARY KEY, payload TEXT NOT NULL, updated_at TEXT NOT NULL);

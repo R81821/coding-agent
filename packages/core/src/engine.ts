@@ -354,7 +354,8 @@ export class HarnessEngine extends EventEmitter {
           contract: { name: "read_evidence", description: "Read saved tool evidence by its original call ID; use offset and limit to page long output without rerunning commands.", inputSchema: { type: "object", properties: { id: { type: "string" }, offset: { type: "integer", minimum: 0 }, limit: { type: "integer", minimum: 1, maximum: 16000 } }, required: ["id"] }, risk: "read", idempotent: true, timeoutMs: 1000 },
           execute: async input => {
             const value = z.object({ id: z.string(), offset: z.number().int().min(0).default(0), limit: z.number().int().min(1).max(16000).default(6000) }).parse(input);
-            const event = this.deps.database.listEvents(spec.id).findLast(e => e.type === "tool_finished" && e.callId === value.id);
+            // Indexed lookup: the previous scan decrypted every event of the run on each call.
+            const event = this.deps.database.getToolEvidence(spec.id, value.id);
             if (!event || event.type !== "tool_finished") return { isError: true, output: { code: "evidence_not_found", id: value.id } };
             const text = JSON.stringify(event.output);
             return { output: { id: value.id, content: text.slice(value.offset, value.offset + value.limit), ...(text.length > value.offset + value.limit ? { nextOffset: value.offset + value.limit } : {}), isError: event.isError } };

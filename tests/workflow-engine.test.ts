@@ -18,7 +18,11 @@ async function runScenario(mode: "pass" | "local-failure" | "broader-failure" | 
   const root = await mkdtemp(join(tmpdir(), "harness-workflow-"));
   if (mode === "real-probe") {
     await promisify(execFileCallback)("git", ["init", "-q", root]);
-    await writeFile(join(root, ".git", "info", "exclude"), "db.sqlite\nkey.json\nskills/\n");
+    // The fixture keeps its database inside the workspace; a WAL database also writes `-wal`/`-shm`
+    // beside it, and those sidecars are large binary untracked files that would make the real
+    // git_diff report a truncated observation forever. Exclude the database and everything SQLite
+    // derives from it.
+    await writeFile(join(root, ".git", "info", "exclude"), "db.sqlite*\nkey.json\nskills/\n");
   }
   const vault = await VaultCrypto.open(join(root, "key.json"), "fixture-passphrase");
   const database = await HarnessDatabase.open(join(root, "db.sqlite"), vault);

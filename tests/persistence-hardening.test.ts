@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { existsSync } from "node:fs";
+import { existsSync, statSync } from "node:fs";
 import { mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -53,8 +53,8 @@ describe("v2 storage migration backs up v1 data instead of deleting it", () => {
   });
 });
 
-describe("sqlite flush debouncing", () => {
-  it("coalesces many writes into few file exports and flushes on close", async () => {
+describe("incremental writes instead of whole-database exports", () => {
+  it("does not copy the database while writing and folds the log back on close", async () => {
     const root = await mkdtemp(join(tmpdir(), "harness-flush-"));
     temporary.push(root);
     const path = join(root, "harness.sqlite");
@@ -64,10 +64,16 @@ describe("sqlite flush debouncing", () => {
       database.prepare("CREATE TABLE IF NOT EXISTS t (id INTEGER)").run();
       database.prepare("INSERT INTO t (id) VALUES (?)").run(index);
     }
-    expect(database.writeFlushes - before).toBeLessThanOrEqual(2);
-    await new Promise((resolveWait) => setTimeout(resolveWait, 700));
+    // The sql.js engine rewrote the entire file on a debounce timer; WAL appends changed pages and
+    // keeps the main file untouched, which is what makes this safe on a large database.
+    expect(database.writeFlushes - before).toBe(0);
+    expect(existsSync(`${path}-wal`)).toBe(true);
     database.close();
+    expect(database.writeFlushes - before).toBe(1);
     expect(existsSync(path)).toBe(true);
+    // A clean shutdown checkpoints the log away entirely, so the single file carries every row.
+    const log = `${path}-wal`;
+    expect(existsSync(log) ? statSync(log).size : 0).toBe(0);
   });
 });
 
