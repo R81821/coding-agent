@@ -1,6 +1,6 @@
 {
   "name": "@harness/persistence",
-  "version": "1.4.0-beta.1",
+  "version": "1.4.0-beta.2",
   "type": "module",
   "exports": "./src/index.ts",
   "dependencies": { "@harness/protocol": "workspace:*", "hash-wasm": "^4.12.0", "sql.js": "^1.13.0" }
