@@ -26,11 +26,15 @@ export class LightweightWorkflow extends CodingWorkflow {
   }
   override before(call: ToolCall, tool: ToolDefinition): string | undefined {
     if (this.state.taskMode !== "analysis") return;
-    if ((tool.assessRisk?.(call.input) ?? tool.contract.risk) === "read") return;
-    // Arbitrary local programs cannot guarantee read-only behavior. Exact Git queries
-    // remain subject to the original high-risk approval policy in the engine.
+    const risk = tool.assessRisk?.(call.input) ?? tool.contract.risk;
+    if (risk === "read") return;
+    // A probe is the one sanctioned way to run a local program during analysis: it executes inside
+    // an isolated probe directory outside the repository, its own artifacts never count as a
+    // repository change, and any change it makes to tracked content is still detected afterwards.
+    // Destructive commands, raw terminal commands and repository writes keep the original policy.
+    if (call.name === "probe" && risk !== "destructive") return;
     if (isReadOnlyGitQuery(call)) return;
-    return "analysis_mode_read_only: use read_file/search_files/git_diff; arbitrary scripts and repository writes require auto/change mode or an isolated probe.";
+    return "analysis_mode_read_only: use read_file/search_files/git_diff or the probe tool; repository writes require auto/change mode.";
   }
   override starting(_call?: ToolCall, _tool?: ToolDefinition): void { /* Content effects determine revisions after execution. */ }
   applyEffect(effect: ExecutionEffect): void {
@@ -38,6 +42,13 @@ export class LightweightWorkflow extends CodingWorkflow {
       this.state.effect = "unknown";
       this.invalidate();
       this.move("inspect_result", "执行影响未确认；先用 git status/git diff 复查工作区，再继续或报告。");
+      return;
+    }
+    if (effect.kind === "probe") {
+      // An isolated probe is neither a read nor a repository write: record it as such so the run can
+      // tell an experiment apart from an inspection, and never let a probe bump the repository
+      // revision. Its artifacts live outside the workspace, so they cannot look like a change.
+      if (this.state.effect !== "unknown") this.state.effect = "probe";
       return;
     }
     if (effect.kind !== "repository_write") {

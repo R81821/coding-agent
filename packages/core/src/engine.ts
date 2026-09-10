@@ -1,8 +1,9 @@
 import { z } from "zod";
+import { mkdir } from "node:fs/promises";
 import { LightweightWorkflow } from "./lightweight-workflow.js";
 import { snapshotWorkspace, compareWorkspace } from "./workspace-impact.js";
-import { todoTool, verificationInput, validateVerificationInput } from "./runtime-tools.js";
-import { lightweightTools } from "@harness/tools";
+import { probeCommandScope, probeDirectory, probeInput, todoTool, validateProbeInput, validateVerificationInput, verificationInput } from "./runtime-tools.js";
+import { lightweightTools, runProcess } from "@harness/tools";
 import type { ToolDefinition } from "@harness/tools";
 import { AGENT_VERSION, promptCacheKey, repositoryBaseSnapshot } from "./prompt-cache.js";
 import { EventEmitter } from "node:events";
@@ -374,6 +375,32 @@ export class HarnessEngine extends EventEmitter {
             return { output: { evidenceId: run.id, passed: run.passed, revision: run.revision, results: run.results }, isError: !run.passed };
           },
         });
+        if (profile.toolNames.includes("terminal")) {
+          // A probe owns its authorization, so it needs its own definition for the permission check.
+          const probeTool: ToolDefinition = {
+            contract: { name: "probe", description: "Run one bounded temporary experiment or inspection: a count, a one-off interpreter script supplied through stdin, or an existing test subset. Probes run inside an isolated probe directory outside the repository, so scratch files belong there. Repository edits still require change mode, and every probe is compared against the repository before and after. The first probe of a given program is approved once per run for that program.", inputSchema: z.toJSONSchema(probeInput, { io: "input" }), risk: "high", idempotent: false, timeoutMs: 300_000 },
+            assessRisk: input => this.deps.tools.get("terminal")?.assessRisk?.(input) ?? "high",
+            handlesInputValidation: true,
+            selfAuthorized: true,
+            execute: async input => {
+              let value;
+              try { value = validateProbeInput(input); } catch (error) { state.toolCalls++; return { isError: true, output: { code: "probe_config_missing", error: String(error), recoverable: true } }; }
+              const call: ToolCall = { id: newId("probe"), name: "probe", input: { command: value.command } };
+              // The approval is scoped to the program, not to the exact arguments: an approved `python`
+              // probe covers further `python` probes in this run, while another program asks again.
+              const authorization = await this.authorizeTool(spec, state, call, { approvalTtlMs: Math.max(1_000, spec.budget.maxDurationMs - (Date.now() - state.startedAt)), commandPrefixes: [probeCommandScope(value.command)] }, probeTool);
+              if (authorization.block) return { isError: true, output: { code: "probe_denied", error: authorization.reason } };
+              const directory = probeDirectory(spec.id);
+              await mkdir(directory, { recursive: true });
+              const shell = process.platform === "win32" ? "powershell.exe" : "/bin/sh";
+              const args = process.platform === "win32" ? ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", value.command] : ["-lc", value.command];
+              const result = await runProcess(shell, args, { cwd: directory, signal: state.controller.signal, timeoutMs: Math.max(1, Math.min(value.timeoutMs, spec.budget.maxDurationMs - (Date.now() - state.startedAt))), ...(value.stdin !== undefined ? { stdin: value.stdin } : {}) });
+              const failed = result.exitCode !== 0 || result.timedOut;
+              return { output: { evidenceId: call.id, cwd: directory, result: compactObservation(result, 6000), isError: failed }, isError: failed };
+            },
+          };
+          runtimeTools.set("probe", probeTool);
+        }
       }
       const contracts = modern ? [...runtimeTools.values()].map(tool => tool.contract) : this.deps.tools.contracts(profile.toolNames);
       if (!modern && contracts.length) contracts.push(workflowTool.contract);
@@ -520,7 +547,10 @@ export class HarnessEngine extends EventEmitter {
             }
             if (before && workflow instanceof LightweightWorkflow) {
               const effect = compareWorkspace(before, await snapshotWorkspace(spec.workspacePath));
-              workflow.applyEffect(effect);
+              // A probe that left the repository untouched is recorded as a probe, never as a read: the
+              // run must be able to tell an isolated experiment from an inspection. A probe that did
+              // change tracked content stays a repository write.
+              workflow.applyEffect(modern && call.name === "probe" && effect.kind === "read" ? { kind: "probe", changedFiles: [] } : effect);
               if (effect.kind === "repository_write" || effect.kind === "unknown") progress.invalidate();
             }
             workflow.observe(call, result);
@@ -534,7 +564,10 @@ export class HarnessEngine extends EventEmitter {
             const output = {
               error: error instanceof Error ? error.message : String(error),
             };
-            if (before && workflow instanceof LightweightWorkflow) workflow.applyEffect(compareWorkspace(before, await snapshotWorkspace(spec.workspacePath)));
+            if (before && workflow instanceof LightweightWorkflow) {
+              const effect = compareWorkspace(before, await snapshotWorkspace(spec.workspacePath));
+              workflow.applyEffect(modern && call.name === "probe" && effect.kind === "read" ? { kind: "probe", changedFiles: [] } : effect);
+            }
             workflow.observe(call, { output, isError: true });
             const repetition = progress.record(call, tool, { output, isError: true });
             if (repetition && !stopReason && !modern) stop("repeated_observation", repetition);
@@ -833,11 +866,13 @@ export class HarnessEngine extends EventEmitter {
     spec: RunSpec,
     state: ActiveRun,
     call: ToolCall,
-    approvalTtlMs?: number,
+    options: { approvalTtlMs?: number; commandPrefixes?: string[] } = {},
+    definition?: ToolDefinition,
   ): Promise<{ block?: boolean; reason?: string; terminate?: boolean }> {
     state.toolCalls += 1;
     this.checkBudget(spec, state);
-    const tool = this.deps.tools.get(call.name);
+    // A runtime-owned tool is absent from the durable registry, so its caller supplies the definition.
+    const tool = definition ?? this.deps.tools.get(call.name);
     if (!tool)
       return { block: true, reason: `Unknown or disabled tool: ${call.name}` };
     const risk = tool.assessRisk?.(call.input) ?? tool.contract.risk;
@@ -857,7 +892,7 @@ export class HarnessEngine extends EventEmitter {
         toolNames: [call.name],
         pathGlobs: ["**"],
         commandPrefixes:
-          typeof call.input.command === "string" ? [call.input.command] : [],
+          options.commandPrefixes ?? (typeof call.input.command === "string" ? [call.input.command] : []),
         networkDomains:
           typeof call.input.url === "string"
             ? [new URL(call.input.url).hostname]
@@ -873,7 +908,7 @@ export class HarnessEngine extends EventEmitter {
           risk,
           reason: permission.reason,
           requestedGrant,
-          ...(approvalTtlMs !== undefined ? { ttlMs: approvalTtlMs } : {}),
+          ...(options.approvalTtlMs !== undefined ? { ttlMs: options.approvalTtlMs } : {}),
         },
         state.controller.signal,
       );
@@ -1069,7 +1104,7 @@ export class HarnessEngine extends EventEmitter {
         this.status(spec.id, state, "running");
         // Bound the wait by the run's own remaining duration: an approval nobody answers must not
         // hold a verification, and with it the whole run, open past its budget.
-        const authorization = await this.authorizeTool(spec, state, verificationCall, Math.max(1_000, spec.budget.maxDurationMs - (Date.now() - state.startedAt)));
+        const authorization = await this.authorizeTool(spec, state, verificationCall, { approvalTtlMs: Math.max(1_000, spec.budget.maxDurationMs - (Date.now() - state.startedAt)) });
         if (state.controller.signal.aborted) throw new Error("Run cancelled");
         if (state.status !== "verifying") this.status(spec.id, state, "verifying");
         if (authorization.block) {

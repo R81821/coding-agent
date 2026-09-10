@@ -26,6 +26,10 @@ type ModernOptions = {
   verificationItems?: boolean;
   /** Simulate the storage failure that killed the daemon mid-run: the whole-database export fails once. */
   failVerificationCheckpoint?: boolean;
+  /** Pre-authorize the probe tool so the fixture does not have to answer an approval. */
+  probeGrant?: boolean;
+  /** Answer every interactive request immediately, so a test can count how many were asked for. */
+  autoApprove?: boolean;
 };
 
 /**
@@ -33,12 +37,15 @@ type ModernOptions = {
  * `modern` is true and the lightweight tools plus runtime gates are what the model actually sees.
  */
 async function analysisRun(
-  respond: (request: ModelRequest, turn: number) => ProviderStreamEvent[],
+  respond: (request: ModelRequest, turn: number, workspace: string) => ProviderStreamEvent[],
   options: ModernOptions = {},
 ) {
   const root = await mkdtemp(join(tmpdir(), "harness-modern-140-"));
-  const vault = await VaultCrypto.open(join(root, "key.json"), "fixture-password");
-  const database = await HarnessDatabase.open(join(root, "db.sqlite"), vault);
+  // The database and key live outside the workspace, exactly like the shipped app keeps them in the
+  // user data directory: otherwise every checkpoint write would look like a repository change.
+  const state = await mkdtemp(join(tmpdir(), "harness-modern-140-state-"));
+  const vault = await VaultCrypto.open(join(state, "key.json"), "fixture-password");
+  const database = await HarnessDatabase.open(join(state, "db.sqlite"), vault);
   try {
     if (options.failVerificationCheckpoint) {
       const saveCheckpoint = database.saveCheckpoint.bind(database);
@@ -59,7 +66,7 @@ async function analysisRun(
       id: "fake", async listModels() { return [model]; }, async health() { return true; }, estimateCost() { return 0; },
       async *stream(request): AsyncIterable<ProviderStreamEvent> {
         requests.push(structuredClone(request));
-        yield* respond(request, requests.length);
+        yield* respond(request, requests.length, root);
       },
     };
     const tools = new ToolRegistry();
@@ -82,24 +89,37 @@ async function analysisRun(
       attachments: [],
       budget: profile.budget,
       // A pre-granted terminal keeps the verification's inner call out of the interactive approval flow.
-      grants: options.verificationItems
-        ? [{ toolNames: ["terminal"], pathGlobs: ["**"], commandPrefixes: ["fixture-verify"], networkDomains: [], maxRisk: "high" }]
-        : [],
+      grants: [
+        ...(options.verificationItems
+          ? [{ toolNames: ["terminal"], pathGlobs: ["**"], commandPrefixes: ["fixture-verify"], networkDomains: [], maxRisk: "high" as const }]
+          : []),
+        ...(options.probeGrant
+          ? [{ toolNames: ["probe"], pathGlobs: ["**"], commandPrefixes: [], networkDomains: [], maxRisk: "high" as const }]
+          : []),
+      ],
       createdAt: nowIso(),
       taskMode: options.taskMode ?? "analysis",
     };
     const result = await new Promise<Extract<AgentEvent, { type: "result" }>>((resolveResult, reject) => {
       const timer = setTimeout(() => { engine.cancel(run.id); reject(new Error("modern fixture timed out")); }, 10_000);
-      engine.on("event", (event: AgentEvent) => { if (event.type === "result") { clearTimeout(timer); resolveResult(event); } });
+      engine.on("event", (event: AgentEvent) => {
+        if (event.type === "result") { clearTimeout(timer); resolveResult(event); }
+        // Interactive requests are answered immediately when asked for; a test can then assert how
+        // many the runtime actually raised.
+        if (options.autoApprove && event.type === "approval_required") setTimeout(() => engine.approvals.decide(event.approvalId, true, "fixture"), 0);
+        if (options.autoApprove && event.type === "plan_approval_required") setTimeout(() => engine.decidePlan(event.planId, event.version, true, "fixture"), 0);
+      });
       engine.start(run, profile);
     });
     await new Promise<void>((done) => setImmediate(done));
-    return { result, requests, executions, events: database.listEvents(run.id), checkpoints: database.listCheckpoints(run.id) };
+    return { result, requests, executions, workspace: root, events: database.listEvents(run.id), checkpoints: database.listCheckpoints(run.id) };
   } finally {
     database.close(); vault.dispose();
-    const rel = relative(tmpdir(), root);
-    if (!rel || rel.startsWith("..") || isAbsolute(rel)) throw new Error("Unsafe fixture cleanup target");
-    await rm(root, { recursive: true, force: true });
+    for (const directory of [root, state]) {
+      const rel = relative(tmpdir(), directory);
+      if (!rel || rel.startsWith("..") || isAbsolute(rel)) throw new Error("Unsafe fixture cleanup target");
+      await rm(directory, { recursive: true, force: true });
+    }
   }
 }
 
@@ -123,7 +143,7 @@ describe("1.4.0 modern analysis path end to end", () => {
     expect(observed.events.some((event) => event.type === "tool_finished" && event.callId === "read" && event.isError === true)).toBe(false);
     // The model never sees the legacy large workflow tool, only the lightweight runtime set.
     for (const request of observed.requests) {
-      expect(request.tools.map((tool) => tool.name).sort()).toEqual(["read_evidence", "read_file", "run_verification", "terminal", "todo"]);
+      expect(request.tools.map((tool) => tool.name).sort()).toEqual(["probe", "read_evidence", "read_file", "run_verification", "terminal", "todo"]);
       for (const tool of request.tools) {
         const schema = tool.inputSchema as { properties?: Record<string, { default?: unknown }>; required?: string[] };
         const defaulted = Object.keys(schema.properties ?? {}).filter(key => schema.properties?.[key]?.default !== undefined);
@@ -220,5 +240,52 @@ describe("1.4.0 modern analysis path end to end", () => {
     expect(failureOutput).not.toContain("workingMemory");
     // The run reaches a result instead of hanging in a harness-level "running" state.
     expect(observed.result.status).toBe("completed");
+  });
+
+  it("runs a controlled probe in analysis mode from an isolated directory", async () => {
+    const observed = await analysisRun((_request, turn) => turn === 1
+      ? [call("probe-1", "probe", { command: "pwd" })]
+      : [say("探针结果已记录；未修改仓库。")],
+    { taskMode: "analysis", autoApprove: true });
+
+    // The gate admits the probe instead of rejecting it as an arbitrary script.
+    const output = observed.requests.map((request) => toolOutput(request, "probe-1")).join("");
+    expect(output).toContain("harness-agent-probe");
+    expect(output).not.toContain("analysis_mode_read_only");
+    // Its artifacts live outside the repository, so the run records a probe, never a write.
+    const effects = observed.checkpoints.map((checkpoint) => checkpoint.workflow?.effect);
+    expect(effects).toContain("probe");
+    expect(effects).not.toContain("repository_write");
+    const revisions = observed.checkpoints.map((checkpoint) => checkpoint.workflow?.revision);
+    expect(new Set(revisions)).toEqual(new Set([0]));
+    expect(observed.result.status).toBe("completed");
+  });
+
+  it("asks for one program-scoped probe approval per run instead of one per command", async () => {
+    const observed = await analysisRun((_request, turn) => turn === 1
+      ? [call("probe-1", "probe", { command: "echo one" })]
+      : turn === 2
+        ? [call("probe-2", "probe", { command: "echo two" })]
+        : [say("两个探针都已记录。")],
+    { taskMode: "analysis", autoApprove: true });
+
+    // The second probe of the same program reused the run grant: no second interruption.
+    expect(observed.events.filter((event) => event.type === "approval_required")).toHaveLength(1);
+    for (const id of ["probe-1", "probe-2"]) {
+      const result = observed.requests.map((request) => toolOutput(request, id)).join("");
+      expect(result).toContain("\"isError\":false");
+    }
+  });
+
+  it("still detects a probe that changes the repository", async () => {
+    const observed = await analysisRun((_request, turn, workspace) => turn === 1
+      ? [call("probe-1", "probe", { command: `echo changed > ${workspace.replaceAll("\\", "/")}/memory.ts` })]
+      : [say("探针修改了仓库文件，已记录为仓库写入。")],
+    { taskMode: "analysis", autoApprove: true });
+
+    // A probe cannot silently edit tracked content: the before/after comparison still sees it.
+    const revisions = observed.checkpoints.map((checkpoint) => checkpoint.workflow?.revision).filter((revision) => revision !== undefined);
+    expect(Math.max(...revisions)).toBeGreaterThan(0);
+    expect(observed.checkpoints.map((checkpoint) => checkpoint.workflow?.effect)).toContain("repository_write");
   });
 });
