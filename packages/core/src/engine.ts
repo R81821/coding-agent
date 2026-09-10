@@ -414,7 +414,11 @@ export class HarnessEngine extends EventEmitter {
           512,
           Math.ceil(JSON.stringify([...messages, ...conversationHistory]).length / 4),
         ),
-        estimatedOutputTokens: 4_096,
+        // A 4096 estimate used to be the binding constraint here, so the 8192 ceiling below was dead
+        // code and a long single answer (an analysis report, a probe script) hit the cap and came
+        // back as a truncated response. Ask for the ceiling; the reserve ratio still protects models
+        // with a small context window.
+        estimatedOutputTokens: 8_192,
       };
       const route = await this.router.route(profile, requirements);
       this.emitEvent(spec.id, state, {

@@ -150,7 +150,17 @@ export class OpenAIProvider extends HttpProvider {
           calls.push({ type: "function_call", call_id: call.id, name: call.name, arguments: canonicalJson(call.input) });
           yield { type: "tool_call", toolCall: call };
         }
-        if (["response.failed", "response.incomplete", "error"].includes(String(event.type))) throw new Error("Responses stream did not complete: " + canonicalJson(event.error ?? event.response?.error ?? event.response?.incomplete_details ?? event.type));
+        if (event.type === "response.failed" || event.type === "error") throw new Error("Responses stream did not complete: " + canonicalJson(event.error ?? event.response?.error ?? event.type));
+        // A truncated response is not a transport failure: the provider stopped a real answer because
+        // it ran into a limit, and its deltas were already streamed. Report which limit was hit
+        // instead of dumping raw JSON, so a caller can act (smaller steps, split the answer) rather
+        // than only seeing that something went wrong.
+        if (event.type === "response.incomplete") {
+          const reason = String(event.response?.incomplete_details?.reason ?? "unknown");
+          throw new Error(reason === "max_output_tokens"
+            ? "本轮输出被供应商截断：输出达到当前上限（max_output_tokens）。已生成的内容保留，请缩小单次输出或分步继续。"
+            : `本轮输出被供应商中止：${reason}`);
+        }
         if (event.type === "response.completed") {
           completedId = typeof event.response?.id === "string" ? event.response.id : "";
           if (event.response?.usage) {
