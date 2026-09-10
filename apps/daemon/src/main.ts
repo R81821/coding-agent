@@ -83,7 +83,7 @@ async function dispatchLine(line: string): Promise<DaemonResponse> {
 async function dispatch(request: DaemonRequest, target: HarnessRuntime): Promise<unknown> {
   switch (request.method) {
     case "health":
-      return { status: "ok", version: "1.4.0-beta.2", activeRuns: "available", providerIds: target.providerIds, connectors: [...connectors.keys()] };
+      return { status: "ok", version: "1.4.0-beta.3", activeRuns: "available", providerIds: target.providerIds, connectors: [...connectors.keys()] };
     case "sessions.create":
       return target.database.createSession(request.params);
     case "sessions.list":
