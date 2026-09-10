@@ -20,15 +20,37 @@ const terminalFixture: ToolDefinition = {
 const say = (delta: string): ProviderStreamEvent => ({ type: "text_delta", delta });
 const call = (id: string, name: string, input: Record<string, unknown>): ProviderStreamEvent => ({ type: "tool_call", toolCall: { id, name, input } });
 
+type ModernOptions = {
+  taskMode?: RunSpec["taskMode"];
+  /** Give the profile a real local check so `verify()` has an item to run. */
+  verificationItems?: boolean;
+  /** Simulate the storage failure that killed the daemon mid-run: the whole-database export fails once. */
+  failVerificationCheckpoint?: boolean;
+};
+
 /**
  * The 1.4.0 modern workflow is the production default: RunSpec omits workflowVersion, so
  * `modern` is true and the lightweight tools plus runtime gates are what the model actually sees.
  */
-async function analysisRun(respond: (request: ModelRequest, turn: number) => ProviderStreamEvent[]) {
+async function analysisRun(
+  respond: (request: ModelRequest, turn: number) => ProviderStreamEvent[],
+  options: ModernOptions = {},
+) {
   const root = await mkdtemp(join(tmpdir(), "harness-modern-140-"));
   const vault = await VaultCrypto.open(join(root, "key.json"), "fixture-password");
   const database = await HarnessDatabase.open(join(root, "db.sqlite"), vault);
   try {
+    if (options.failVerificationCheckpoint) {
+      const saveCheckpoint = database.saveCheckpoint.bind(database);
+      let failedOnce = false;
+      database.saveCheckpoint = (checkpoint: Parameters<typeof saveCheckpoint>[0]) => {
+        if (!failedOnce && checkpoint.reason === "verification") {
+          failedOnce = true;
+          throw new Error("disk full while exporting the database");
+        }
+        return saveCheckpoint(checkpoint);
+      };
+    }
     await writeFile(join(root, "memory.ts"), "export const memory = 1;\n");
     const requests: ModelRequest[] = [];
     const executions: string[] = [];
@@ -43,8 +65,29 @@ async function analysisRun(respond: (request: ModelRequest, turn: number) => Pro
     const tools = new ToolRegistry();
     for (const tool of [readFileFixture, terminalFixture]) tools.register({ ...tool, async execute(input, context) { executions.push(tool.contract.name); return tool.execute(input, context); } });
     const engine = new HarnessEngine({ database, providers: [provider], tools, memory: new MemoryService(database), skills: new SkillService(join(root, "skills")), projectTrust: new ProjectTrustService(database) });
-    const profile: Profile = { ...DEFAULT_PROFILE, allowedProviders: ["fake"], toolNames: ["read_file", "terminal"] };
-    const run: RunSpec = { id: newId("run"), sessionId: "modern-140", request: "检查 memory 模块并给出优化方案", workspacePath: root, profileId: profile.id, attachments: [], budget: profile.budget, grants: [], createdAt: nowIso(), taskMode: "analysis" };
+    const profile: Profile = {
+      ...DEFAULT_PROFILE,
+      allowedProviders: ["fake"],
+      toolNames: ["read_file", "terminal"],
+      ...(options.verificationItems
+        ? { verificationPolicy: { ...DEFAULT_PROFILE.verificationPolicy, items: [{ id: "unit", command: "fixture-verify", cwd: ".", timeoutMs: 1_000, stage: "local" as const, required: true, expectedExitCodes: [0] }] } }
+        : {}),
+    };
+    const run: RunSpec = {
+      id: newId("run"),
+      sessionId: "modern-140",
+      request: "检查 memory 模块并给出优化方案",
+      workspacePath: root,
+      profileId: profile.id,
+      attachments: [],
+      budget: profile.budget,
+      // A pre-granted terminal keeps the verification's inner call out of the interactive approval flow.
+      grants: options.verificationItems
+        ? [{ toolNames: ["terminal"], pathGlobs: ["**"], commandPrefixes: ["fixture-verify"], networkDomains: [], maxRisk: "high" }]
+        : [],
+      createdAt: nowIso(),
+      taskMode: options.taskMode ?? "analysis",
+    };
     const result = await new Promise<Extract<AgentEvent, { type: "result" }>>((resolveResult, reject) => {
       const timer = setTimeout(() => { engine.cancel(run.id); reject(new Error("modern fixture timed out")); }, 10_000);
       engine.on("event", (event: AgentEvent) => { if (event.type === "result") { clearTimeout(timer); resolveResult(event); } });
@@ -143,5 +186,39 @@ describe("1.4.0 modern analysis path end to end", () => {
     expect(failure).not.toContain("workingMemory");
     // read_evidence resolves that reference back to the original failure output.
     expect(toolOutput(observed.requests.at(-1), "recall")).toMatch(/no such file|ENOENT/i);
+  });
+
+  it("always finishes a verification the runtime aborts, instead of leaving the check pending", async () => {
+    // Live 1.4.0-beta.1 evidence: the daemon died while exporting the whole database during a
+    // verification. `verification_started` had no matching `verification_finished`, localCheck kept
+    // its default `pending` for the rest of the run, and the model reported a harness-level
+    // "running" state it then worked around with raw terminal calls.
+    const observed = await analysisRun((_request, turn) => turn === 1
+      ? [call("read", "read_file", { path: "memory.ts" })]
+      : turn === 2
+        ? [call("verify", "run_verification", { command: "fixture-verify", cwd: ".", timeoutMs: 1000, stage: "local" })]
+        : [say("验证因运行时存储故障未能完成。")],
+    { taskMode: "auto", verificationItems: true, failVerificationCheckpoint: true });
+
+    const started = observed.events.filter((event) => event.type === "verification_started");
+    const finished = observed.events.filter((event) => event.type === "verification_finished");
+    expect(started.length).toBeGreaterThan(0);
+    // Every started verification must reach a terminal record, whatever the failure.
+    expect(finished).toHaveLength(started.length);
+    const failure = finished.at(-1)?.verification;
+    expect(failure).toMatchObject({ outcome: "failed", id: started.at(-1)?.verificationRunId });
+    expect(failure?.skipReason).toContain("verification_runtime_error");
+    expect(failure?.results[0]?.output).toContain("disk full");
+    // A read-only task keeps `localCheck` pending on purpose (a failed probe is not a failed code
+    // check); the workflow moves to inspect_result so the model explains the unverified scope
+    // instead of waiting for a check that will never arrive.
+    expect(observed.checkpoints.some((checkpoint) => checkpoint.workflow?.phase === "inspect_result")).toBe(true);
+    // And the model still receives the short structured failure plus a retrievable reference.
+    const failureOutput = observed.requests.map((request) => toolOutput(request, "verify")).join("");
+    expect(failureOutput).toContain("evidenceId");
+    expect(failureOutput).toContain("disk full");
+    expect(failureOutput).not.toContain("workingMemory");
+    // The run reaches a result instead of hanging in a harness-level "running" state.
+    expect(observed.result.status).toBe("completed");
   });
 });

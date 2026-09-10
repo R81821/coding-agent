@@ -833,6 +833,7 @@ export class HarnessEngine extends EventEmitter {
     spec: RunSpec,
     state: ActiveRun,
     call: ToolCall,
+    approvalTtlMs?: number,
   ): Promise<{ block?: boolean; reason?: string; terminate?: boolean }> {
     state.toolCalls += 1;
     this.checkBudget(spec, state);
@@ -872,6 +873,7 @@ export class HarnessEngine extends EventEmitter {
           risk,
           reason: permission.reason,
           requestedGrant,
+          ...(approvalTtlMs !== undefined ? { ttlMs: approvalTtlMs } : {}),
         },
         state.controller.signal,
       );
@@ -966,6 +968,13 @@ export class HarnessEngine extends EventEmitter {
     return [...profile.verificationPolicy.items, ...(state.workflow?.state.verification ?? []).map((item, index) => ({ ...item, id: "task-check-" + index, required: true, expectedExitCodes: [0] }))];
   }
 
+  /**
+   * Every verification publishes exactly one started event and exactly one finished run. A budget,
+   * cancellation or storage failure inside the check loop used to escape before the finished event
+   * was emitted or the run was recorded, leaving `localCheck`/`broaderCheck` at their default
+   * `pending` for the rest of the run. The model then reported that as a harness-level "running"
+   * state, spent self-correction attempts on it and finally bypassed the tool with raw terminal calls.
+   */
   private async verify(
     spec: RunSpec,
     profile: Profile,
@@ -973,17 +982,57 @@ export class HarnessEngine extends EventEmitter {
     attempt: number,
     stage: "local" | "broader",
   ): Promise<VerificationRun> {
-    const startedAt = nowIso();
     const verificationRunId = newId("verify");
+    const startedAt = nowIso();
     this.emitEvent(spec.id, state, { type: "verification_started", verificationRunId, attempt });
+    try {
+      return await this.runVerification(spec, profile, state, attempt, stage, verificationRunId, startedAt);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      const item = this.verificationItems(profile, state).find(entry => (entry.stage ?? "local") === stage);
+      const failure: VerificationRun = {
+        id: verificationRunId,
+        runId: spec.id,
+        attempt,
+        stage,
+        epoch: state.workflow?.state.epoch ?? "legacy",
+        revision: state.workflow?.state.revision ?? 0,
+        results: [{
+          itemId: item?.id ?? `${stage}-runtime-failure`,
+          command: item?.command ?? "(verification did not reach a command)",
+          cwd: item?.cwd ?? ".",
+          exitCode: null,
+          passed: false,
+          required: item?.required ?? true,
+          output: `verification_runtime_error: ${message}`,
+          durationMs: 0,
+          timedOut: false,
+        }],
+        passed: false,
+        outcome: "failed",
+        skipReason: `verification_runtime_error: ${message}`,
+        startedAt,
+        finishedAt: nowIso(),
+      };
+      this.publishVerification(spec, state, failure);
+      throw error;
+    }
+  }
+
+  private async runVerification(
+    spec: RunSpec,
+    profile: Profile,
+    state: ActiveRun,
+    attempt: number,
+    stage: "local" | "broader",
+    verificationRunId: string,
+    startedAt: string,
+  ): Promise<VerificationRun> {
     const items = this.verificationItems(profile, state).filter(item => (item.stage ?? "local") === stage);
     if (items.length === 0 || (stage === "broader" && state.workflow?.state.broaderPolicy === "disabled")) {
       const allowedSkip = stage === "broader" ? state.workflow?.state.broaderPolicy !== "required" : !state.workflow?.needsChange;
       const verification: VerificationRun = { id: verificationRunId, runId: spec.id, attempt, stage, epoch: state.workflow?.state.epoch ?? "legacy", revision: state.workflow?.state.revision ?? 0, results: [], passed: false, outcome: allowedSkip ? "skipped" : "failed", skipReason: allowedSkip ? (stage === "local" ? "只读任务，无代码验证项" : state.workflow?.state.broaderPolicy === "disabled" ? "Profile 策略禁用扩大验证" : "可选扩大验证未配置") : "必需验证项未配置", startedAt, finishedAt: nowIso() };
-      state.workflow?.recordVerification(verification);
-      this.deps.database.saveVerificationRun(verification);
-      this.emitEvent(spec.id, state, { type: "verification_finished", verification });
-      this.saveCheckpoint(spec.id, state, "verification");
+      this.publishVerification(spec, state, verification);
       return verification;
     }
     const terminal = this.deps.tools.get("terminal");
@@ -1018,7 +1067,9 @@ export class HarnessEngine extends EventEmitter {
       const decision = this.permission.decide("terminal", verificationCall.input, risk, spec.grants, spec.workspacePath);
       if (!decision.allowed) {
         this.status(spec.id, state, "running");
-        const authorization = await this.authorizeTool(spec, state, verificationCall);
+        // Bound the wait by the run's own remaining duration: an approval nobody answers must not
+        // hold a verification, and with it the whole run, open past its budget.
+        const authorization = await this.authorizeTool(spec, state, verificationCall, Math.max(1_000, spec.budget.maxDurationMs - (Date.now() - state.startedAt)));
         if (state.controller.signal.aborted) throw new Error("Run cancelled");
         if (state.status !== "verifying") this.status(spec.id, state, "verifying");
         if (authorization.block) {
@@ -1047,11 +1098,21 @@ export class HarnessEngine extends EventEmitter {
     }
     const verification: VerificationRun = { id: verificationRunId, runId: spec.id, attempt, stage, epoch: state.workflow?.state.epoch ?? "legacy", revision: state.workflow?.state.revision ?? 0, results, passed: results.length === items.length && results.every(result => result.passed) && (stage === "broader" || !state.workflow?.needsChange || results.some(result => result.required && result.passed)), startedAt, finishedAt: nowIso() };
     verification.outcome = verification.passed ? "passed" : "failed";
-    state.workflow?.recordVerification(verification);
+    this.publishVerification(spec, state, verification);
+    return verification;
+  }
+
+  /**
+   * Publish a terminal verification run: persist it, emit the finished event, record it on the
+   * workflow and checkpoint. The finished event is emitted before the workflow record, and the
+   * checkpoint is best-effort, so neither a stale epoch/revision nor a storage failure can swallow
+   * the event and leave a check pending for the rest of the run.
+   */
+  private publishVerification(spec: RunSpec, state: ActiveRun, verification: VerificationRun): void {
     this.deps.database.saveVerificationRun(verification);
     this.emitEvent(spec.id, state, { type: "verification_finished", verification });
-    this.saveCheckpoint(spec.id, state, "verification");
-    return verification;
+    try { state.workflow?.recordVerification(verification); } catch { /* a stale result stays unrecorded */ }
+    try { this.saveCheckpoint(spec.id, state, "verification"); } catch { /* the run survives a failed checkpoint */ }
   }
 
   private saveCheckpoint(runId: string, state: ActiveRun, reason: RunCheckpoint["reason"]): RunCheckpoint {
