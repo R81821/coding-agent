@@ -1,6 +1,6 @@
 {
   "name": "@harness/evals",
-  "version": "1.3.2",
+  "version": "1.4.0-beta.1",
   "type": "module",
   "exports": "./src/index.ts",
   "dependencies": { "@harness/persistence": "workspace:*", "@harness/protocol": "workspace:*", "@harness/providers": "workspace:*" }
