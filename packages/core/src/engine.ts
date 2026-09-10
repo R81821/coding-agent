@@ -1,3 +1,9 @@
+import { z } from "zod";
+import { LightweightWorkflow } from "./lightweight-workflow.js";
+import { snapshotWorkspace, compareWorkspace } from "./workspace-impact.js";
+import { todoTool, verificationInput, validateVerificationInput } from "./runtime-tools.js";
+import { lightweightTools } from "@harness/tools";
+import type { ToolDefinition } from "@harness/tools";
 import { AGENT_VERSION, promptCacheKey, repositoryBaseSnapshot } from "./prompt-cache.js";
 import { EventEmitter } from "node:events";
 import { createHash } from "node:crypto";
@@ -331,14 +337,46 @@ export class HarnessEngine extends EventEmitter {
             spec.id,
             48_000,
           );
-      const workflow = new CodingWorkflow(spec.request, (snapshot, detail) => {
+      const modern = spec.workflowVersion !== 1 && (!recovery?.workflow || recovery.workflow.schemaVersion >= 3);
+      const Workflow = modern ? LightweightWorkflow : CodingWorkflow;
+      const workflow = new Workflow(spec.request, (snapshot, detail) => {
         this.emitEvent(spec.id, state, { type: "workflow_updated", workflow: snapshot, detail });
-      }, recovery?.workflow, profile.verificationPolicy);
+      }, recovery?.workflow, profile.verificationPolicy, spec.taskMode ?? "auto");
       state.workflow = workflow;
       if (recovery?.pendingNonIdempotentToolCalls.length) workflow.fail("Execution state is unknown after restart. Inspect current repository state and diagnose before any new mutation or verification command.");
       const workflowTool = workflow.tool();
-      const contracts = this.deps.tools.contracts(profile.toolNames);
-      if (contracts.length) contracts.push(workflowTool.contract);
+      const runtimeTools = new Map<string, ToolDefinition>();
+      if (workflow instanceof LightweightWorkflow) {
+        for (const tool of lightweightTools(this.deps.tools, profile.toolNames)) runtimeTools.set(tool.contract.name, tool);
+        runtimeTools.set("todo", todoTool(workflow));
+        runtimeTools.set("read_evidence", {
+          contract: { name: "read_evidence", description: "Read saved tool evidence by its original call ID; use offset and limit to page long output without rerunning commands.", inputSchema: { type: "object", properties: { id: { type: "string" }, offset: { type: "integer", minimum: 0 }, limit: { type: "integer", minimum: 1, maximum: 16000 } }, required: ["id"] }, risk: "read", idempotent: true, timeoutMs: 1000 },
+          execute: async input => {
+            const value = z.object({ id: z.string(), offset: z.number().int().min(0).default(0), limit: z.number().int().min(1).max(16000).default(6000) }).parse(input);
+            const event = this.deps.database.listEvents(spec.id).findLast(e => e.type === "tool_finished" && e.callId === value.id);
+            if (!event || event.type !== "tool_finished") return { isError: true, output: { code: "evidence_not_found", id: value.id } };
+            const text = JSON.stringify(event.output);
+            return { output: { id: value.id, content: text.slice(value.offset, value.offset + value.limit), ...(text.length > value.offset + value.limit ? { nextOffset: value.offset + value.limit } : {}), isError: event.isError } };
+          },
+        });
+        if (profile.toolNames.includes("terminal")) runtimeTools.set("run_verification", {
+          contract: { name: "run_verification", description: "Run a verification command with cwd, timeoutMs and optional stdin. Runtime records real exit status and code fingerprint. Interpreter commands reading stdin require the script. Checks never become passed merely by updating todo.", inputSchema: z.toJSONSchema(verificationInput, { io: "input" }), risk: "high", idempotent: false, timeoutMs: 3600000 },
+          handlesInputValidation: true,
+          selfAuthorized: true,
+          execute: async input => {
+            let value;
+            try { value = validateVerificationInput(input); } catch (error) { state.toolCalls++; return { isError: true, output: { code: "verification_config_missing", error: String(error), recoverable: true } }; }
+            const terminal = this.deps.tools.get("terminal")!;
+            const blocked = workflow.before({ id: "check", name: "terminal", input: value }, terminal);
+            if (blocked) { state.toolCalls++; return { isError: true, output: { code: "analysis_mode_read_only", error: blocked } }; }
+            workflow.state.verification = [...workflow.state.verification.filter(item => item.stage !== value.stage), value];
+            const run = await this.verify(spec, profile, state, state.repairAttemptsUsed, value.stage);
+            return { output: { evidenceId: run.id, passed: run.passed, revision: run.revision, results: run.results }, isError: !run.passed };
+          },
+        });
+      }
+      const contracts = modern ? [...runtimeTools.values()].map(tool => tool.contract) : this.deps.tools.contracts(profile.toolNames);
+      if (!modern && contracts.length) contracts.push(workflowTool.contract);
       workflow.move(workflow.state.phase, recovery ? "恢复工作流；代码验证与评审需要重新执行" : "接收用户任务，准备理解目标");
       const requirements = {
         needsVision: spec.attachments.length > 0,
@@ -388,10 +426,10 @@ export class HarnessEngine extends EventEmitter {
         responsesContinuation: profile.responsesContinuation !== false,
         ...(conversationHistory.length ? { conversationHistory } : {}),
         contracts,
-        resolveTool: (name) => name === "update_workflow" ? workflowTool : this.deps.tools.get(name),
+        resolveTool: (name) => modern ? runtimeTools.get(name) : name === "update_workflow" ? workflowTool : this.deps.tools.get(name),
         externalSignal: state.controller.signal,
         maxOutputTokens: Math.min(8_192, requirements.estimatedOutputTokens, Math.max(1, Math.floor(route.model.capabilities.maxContextTokens * profile.contextPolicy.outputReserveRatio))),
-        parallelToolCalls: route.model.capabilities.parallelTools,
+        parallelToolCalls: modern ? false : route.model.capabilities.parallelTools,
         providerRetryPolicy: {
           maxAttempts: resiliencePolicy.maxProviderAttempts,
           baseDelayMs: resiliencePolicy.providerRetryBaseDelayMs,
@@ -402,14 +440,14 @@ export class HarnessEngine extends EventEmitter {
           projectBaseSnapshot: repositorySnapshot,
           approvedPlan: state.plan?.status === "approved" ? state.plan : undefined,
           permissionSnapshot: spec.grants,
-          workingMemory: { trust: "untrusted_tool", ...workflow.snapshot() },
+          workingMemory: { trust: "untrusted_tool", ...(workflow instanceof LightweightWorkflow ? workflow.projection() : workflow.snapshot()) },
           verificationPolicy: profile.verificationPolicy,
           missingVerificationStages: workflow.missingVerificationStages(),
           remainingToolCalls: Math.max(0, spec.budget.maxToolCalls - state.toolCalls),
           remainingTurns: Math.max(0, spec.budget.maxTurns - state.turns),
           repairAttemptsUsed: state.repairAttemptsUsed,
           remainingRepairAttempts: null,
-          recentObservations: { trust: "untrusted_tool", items: progress.snapshot() },
+          ...(modern ? {} : { recentObservations: { trust: "untrusted_tool", items: progress.snapshot() } }),
           guidance: spec.budget.maxToolCalls - state.toolCalls <= Math.max(4, Math.ceil(spec.budget.maxToolCalls * 0.2))
             ? "Budget is nearly exhausted. Synthesize concrete findings now. Do not restart repository exploration; clearly state unresolved scope."
             : "Reuse observations already collected; avoid repeated reads without new evidence.",
@@ -430,19 +468,35 @@ export class HarnessEngine extends EventEmitter {
             stop("tool_call_limit", "工具调用额度已用完，保留现有结果供复核。");
             return { block: true, terminate: true, reason: stopReason! };
           }
-          if (call.name === "update_workflow") { state.toolCalls += 1; return {}; }
-          const tool = this.deps.tools.get(call.name);
+          if (!modern && call.name === "update_workflow") { state.toolCalls += 1; return {}; }
+          const runtimeTool = modern ? runtimeTools.get(call.name) : undefined;
+          const registered = this.deps.tools.get(modern && call.name === "patch" ? "apply_patch" : call.name);
+          const tool = runtimeTool ?? registered;
           const blocked = tool && workflow.before(call, tool);
           if (blocked) { state.toolCalls += 1; return { block: true, reason: blocked }; }
-          return this.authorizeTool(spec, state, call);
+          if (runtimeTool && !registered) {
+            // Runtime-owned tools are absent from the durable registry, so the permission pipeline
+            // cannot authorize them. Only declared read risk, or a tool that runs its own
+            // authorization and budget accounting, may skip it — never a hardcoded name list.
+            if (runtimeTool.selfAuthorized === true) return {};
+            if ((runtimeTool.assessRisk?.(call.input) ?? runtimeTool.contract.risk) !== "read") {
+              state.toolCalls += 1;
+              return { block: true, reason: `Runtime tool ${call.name} is not read-only and does not manage its own authorization.` };
+            }
+            state.toolCalls += 1;
+            return {};
+          }
+          return this.authorizeTool(spec, state, call.name === "patch" ? { ...call, name: "apply_patch" } : call);
         },
         executeTool: async (call, tool, signal) => {
           this.emitEvent(spec.id, state, { type: "tool_started", call });
           const started = Date.now();
+          const measureEffect = modern && !["todo", "read_evidence", "run_verification"].includes(call.name) && ((tool.assessRisk?.(call.input) ?? tool.contract.risk) !== "read" || call.name === "git_diff");
+          const before = measureEffect ? await snapshotWorkspace(spec.workspacePath) : undefined;
           if (!tool.contract.idempotent) state.pendingNonIdempotent.set(call.id, call);
           if ((tool.assessRisk?.(call.input) ?? tool.contract.risk) !== "read" || call.name === "delegate") {
             state.hadSideEffect = true;
-            progress.invalidate();
+            if (!modern) progress.invalidate();
           }
           workflow.starting(call, tool);
           this.saveCheckpoint(spec.id, state, "tool_batch");
@@ -464,20 +518,26 @@ export class HarnessEngine extends EventEmitter {
               const search = result.output as { searchId?: unknown; results?: unknown[]; usage?: Record<string, unknown> };
               if (typeof search.searchId === "string") this.emitEvent(spec.id, state, { type: "search_usage", providerId: "parallel", searchId: search.searchId, resultCount: Array.isArray(search.results) ? search.results.length : 0, usage: search.usage ?? {} });
             }
+            if (before && workflow instanceof LightweightWorkflow) {
+              const effect = compareWorkspace(before, await snapshotWorkspace(spec.workspacePath));
+              workflow.applyEffect(effect);
+              if (effect.kind === "repository_write" || effect.kind === "unknown") progress.invalidate();
+            }
             workflow.observe(call, result);
             if (call.name === "update_workflow" && call.input.action === "request_verification" && !result.isError) verificationRequested = true;
             const repetition = progress.record(call, tool, result);
-            if (repetition && !stopReason) stop("repeated_observation", repetition);
+            if (repetition && !stopReason && !modern) stop("repeated_observation", repetition);
             state.pendingNonIdempotent.delete(call.id);
             this.saveCheckpoint(spec.id, state, "tool_batch");
-            return call.name === "terminal" ? { ...result, output: { observation: compactObservation(result.output), isError: result.isError === true } } : result;
+            return modern ? { ...result, output: { evidenceId: call.id, result: compactObservation(result.output, 6000), isError: result.isError === true } } : call.name === "terminal" ? { ...result, output: { observation: compactObservation(result.output), isError: result.isError === true } } : result;
           } catch (error) {
             const output = {
               error: error instanceof Error ? error.message : String(error),
             };
+            if (before && workflow instanceof LightweightWorkflow) workflow.applyEffect(compareWorkspace(before, await snapshotWorkspace(spec.workspacePath)));
             workflow.observe(call, { output, isError: true });
             const repetition = progress.record(call, tool, { output, isError: true });
-            if (repetition && !stopReason) stop("repeated_observation", repetition);
+            if (repetition && !stopReason && !modern) stop("repeated_observation", repetition);
             this.emitEvent(spec.id, state, {
               type: "tool_finished",
               callId: call.id,
@@ -591,13 +651,14 @@ export class HarnessEngine extends EventEmitter {
           try {
             for (;;) {
               this.checkBudget(spec, state);
+              if (workflow instanceof LightweightWorkflow) workflow.acceptFinalReport(finalText);
               if (workflow.baseCanFinish() && workflow.requiresIndependentReview && !workflow.canFinish()) {
                 if (state.turns >= spec.budget.maxTurns) { stop("model_turn_limit", "独立评审尚未完成，模型轮次额度已用完。"); return; }
                 const diffObservation = workflow.state.observations.findLast(item => item.tool === "git_diff" && item.epoch === workflow.state.epoch && item.revision === workflow.state.revision && !item.failed && item.complete);
                 const reviewEvents = this.deps.database.listEvents(spec.id);
                 const diffEvent = reviewEvents.findLast(event => event.type === "tool_finished" && event.callId === diffObservation?.id);
                 if (!diffEvent || diffEvent.type !== "tool_finished") { stopReason = "独立评审缺少完整 diff 记录。"; return; }
-                const checkIds = [workflow.state.localCheck.runId, workflow.state.broaderCheck.runId];
+                const checkIds = [workflow.state.localCheck.runId, workflow.state.broaderCheck.runId].filter(Boolean);
                 const verificationRuns = this.deps.database.listVerificationRuns(spec.id).filter(run => checkIds.includes(run.id) && run.epoch === workflow.state.epoch && run.revision === workflow.state.revision);
                 const evidenceIds = [...new Set([...workflow.state.requirementReceipts.flatMap(receipt => [...receipt.observationIds, receipt.diffObservationId]), ...workflow.state.reviewEvidenceIds])];
                 const observations = evidenceIds.map(id => {
@@ -624,6 +685,14 @@ export class HarnessEngine extends EventEmitter {
                 finally { this.saveCheckpoint(spec.id, state, "verification"); }
               }
               if (workflow.canFinish()) return;
+              if (modern) {
+                if (!workflow.needsChange && workflow.checksCurrent() && finalText.trim()) return;
+                if (state.turns >= spec.budget.maxTurns || state.toolCalls >= spec.budget.maxToolCalls) { stop("review_incomplete", "修改待验证或缺少当前证据"); return; }
+                await control.promptUntrusted(JSON.stringify({ workingMemory: (workflow as LightweightWorkflow).projection(), nextAction: workflow.checksCurrent() ? "Read git_diff, check the original requirements against the actual diff and test evidence, then report findings and limitations." : workflow.state.effect === "unknown" ? "The last execution effect is unconfirmed. Run a read-only repository recheck (git status --short or git diff --no-ext-diff) and resolve it before reporting; never claim the workspace is unchanged." : "Use run_verification with a relevant real test command (including stdin when required). Inspect and fix failing checks before reporting completion. Unconfirmed execution effects require repository inspection." }));
+                state.transcript = control.transcript();
+                if (stopReason) { await finishStoppedRun(); return; }
+                continue;
+              }
               const missingVerificationStages = workflow.missingVerificationStages();
               if (missingVerificationStages.length && !workflow.state.diagnosisRequired) {
                 if (state.toolCalls >= spec.budget.maxToolCalls) { stop("tool_call_limit", "工具调用额度已用完，仍缺少验证配置。"); return; }
@@ -931,7 +1000,15 @@ export class HarnessEngine extends EventEmitter {
         results.push({ itemId: item.id, command: item.command, cwd: item.cwd, exitCode: null, passed: false, required: item.required, output: outside ? "Verification cwd escapes the workspace." : "terminal tool is unavailable", durationMs: Date.now() - started, timedOut: false });
         continue;
       }
-      const verificationCall: ToolCall = { id: newId("verification-call"), name: "terminal", input: { command: item.command, timeoutMs: item.timeoutMs } };
+      try { validateVerificationInput(item); }
+      catch (error) {
+        // Missing configuration is a recoverable setup problem, not a code failure: report it as a
+        // structured item and keep the remaining items running instead of aborting the whole run.
+        const message = error instanceof Error ? error.message : String(error);
+        results.push({ itemId: item.id, command: item.command, cwd: item.cwd, exitCode: null, passed: false, required: item.required, output: message.startsWith("verification_config_missing") ? message : `verification_config_missing: ${message}`, durationMs: Date.now() - started, timedOut: false });
+        continue;
+      }
+      const verificationCall: ToolCall = { id: newId("verification-call"), name: "terminal", input: { command: item.command, timeoutMs: item.timeoutMs, ...(item.stdin !== undefined ? { stdin: item.stdin } : {}) } };
       const risk = terminal.assessRisk?.(verificationCall.input) ?? terminal.contract.risk;
       const decision = this.permission.decide("terminal", verificationCall.input, risk, spec.grants, spec.workspacePath);
       if (!decision.allowed) {
@@ -948,7 +1025,7 @@ export class HarnessEngine extends EventEmitter {
       this.saveCheckpoint(spec.id, state, "verification");
       try {
         const result = await terminal.execute(
-          { command: item.command, timeoutMs: Math.max(1, Math.min(item.timeoutMs, spec.budget.maxDurationMs - (Date.now() - state.startedAt))) },
+          { command: item.command, timeoutMs: Math.max(1, Math.min(item.timeoutMs, spec.budget.maxDurationMs - (Date.now() - state.startedAt))), ...(item.stdin !== undefined ? { stdin: item.stdin } : {}) },
           { runId: spec.id, workspacePath, grants: spec.grants, signal: state.controller.signal },
         );
         const output = result.output as { exitCode?: number; stdout?: string; stderr?: string; timedOut?: boolean };

@@ -57,7 +57,7 @@ describe("approval grants are persisted and reused within a run", () => {
     const engine = new HarnessEngine({ database, providers: [provider], tools, memory: new MemoryService(database), skills: new SkillService(join(root, "skills")), projectTrust: new ProjectTrustService(database) });
     tools.register(workflowReadTool);
     const profile = { ...DEFAULT_PROFILE, allowedProviders: ["fake"], toolNames: ["write_value", "read_file"] };
-    const run: RunSpec = { id: newId("run"), sessionId: "grant", request: "write beta twice", workspacePath: root, profileId: profile.id, attachments: [], budget: profile.budget, grants: [], createdAt: nowIso() };
+    const run: RunSpec = { workflowVersion: 1, id: newId("run"), sessionId: "grant", request: "write beta twice", workspacePath: root, profileId: profile.id, attachments: [], budget: profile.budget, grants: [], createdAt: nowIso() };
     let approvalRequests = 0;
     const result = new Promise<AgentEvent>((resolveResult, reject) => {
       const timeout = setTimeout(() => reject(new Error("run timed out")), 10_000);

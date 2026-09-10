@@ -120,7 +120,10 @@ export class CodingWorkflow {
   private record(id: string, tool: string, target: string, summary: string, failed: boolean, kind: "tool" | "verification" | "failure" = "tool", complete = true) {
     const entry = { complete, id, tool, target, summary: compactObservation(summary, 1200), failed, revision: this.state.revision, epoch: this.state.epoch, sequence: ++this.state.observationSequence, failureId: this.state.activeFailureId, kind, digest: createHash("sha256").update(summary).digest("hex") };
     this.state.observations.push(entry);
-    this.state.observations = this.state.observations.slice(-32);
+    // Legacy runs keep the small sliding window. Schema v3 keeps a much longer, still bounded
+    // history so the projection and checkpoints cannot grow without limit on long runs; anything
+    // older stays retrievable through read_evidence from the event log.
+    this.state.observations = this.state.observations.slice(this.state.schemaVersion < 3 ? -32 : -512);
     return entry;
   }
   private resolveSource(source: string): void {

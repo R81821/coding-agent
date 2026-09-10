@@ -58,6 +58,7 @@ export function descriptor(input: Partial<ModelDescriptor> & Pick<ModelDescripto
       maxContextTokens: 128_000,
       dataPolicy: input.providerId === "openai-compatible" ? "local" : input.providerId === "gateway" ? "gateway" : "cloud"
     },
+    pricingKnown: input.pricingKnown ?? (input.inputUsdPerMillion !== undefined && input.outputUsdPerMillion !== undefined),
     qualityScore: 0.8,
     inputUsdPerMillion: 0,
     outputUsdPerMillion: 0,

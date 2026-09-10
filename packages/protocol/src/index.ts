@@ -68,6 +68,7 @@ export const ContentPartSchema = z.discriminatedUnion("type", [
 export type ContentPart = z.infer<typeof ContentPartSchema>;
 
 export const ModelMessageSchema = z.object({
+  reasoningContent: z.string().optional(),
   role: z.enum(["system", "developer", "user", "assistant", "tool"]),
   content: z.array(ContentPartSchema)
 });
@@ -94,6 +95,7 @@ export const ProviderCapabilitiesSchema = z.object({
 export type ProviderCapabilities = z.infer<typeof ProviderCapabilitiesSchema>;
 
 export const ModelDescriptorSchema = z.object({
+  pricingKnown: z.boolean().optional(),
   providerId: z.string(),
   modelId: z.string(),
   displayName: z.string(),
@@ -114,6 +116,9 @@ export const ToolCallSchema = z.object({
 export type ToolCall = z.infer<typeof ToolCallSchema>;
 
 export const UsageSchema = z.object({
+  reasoningTokens: z.number().int().nonnegative().optional(),
+  costKnown: z.boolean().optional(),
+  purpose: z.enum(["main", "compaction", "review"]).optional(),
   cachedInputTokens: z.number().int().nonnegative().optional(),
   inputTokens: z.number().int().nonnegative(),
   outputTokens: z.number().int().nonnegative(),
@@ -161,6 +166,7 @@ export const PlanSpecSchema = z.object({
 export type PlanSpec = z.infer<typeof PlanSpecSchema>;
 
 export const VerificationItemSchema = z.object({
+  stdin: z.string().max(1_000_000).optional(),
   stage: z.enum(["local", "broader"]).optional(),
   id: z.string(),
   command: z.string().min(1),
@@ -180,6 +186,7 @@ export const VerificationMatrixSchema = z.object({
 export type VerificationMatrix = z.infer<typeof VerificationMatrixSchema>;
 
 export const VerificationResultSchema = z.object({
+  fingerprint: z.string().optional(),
   itemId: z.string(),
   command: z.string(),
   cwd: z.string(),
@@ -329,6 +336,7 @@ export const EvalResultSchema = z.object({
 export type EvalResult = z.infer<typeof EvalResultSchema>;
 
 export const ModelRequestSchema = z.object({
+  purpose: z.enum(["main", "compaction", "review"]).optional(),
   promptCacheKey: z.string().max(64).optional(),
   runId: z.string(),
   model: ModelDescriptorSchema,
@@ -428,6 +436,8 @@ export const RunBudgetSchema = z.object({
 export type RunBudget = z.infer<typeof RunBudgetSchema>;
 
 export const RunSpecSchema = z.object({
+  taskMode: z.enum(["auto", "analysis", "change"]).default("auto").optional(),
+  workflowVersion: z.union([z.literal(1), z.literal(2)]).optional(),
   id: z.string(),
   sessionId: z.string(),
   request: z.string().min(1),
@@ -474,12 +484,12 @@ export const ProfileSchema = z.object({
   budget: RunBudgetSchema,
   responsesContinuation: z.boolean().optional(),
   contextPolicy: z.object({
-    compactAtRatio: z.number().min(0.5).max(0.9).default(0.7),
-    maxAfterCompactionRatio: z.number().min(0.5).max(0.9).default(0.8),
+    workingContextTokens: z.number().int().min(4096).max(2_000_000).optional(), compactAtRatio: z.number().min(0.5).max(0.9).default(0.8),
+    maxAfterCompactionRatio: z.number().min(0.1).max(0.9).default(0.45),
     outputReserveRatio: z.number().min(0.1).max(0.4).default(0.2),
     retainRecentTurns: z.number().int().min(1).max(10).default(2),
     resendImagesOnVisualRecheckOnly: z.boolean().default(true)
-  }).default({ compactAtRatio: 0.7, maxAfterCompactionRatio: 0.8, outputReserveRatio: 0.2, retainRecentTurns: 2, resendImagesOnVisualRecheckOnly: true }),
+  }).default({ compactAtRatio: 0.8, maxAfterCompactionRatio: 0.45, outputReserveRatio: 0.2, retainRecentTurns: 2, resendImagesOnVisualRecheckOnly: true }),
   planningPolicy: z.object({
     requiredForWrites: z.boolean().default(true),
     requiredForCommands: z.boolean().default(true),
@@ -654,7 +664,7 @@ export const DEFAULT_PROFILE: Profile = ProfileSchema.parse({
   skillIds: [],
   sandbox: "auto",
   budget: { maxTurns: 64, maxToolCalls: 128, maxDurationMs: 1_800_000, maxUsd: 5 },
-  contextPolicy: { compactAtRatio: 0.7, maxAfterCompactionRatio: 0.8, outputReserveRatio: 0.2, retainRecentTurns: 2, resendImagesOnVisualRecheckOnly: true },
+  contextPolicy: { compactAtRatio: 0.8, maxAfterCompactionRatio: 0.45, outputReserveRatio: 0.2, retainRecentTurns: 2, resendImagesOnVisualRecheckOnly: true },
   planningPolicy: { requiredForWrites: true, requiredForCommands: true, requiredForExternalBrowserActions: true, requiredForDelegation: true, maxParallelAgents: 4 },
   verificationPolicy: { items: [], maxRepairAttempts: null },
   resiliencePolicy: { maxProviderAttempts: 3, providerRetryBaseDelayMs: 500, maxToolSelfCorrections: null },

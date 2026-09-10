@@ -87,7 +87,7 @@ describe("HarnessEngine", () => {
       allowedProviders: ["fake"],
       toolNames: [],
     };
-    const run: RunSpec = {
+    const run: RunSpec = { workflowVersion: 1,
       id: newId("run"),
       sessionId: "session-1",
       request: "Implement the feature",
@@ -217,7 +217,7 @@ describe("HarnessEngine", () => {
       allowedProviders: ["fake"],
       toolNames: ["inspect_value"],
     };
-    const run: RunSpec = {
+    const run: RunSpec = { workflowVersion: 1,
       id: newId("run"),
       sessionId: "session-pi-loop",
       request: "Inspect alpha",
@@ -289,7 +289,7 @@ describe("HarnessEngine", () => {
     const engine = new HarnessEngine({ database, providers: [provider], tools, memory: new MemoryService(database), skills: new SkillService(join(root, "skills")), projectTrust: new ProjectTrustService(database) });
     tools.register(workflowReadTool);
     const profile = { ...DEFAULT_PROFILE, allowedProviders: ["fake"], toolNames: ["write_value", "read_file"] };
-    const run: RunSpec = { id: newId("run"), sessionId: "plan", request: "write beta", workspacePath: root, profileId: profile.id, attachments: [], budget: profile.budget, grants: [{ toolNames: ["write_value"], pathGlobs: ["**"], commandPrefixes: [], networkDomains: [], maxRisk: "write" }], createdAt: nowIso() };
+    const run: RunSpec = { workflowVersion: 1, id: newId("run"), sessionId: "plan", request: "write beta", workspacePath: root, profileId: profile.id, attachments: [], budget: profile.budget, grants: [{ toolNames: ["write_value"], pathGlobs: ["**"], commandPrefixes: [], networkDomains: [], maxRisk: "write" }], createdAt: nowIso() };
     const result = new Promise<AgentEvent>((resolveResult) => engine.on("event", (event: AgentEvent) => {
       if (event.type === "plan_approval_required") {
         expect(executions).toBe(0);
@@ -378,7 +378,7 @@ describe("HarnessEngine", () => {
         maxToolSelfCorrections: 3,
       },
     };
-    const run: RunSpec = {
+    const run: RunSpec = { workflowVersion: 1,
       id: newId("run"),
       sessionId: "recovery",
       request: "Recover from transient and tool errors",
@@ -428,10 +428,10 @@ describe("HarnessEngine", () => {
     database.ensureProject(root, createdAt);
     database.createSession({ id: "session-main", workspacePath: root, profileId: "default", title: "Main", createdAt, updatedAt: createdAt });
     database.createSession({ id: "session-other", workspacePath: root, profileId: "default", title: "Other", createdAt, updatedAt: createdAt });
-    const previous: RunSpec = { id: "run-previous", sessionId: "session-main", request: "remember the blue widget", workspacePath: root, profileId: "default", attachments: [], budget: DEFAULT_PROFILE.budget, grants: [], createdAt };
+    const previous: RunSpec = { workflowVersion: 1, id: "run-previous", sessionId: "session-main", request: "remember the blue widget", workspacePath: root, profileId: "default", attachments: [], budget: DEFAULT_PROFILE.budget, grants: [], createdAt };
     database.saveRun(previous, "completed");
     database.appendEvent({ id: "event-previous", runId: previous.id, sequence: 0, at: createdAt, type: "result", text: "the widget is stored in module alpha", status: "completed" });
-    const other: RunSpec = { ...previous, id: "run-other", sessionId: "session-other", request: "cross-session secret", createdAt: "2026-09-08T00:00:01.000Z" };
+    const other: RunSpec = { workflowVersion: 1, ...previous, id: "run-other", sessionId: "session-other", request: "cross-session secret", createdAt: "2026-09-08T00:00:01.000Z" };
     database.saveRun(other, "completed");
     database.appendEvent({ id: "event-other", runId: other.id, sequence: 0, at: other.createdAt, type: "result", text: "must stay isolated", status: "completed" });
 
@@ -449,7 +449,7 @@ describe("HarnessEngine", () => {
     };
     const engine = new HarnessEngine({ database, providers: [provider], tools: new ToolRegistry(), memory: new MemoryService(database), skills: new SkillService(join(root, "skills")), projectTrust: new ProjectTrustService(database) });
     const profile = { ...DEFAULT_PROFILE, allowedProviders: ["fake"], toolNames: [] };
-    const current: RunSpec = { ...previous, id: "run-current", request: "where is it?", createdAt: "2026-09-08T00:00:02.000Z", attachments: [{ id: "attachment-current", sha256: "a".repeat(64), mimeType: "image/png", byteLength: 10, encryptedPath: "fixture", source: "clipboard", trust: "untrusted_attachment", allowedProviders: ["fake"], createdAt }] };
+    const current: RunSpec = { workflowVersion: 1, ...previous, id: "run-current", request: "where is it?", createdAt: "2026-09-08T00:00:02.000Z", attachments: [{ id: "attachment-current", sha256: "a".repeat(64), mimeType: "image/png", byteLength: 10, encryptedPath: "fixture", source: "clipboard", trust: "untrusted_attachment", allowedProviders: ["fake"], createdAt }] };
     const result = new Promise<AgentEvent>((resolveResult, reject) => {
       const timeout = setTimeout(() => reject(new Error("run timed out")), 5_000);
       engine.on("event", (event: AgentEvent) => {

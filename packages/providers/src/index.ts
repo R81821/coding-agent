@@ -1,5 +1,6 @@
 import { AnthropicProvider, GeminiProvider, OpenAICompatibleProvider, OpenAIProvider } from "./adapters.js";
 import { descriptor, ModelRouter } from "./router.js";
+import type { ApiProtocol } from "./adapters.js";
 import type { ModelProvider, ProviderFactoryOptions } from "./types.js";
 
 export * from "./types.js";
@@ -15,6 +16,7 @@ export function createConfiguredProviders(options: ProviderFactoryOptions): Mode
     providers.push(
       new OpenAIProvider({
         id: "openai",
+        ...protocolOption(env.OPENAI_API_PROTOCOL),
         apiKey: env.OPENAI_API_KEY,
         baseUrl: env.OPENAI_BASE_URL ?? "https://api.openai.com/v1",
         resolveAttachment: options.attachmentResolver,
@@ -53,6 +55,7 @@ export function createConfiguredProviders(options: ProviderFactoryOptions): Mode
     providers.push(
       new OpenAICompatibleProvider({
         id: "openai-compatible",
+        ...protocolOption(env.OPENAI_COMPATIBLE_API_PROTOCOL),
         apiKey: env.OPENAI_COMPATIBLE_API_KEY ?? "local",
         baseUrl: env.OPENAI_COMPATIBLE_BASE_URL,
         resolveAttachment: options.attachmentResolver,
@@ -65,6 +68,7 @@ export function createConfiguredProviders(options: ProviderFactoryOptions): Mode
     providers.push(
       new OpenAICompatibleProvider({
         id: "gateway",
+        ...protocolOption(env.HARNESS_GATEWAY_API_PROTOCOL),
         apiKey: env.HARNESS_GATEWAY_TOKEN,
         baseUrl: `${env.HARNESS_GATEWAY_URL.replace(/\/$/, "")}/v1`,
         resolveAttachment: options.attachmentResolver,
@@ -78,4 +82,10 @@ export function createConfiguredProviders(options: ProviderFactoryOptions): Mode
 
 export function createRouter(options: ProviderFactoryOptions): ModelRouter {
   return new ModelRouter(createConfiguredProviders(options));
+}
+
+function protocolOption(value: string | undefined): { apiProtocol?: ApiProtocol } {
+  if (!value) return {};
+  if (value !== "chat_completions" && value !== "responses") throw new Error("API protocol must be chat_completions or responses");
+  return { apiProtocol: value };
 }

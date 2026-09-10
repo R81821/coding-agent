@@ -17,6 +17,9 @@ export const RequirementReceiptSchema = z.object({
 });
 const pendingCheck = { status: "pending" as const, revision: -1, epoch: "legacy", runId: "", reason: "" };
 export const WorkflowStateSchema = z.object({
+  taskMode: z.enum(["auto", "analysis", "change"]).optional(),
+  effect: z.enum(["read", "probe", "repository_write", "unknown"]).optional(),
+  todos: z.array(z.object({ id: z.string().min(1).max(100), text: z.string().min(1).max(300), status: z.enum(["pending", "in_progress", "completed", "cancelled"]) })).max(20).optional(),
   schemaVersion: z.number().default(2), epoch: z.string().default("legacy"), observationSequence: z.number().default(0),
   activity: z.string().default(""), requirementIds: z.array(z.string()).default([]),
   requirementReceipts: z.array(RequirementReceiptSchema).default([]), reviewEvidenceIds: z.array(z.string()).default([]),
@@ -33,7 +36,7 @@ export const WorkflowStateSchema = z.object({
   context: z.string(),
   plan: z.array(z.string()),
   hypotheses: z.array(z.object({ alternatives: z.array(z.string()).optional(), experiment: z.object({ question: z.string(), expectedResults: z.array(z.string()), observationIds: z.array(z.string()) }).optional(), cause: z.string(), evidenceIds: z.array(z.string()), revision: z.number() })),
-  verification: z.array(z.object({ stage: z.enum(["local", "broader"]), command: z.string(), cwd: z.string(), timeoutMs: z.number() })).default([]),
+  verification: z.array(z.object({ stage: z.enum(["local", "broader"]), command: z.string(), cwd: z.string(), timeoutMs: z.number(), stdin: z.string().optional() })).default([]),
   observations: z.array(z.object({ complete: z.boolean().default(true), sequence: z.number().default(0), epoch: z.string().default("legacy"), failureId: z.string().default(""), digest: z.string().default(""), kind: z.enum(["tool", "verification", "failure"]).default("tool"), id: z.string(), tool: z.string(), target: z.string(), summary: z.string(), failed: z.boolean(), revision: z.number() })),
   relevantFiles: z.array(z.string()),
   changedFiles: z.array(z.string()),

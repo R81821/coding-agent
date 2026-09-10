@@ -19,6 +19,11 @@ export interface ToolDefinition {
   execute(input: Record<string, unknown>, context: ToolContext): Promise<ToolResult>;
   /** Uses its own full input validation so errors can include state-specific recovery data. */
   handlesInputValidation?: boolean;
+  /**
+   * Runtime-owned tool that performs its own permission and budget accounting (e.g. verification),
+   * so the engine must not route it through the durable-registry permission pipeline.
+   */
+  selfAuthorized?: boolean;
   assessRisk?(input: Record<string, unknown>): RiskLevel;
 }
 

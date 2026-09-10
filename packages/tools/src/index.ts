@@ -20,3 +20,4 @@ export function createDefaultToolRegistry(): ToolRegistry {
     .register(gitDiffTool)
     .register(browserTool);
 }
+export * from "./lightweight.js";

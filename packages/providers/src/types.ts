@@ -8,7 +8,7 @@ export interface ResolvedAttachment {
 export type AttachmentResolver = (attachment: AttachmentRef) => Promise<ResolvedAttachment>;
 
 export interface ProviderStreamEvent {
-  type: "text_delta" | "tool_call" | "usage" | "reasoning_summary";
+  type: "text_delta" | "tool_call" | "usage" | "reasoning_summary" | "reasoning_delta";
   delta?: string;
   toolCall?: ToolCall;
   usage?: Usage;
@@ -50,6 +50,8 @@ export function providerEventToAgentEvent(
   base: Pick<AgentEvent, "id" | "runId" | "at" | "sequence">
 ): AgentEvent {
   switch (event.type) {
+    case "reasoning_delta":
+      throw new Error("Private reasoning must be retained in model history, never converted to a UI event");
     case "text_delta":
       return { ...base, type: "text_delta", delta: event.delta ?? "" };
     case "tool_call":

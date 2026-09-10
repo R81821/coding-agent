@@ -45,7 +45,7 @@ async function scenario(options: {
     for (const tool of definitions) tools.register({ ...tool, async execute(input, context) { executions.push(tool.contract.name); return tool.execute(input, context); } });
     const engine = new HarnessEngine({ database, providers: [provider], tools, memory: new MemoryService(database), skills: new SkillService(join(root, "skills")), projectTrust: new ProjectTrustService(database) });
     const profile: Profile = { ...DEFAULT_PROFILE, allowedProviders: ["fake"], toolNames: definitions.map((tool) => tool.contract.name), ...(options.verification ? { verificationPolicy: options.verification } : {}) };
-    const run: RunSpec = { id: newId("run"), sessionId: "test", request: "Analyze the repository and identify concrete issues; do not edit", workspacePath: root, profileId: profile.id, attachments: [], budget: { ...profile.budget, ...options.budget }, grants: [{ toolNames: ["terminal"], pathGlobs: ["**"], commandPrefixes: ["fixture"], networkDomains: [], maxRisk: "high" }], createdAt: nowIso() };
+    const run: RunSpec = { workflowVersion: 1, id: newId("run"), sessionId: "test", request: "Analyze the repository and identify concrete issues; do not edit", workspacePath: root, profileId: profile.id, attachments: [], budget: { ...profile.budget, ...options.budget }, grants: [{ toolNames: ["terminal"], pathGlobs: ["**"], commandPrefixes: ["fixture"], networkDomains: [], maxRisk: "high" }], createdAt: nowIso() };
     const result = await new Promise<Extract<AgentEvent, { type: "result" }>>((resolveResult, reject) => {
       const timer = setTimeout(() => { engine.cancel(run.id); reject(new Error("fixture timed out")); }, 8000);
       engine.on("event", (event: AgentEvent) => {
