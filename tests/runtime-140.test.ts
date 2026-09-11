@@ -58,15 +58,16 @@ describe("1.4 runtime boundaries", () => {
     // An ordinary read must never clear an unconfirmed effect.
     workflow.observe({ id: "read", name: "read_file", input: { path: "a.ts" } }, { output: "evidence" });
     expect(workflow.checksCurrent()).toBe(false);
-    // A successful repository recheck is what resolves it.
+    // A diff alone cannot establish coverage of skipped or unreadable files.
     workflow.observe({ id: "diff", name: "git_diff", input: {} }, { output: "diff --git a/a.ts b/a.ts" });
-    expect(workflow.state.effect).toBe("read");
+    expect(workflow.state.effect).toBe("unknown");
+    workflow.applyEffect({ kind: "read", changedFiles: [] });
     expect(workflow.checksCurrent()).toBe(true);
   });
   it("records an observed difference as a write even when the snapshot is incomplete", () => {
     const before = { files: { "a.ts": "one" }, complete: false, scanned: 2, skipped: 1, truncated: false };
     expect(compareWorkspace(before, { ...before, files: { "a.ts": "two" } })).toMatchObject({ kind: "repository_write", changedFiles: ["a.ts"] });
-    expect(compareWorkspace(before, { ...before }).kind).toBe("read");
+    expect(compareWorkspace(before, { ...before }).kind).toBe("unknown");
     expect(compareWorkspace(before, { ...before, skipped: 0 }).kind).toBe("unknown");
   });
 });
@@ -99,4 +100,14 @@ describe("1.4 tool schema contracts and evidence bounds", () => {
     for (let i = 0; i < 40; i++) legacy.observe({ id: `l${i}`, name: "read_file", input: { path: "a.ts" } }, { output: "evidence" });
     expect(legacy.state.observations).toHaveLength(32);
   });
+});
+
+it("does not mark requirements passed merely because a final answer exists", () => {
+ const workflow = new LightweightWorkflow("1. Fix memory\n2. Preserve compatibility", () => {}, undefined, {}, "change");
+ Object.assign(workflow.state, { localCheck: { status: "passed", epoch: workflow.state.epoch, revision: 0, runId: "verify", reason: "" }, diffRevision: 0 });
+ workflow.observe({ id: "diff", name: "git_diff", input: {} }, { output: "actual changes" });
+ workflow.acceptFinalReport("I have completed the task");
+ expect(workflow.state.requirementsRevision).toBe(-1);
+ expect(workflow.canFinish()).toBe(false);
+ expect(workflow.requiresIndependentReview).toBe(true);
 });

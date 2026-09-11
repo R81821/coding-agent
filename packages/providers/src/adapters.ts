@@ -5,6 +5,11 @@ import { authHeaders, parseSse } from "./http.js";
 import type { AttachmentResolver, ModelProvider, ProviderStreamEvent } from "./types.js";
 import { normalizeToolMessageSequence } from "./tool-history.js";
 
+export class ProviderOutputTruncatedError extends Error {
+  readonly code = "provider_output_truncated";
+  constructor(reason: string) { super("本轮输出被供应商截断：输出达到当前上限（" + reason + "）。已生成的内容保留，请缩小单次输出或分步继续。"); this.name = "ProviderOutputTruncatedError"; }
+}
+
 export type ApiProtocol = "chat_completions" | "responses";
 
 export interface AdapterConfig {
@@ -157,9 +162,13 @@ export class OpenAIProvider extends HttpProvider {
         // than only seeing that something went wrong.
         if (event.type === "response.incomplete") {
           const reason = String(event.response?.incomplete_details?.reason ?? "unknown");
-          throw new Error(reason === "max_output_tokens"
-            ? "本轮输出被供应商截断：输出达到当前上限（max_output_tokens）。已生成的内容保留，请缩小单次输出或分步继续。"
-            : `本轮输出被供应商中止：${reason}`);
+          const usage = event.response?.usage;
+          if (usage) {
+            const inputTokens = Number(usage.input_tokens ?? 0), outputTokens = Number(usage.output_tokens ?? 0);
+            yield { type: "usage", usage: { inputTokens, outputTokens, ...cacheUsage(inputTokens, usage.input_tokens_details?.cached_tokens), ...this.usageDetails(request, inputTokens, outputTokens, usage.output_tokens_details?.reasoning_tokens) } };
+          }
+          if (reason === "max_output_tokens") throw new ProviderOutputTruncatedError(reason);
+          throw new Error(`本轮输出被供应商中止：${reason}`);
         }
         if (event.type === "response.completed") {
           completedId = typeof event.response?.id === "string" ? event.response.id : "";
@@ -240,6 +249,7 @@ export class AnthropicProvider extends HttpProvider {
         const outputTokens = Number(event.usage.output_tokens ?? 0);
         yield { type: "usage", usage: { inputTokens, outputTokens, ...cacheUsage(inputTokens, usage.cache_read_input_tokens), ...this.usageDetails(request, inputTokens, outputTokens) } };
       }
+      if (event.type === "message_delta" && event.delta?.stop_reason === "max_tokens") throw new ProviderOutputTruncatedError("max_tokens");
     }
   }
 }
@@ -310,6 +320,7 @@ export class GeminiProvider extends HttpProvider {
         const outputTokens = Number(event.usageMetadata.candidatesTokenCount ?? 0);
         yield { type: "usage", usage: { inputTokens, outputTokens, ...cacheUsage(inputTokens, event.usageMetadata.cachedContentTokenCount), ...this.usageDetails(request, inputTokens, outputTokens, event.usageMetadata.thoughtsTokenCount) } };
       }
+      if (event.candidates?.some((candidate: any) => candidate.finishReason === "MAX_TOKENS")) throw new ProviderOutputTruncatedError("MAX_TOKENS");
     }
   }
 }
@@ -353,8 +364,10 @@ export class OpenAICompatibleProvider extends HttpProvider {
     });
     const pending = new Map<number, { id: string; name: string; json: string }>();
     let fallbackIndex = 0;
+    let truncated = false;
     for await (const raw of parseSse(response, signal)) {
       const event = raw as Record<string, any>;
+      if (event.choices?.[0]?.finish_reason === "length") truncated = true;
       const delta = event.choices?.[0]?.delta;
       if (typeof delta?.reasoning_content === "string") yield { type: "reasoning_delta", delta: delta.reasoning_content };
       if (typeof delta?.content === "string") yield { type: "text_delta", delta: delta.content };
@@ -366,7 +379,7 @@ export class OpenAICompatibleProvider extends HttpProvider {
         item.json += String(tool.function?.arguments ?? "");
         pending.set(index, item);
       }
-      if (event.choices?.[0]?.finish_reason === "tool_calls") {
+      if (!truncated && event.choices?.[0]?.finish_reason === "tool_calls") {
         for (const item of pending.values()) yield { type: "tool_call", toolCall: { id: item.id, name: item.name, input: safeJsonObject(item.json) } };
         pending.clear();
         fallbackIndex = 0;
@@ -377,6 +390,7 @@ export class OpenAICompatibleProvider extends HttpProvider {
         yield { type: "usage", usage: { inputTokens, outputTokens, ...cacheUsage(inputTokens, event.usage.prompt_tokens_details?.cached_tokens ?? event.usage.prompt_cache_hit_tokens), ...this.usageDetails(request, inputTokens, outputTokens, event.usage.completion_tokens_details?.reasoning_tokens) } };
       }
     }
+    if (truncated) throw new ProviderOutputTruncatedError("length");
   }
 }
 

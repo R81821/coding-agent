@@ -1,7 +1,9 @@
+import { ReadEvidenceCache } from "./read-evidence-cache.js";
 import { z } from "zod";
 import { mkdir } from "node:fs/promises";
 import { LightweightWorkflow } from "./lightweight-workflow.js";
-import { snapshotWorkspace, compareWorkspace } from "./workspace-impact.js";
+import { runIsolatedProbe } from "./isolated-probe.js";
+import { snapshotWorkspace, compareWorkspace, workspaceFingerprint, type WorkspaceSnapshot } from "./workspace-impact.js";
 import { probeCommandScope, probeDirectory, probeInput, todoTool, validateProbeInput, validateVerificationInput, verificationInput } from "./runtime-tools.js";
 import { lightweightTools, runProcess } from "@harness/tools";
 import type { ToolDefinition } from "@harness/tools";
@@ -127,9 +129,12 @@ interface ActiveRun {
   toolCalls: number;
   turns: number;
   spentUsd: number;
+  costKnown: boolean;
   inputTokens: number;
   outputTokens: number;
   transcript: ModelMessage[];
+  workspaceSnapshot?: WorkspaceSnapshot;
+  verifiedSnapshot?: WorkspaceSnapshot | undefined;
   plan: PlanSpec | undefined;
   pendingNonIdempotent: Map<string, ToolCall>;
   hadSideEffect: boolean;
@@ -172,6 +177,7 @@ export class HarnessEngine extends EventEmitter {
       toolCalls: 0,
       turns: 0,
       spentUsd: 0,
+      costKnown: true,
       inputTokens: 0,
       outputTokens: 0,
       transcript: [],
@@ -207,6 +213,7 @@ export class HarnessEngine extends EventEmitter {
       toolCalls: checkpoint.toolCalls,
       turns: checkpoint.turns,
       spentUsd: checkpoint.usage.estimatedUsd,
+      costKnown: checkpoint.usage.costKnown ?? false,
       inputTokens: checkpoint.usage.inputTokens,
       outputTokens: checkpoint.usage.outputTokens,
       transcript,
@@ -261,12 +268,13 @@ export class HarnessEngine extends EventEmitter {
   }
 
   /** Fold a finished child run's usage into the parent's budget. Throws when the parent budget is exceeded. */
-  reportChildUsage(parentRunId: string, usage: { inputTokens: number; outputTokens: number; estimatedUsd: number }): void {
+  reportChildUsage(parentRunId: string, usage: { inputTokens: number; outputTokens: number; estimatedUsd: number; costKnown?: boolean }): void {
     const parent = this.active.get(parentRunId);
     if (!parent) return;
     parent.inputTokens += usage.inputTokens;
     parent.outputTokens += usage.outputTokens;
     parent.spentUsd += usage.estimatedUsd;
+    parent.costKnown &&= usage.costKnown !== false;
     this.checkBudget(parent.spec, parent);
   }
 
@@ -371,7 +379,7 @@ export class HarnessEngine extends EventEmitter {
             const terminal = this.deps.tools.get("terminal")!;
             const blocked = workflow.before({ id: "check", name: "terminal", input: value }, terminal);
             if (blocked) { state.toolCalls++; return { isError: true, output: { code: "analysis_mode_read_only", error: blocked } }; }
-            workflow.state.verification = [...workflow.state.verification.filter(item => item.stage !== value.stage), value];
+            workflow.state.verification = [...workflow.state.verification.filter(item => !(item.stage === value.stage && item.command === value.command && item.cwd === value.cwd && item.stdin === value.stdin)), value];
             const run = await this.verify(spec, profile, state, state.repairAttemptsUsed, value.stage);
             return { output: { evidenceId: run.id, passed: run.passed, revision: run.revision, results: run.results }, isError: !run.passed };
           },
@@ -379,14 +387,14 @@ export class HarnessEngine extends EventEmitter {
         if (profile.toolNames.includes("terminal")) {
           // A probe owns its authorization, so it needs its own definition for the permission check.
           const probeTool: ToolDefinition = {
-            contract: { name: "probe", description: "Run one bounded temporary experiment or inspection: a count, a one-off interpreter script supplied through stdin, or an existing test subset. Probes run inside an isolated probe directory outside the repository, so scratch files belong there. Repository edits still require change mode, and every probe is compared against the repository before and after. The first probe of a given program is approved once per run for that program.", inputSchema: z.toJSONSchema(probeInput, { io: "input" }), risk: "high", idempotent: false, timeoutMs: 300_000 },
+            contract: { name: "probe", description: "Run one bounded temporary experiment or inspection: a count, a one-off interpreter script supplied through stdin, or an existing test subset. Analysis probes run in a preinstalled Docker image: /workspace is read-only, /probe holds scratch files, networking is disabled. Commands must use Linux syntax. Missing Docker/image returns a configuration error, never a host fallback. Auto/change probes run in a host temporary directory. Repository edits still require change mode, and every probe is compared against the repository before and after. The first probe of a given program is approved once per run for that program.", inputSchema: z.toJSONSchema(probeInput, { io: "input" }), risk: "high", idempotent: false, timeoutMs: 300_000 },
             assessRisk: input => this.deps.tools.get("terminal")?.assessRisk?.(input) ?? "high",
             handlesInputValidation: true,
             selfAuthorized: true,
             execute: async input => {
               let value;
               try { value = validateProbeInput(input); } catch (error) { state.toolCalls++; return { isError: true, output: { code: "probe_config_missing", error: String(error), recoverable: true } }; }
-              const call: ToolCall = { id: newId("probe"), name: "probe", input: { command: value.command } };
+              const call: ToolCall = { id: newId("probe"), name: "probe", input: { command: value.command, ...(value.stdin !== undefined ? { stdin: value.stdin } : {}) } };
               // The approval is scoped to the program, not to the exact arguments: an approved `python`
               // probe covers further `python` probes in this run, while another program asks again.
               const authorization = await this.authorizeTool(spec, state, call, { approvalTtlMs: Math.max(1_000, spec.budget.maxDurationMs - (Date.now() - state.startedAt)), commandPrefixes: [probeCommandScope(value.command)] }, probeTool);
@@ -395,7 +403,10 @@ export class HarnessEngine extends EventEmitter {
               await mkdir(directory, { recursive: true });
               const shell = process.platform === "win32" ? "powershell.exe" : "/bin/sh";
               const args = process.platform === "win32" ? ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", value.command] : ["-lc", value.command];
-              const result = await runProcess(shell, args, { cwd: directory, signal: state.controller.signal, timeoutMs: Math.max(1, Math.min(value.timeoutMs, spec.budget.maxDurationMs - (Date.now() - state.startedAt))), ...(value.stdin !== undefined ? { stdin: value.stdin } : {}) });
+              const options = { signal: state.controller.signal, timeoutMs: Math.max(1, Math.min(value.timeoutMs, spec.budget.maxDurationMs - (Date.now() - state.startedAt))), ...(value.stdin !== undefined ? { stdin: value.stdin } : {}) };
+              const result = spec.taskMode === "analysis"
+                ? await runIsolatedProbe({ ...options, workspace: spec.workspacePath, scratch: directory, command: value.command })
+                : await runProcess(shell, args, { ...options, cwd: directory });
               const failed = result.exitCode !== 0 || result.timedOut;
               return { output: { evidenceId: call.id, cwd: directory, result: compactObservation(result, 6000), isError: failed }, isError: failed };
             },
@@ -437,6 +448,7 @@ export class HarnessEngine extends EventEmitter {
       let summarizing = false;
       let verificationRequested = false;
       const progress = new RunProgress();
+      const readCache = new ReadEvidenceCache();
       if (state.turns >= spec.budget.maxTurns || (state.toolCalls > 0 && state.toolCalls >= spec.budget.maxToolCalls)) {
         this.status(spec.id, state, "review");
         const code = state.turns >= spec.budget.maxTurns ? "model_turn_limit" : "tool_call_limit";
@@ -490,6 +502,7 @@ export class HarnessEngine extends EventEmitter {
           state.turns += 1;
           return true;
         },
+        onModelRequestFinished: timing => { this.emitEvent(spec.id, state, { type: "model_request_finished", ...timing }); },
         beforeModelRequest: () => {
           this.checkBudget(spec, state);
           if (state.turns > spec.budget.maxTurns) throw new BudgetExceededError("model_turn_limit", "模型轮次额度已用完");
@@ -524,7 +537,7 @@ export class HarnessEngine extends EventEmitter {
           this.emitEvent(spec.id, state, { type: "tool_started", call });
           const started = Date.now();
           const measureEffect = modern && !["todo", "read_evidence", "run_verification"].includes(call.name) && ((tool.assessRisk?.(call.input) ?? tool.contract.risk) !== "read" || call.name === "git_diff");
-          const before = measureEffect ? await snapshotWorkspace(spec.workspacePath) : undefined;
+          const before = measureEffect ? state.workspaceSnapshot ?? await snapshotWorkspace(spec.workspacePath, signal) : undefined;
           if (!tool.contract.idempotent) state.pendingNonIdempotent.set(call.id, call);
           if ((tool.assessRisk?.(call.input) ?? tool.contract.risk) !== "read" || call.name === "delegate") {
             state.hadSideEffect = true;
@@ -533,12 +546,18 @@ export class HarnessEngine extends EventEmitter {
           workflow.starting(call, tool);
           this.saveCheckpoint(spec.id, state, "tool_batch");
           try {
-            const result = await tool.execute(call.input, {
+            const readIdentity = modern ? await readCache.identify(call, spec.workspacePath, signal) : undefined;
+            const reused = readCache.lookup(readIdentity);
+            const result = reused ?? await tool.execute(call.input, {
               runId: spec.id,
               workspacePath: spec.workspacePath,
               grants: spec.grants,
               signal,
             });
+            if (readIdentity && !reused) {
+              const afterRead = await readCache.identify(call, spec.workspacePath, signal);
+              if (afterRead?.digest === readIdentity.digest) readCache.remember(readIdentity, call.id, result);
+            }
             this.emitEvent(spec.id, state, {
               type: "tool_finished",
               callId: call.id,
@@ -551,7 +570,9 @@ export class HarnessEngine extends EventEmitter {
               if (typeof search.searchId === "string") this.emitEvent(spec.id, state, { type: "search_usage", providerId: "parallel", searchId: search.searchId, resultCount: Array.isArray(search.results) ? search.results.length : 0, usage: search.usage ?? {} });
             }
             if (before && workflow instanceof LightweightWorkflow) {
-              const effect = compareWorkspace(before, await snapshotWorkspace(spec.workspacePath));
+              const after = await snapshotWorkspace(spec.workspacePath, signal);
+              state.workspaceSnapshot = after;
+              const effect = compareWorkspace(before, after);
               // A probe that left the repository untouched is recorded as a probe, never as a read: the
               // run must be able to tell an isolated experiment from an inspection. A probe that did
               // change tracked content stays a repository write.
@@ -570,7 +591,9 @@ export class HarnessEngine extends EventEmitter {
               error: error instanceof Error ? error.message : String(error),
             };
             if (before && workflow instanceof LightweightWorkflow) {
-              const effect = compareWorkspace(before, await snapshotWorkspace(spec.workspacePath));
+              const after = await snapshotWorkspace(spec.workspacePath, signal);
+              state.workspaceSnapshot = after;
+              const effect = compareWorkspace(before, after);
               workflow.applyEffect(modern && call.name === "probe" && effect.kind === "read" ? { kind: "probe", changedFiles: [] } : effect);
             }
             workflow.observe(call, { output, isError: true });
@@ -613,6 +636,9 @@ export class HarnessEngine extends EventEmitter {
           this.saveCheckpoint(spec.id, state, reason);
         },
         onProviderRetry: (retry) => {
+          this.checkBudget(spec, state);
+          if (state.turns >= spec.budget.maxTurns) throw new BudgetExceededError("model_turn_limit", "模型重试额度已用完");
+          state.turns += 1;
           this.emitEvent(spec.id, state, {
             type: "provider_retry",
             ...retry,
@@ -672,6 +698,7 @@ export class HarnessEngine extends EventEmitter {
             });
           if (event.type === "usage" && event.usage) {
             state.spentUsd += event.usage.estimatedUsd;
+            state.costKnown &&= event.usage.costKnown !== false;
             state.inputTokens += event.usage.inputTokens;
             state.outputTokens += event.usage.outputTokens;
             this.emitEvent(spec.id, state, {
@@ -694,7 +721,15 @@ export class HarnessEngine extends EventEmitter {
           try {
             for (;;) {
               this.checkBudget(spec, state);
-              if (workflow instanceof LightweightWorkflow) workflow.acceptFinalReport(finalText);
+              if (workflow instanceof LightweightWorkflow) {
+                if (state.verifiedSnapshot && workflow.checksCurrent()) {
+                  const current = await snapshotWorkspace(spec.workspacePath, state.controller.signal);
+                  const effect = compareWorkspace(state.verifiedSnapshot, current);
+                  state.workspaceSnapshot = current;
+                  if (effect.kind !== "read") { workflow.applyEffect(effect); state.verifiedSnapshot = undefined; }
+                }
+                workflow.acceptFinalReport(finalText);
+              }
               if (workflow.baseCanFinish() && workflow.requiresIndependentReview && !workflow.canFinish()) {
                 if (state.turns >= spec.budget.maxTurns) { stop("model_turn_limit", "独立评审尚未完成，模型轮次额度已用完。"); return; }
                 const diffObservation = workflow.state.observations.findLast(item => item.tool === "git_diff" && item.epoch === workflow.state.epoch && item.revision === workflow.state.revision && !item.failed && item.complete);
@@ -720,14 +755,27 @@ export class HarnessEngine extends EventEmitter {
                     provider: route.provider, model: route.model, runId: spec.id, state: workflow.snapshot(), diff: diffEvent.output, observations, verificationRuns,
                     signal: AbortSignal.any([state.controller.signal, AbortSignal.timeout(Math.max(1, Math.min(60000, spec.budget.maxDurationMs - (Date.now() - state.startedAt))))]),
                     remainingUsd: Math.max(0, spec.budget.maxUsd - state.spentUsd),
-                    onUsage: usage => { state.spentUsd += usage.estimatedUsd; state.inputTokens += usage.inputTokens; state.outputTokens += usage.outputTokens; this.emitEvent(spec.id, state, { type: "usage", usage }); this.checkBudget(spec, state); },
+                    onModelRequestFinished: timing => { this.emitEvent(spec.id, state, { type: "model_request_finished", ...timing }); },
+                    onUsage: usage => { state.costKnown &&= usage.costKnown !== false; state.spentUsd += usage.estimatedUsd; state.inputTokens += usage.inputTokens; state.outputTokens += usage.outputTokens; this.emitEvent(spec.id, state, { type: "usage", usage }); this.checkBudget(spec, state); },
                   });
                   this.checkBudget(spec, state);
                   workflow.recordIndependentReview(result.passed, result.summary);
+                  if (result.requirements) for (const verdict of result.requirements) {
+                    const receipt = workflow.state.requirementReceipts.find(item => item.requirementId === verdict.id);
+                    if (receipt) receipt.summary = `${verdict.passed ? "Passed" : "Failed"}: ${verdict.evidence}`;
+                  }
                 } catch (error) { stop(error instanceof BudgetExceededError ? error.code : "review_incomplete", "独立评审未完成：" + (error instanceof Error ? error.message : String(error))); return; }
                 finally { this.saveCheckpoint(spec.id, state, "verification"); }
               }
-              if (workflow.canFinish()) return;
+              if (workflow.canFinish()) {
+                if (workflow instanceof LightweightWorkflow && state.verifiedSnapshot) {
+                  const finalSnapshot = await snapshotWorkspace(spec.workspacePath, state.controller.signal);
+                  const finalEffect = compareWorkspace(state.verifiedSnapshot, finalSnapshot);
+                  state.workspaceSnapshot = finalSnapshot;
+                  if (finalEffect.kind !== "read") { workflow.applyEffect(finalEffect); state.verifiedSnapshot = undefined; continue; }
+                }
+                return;
+              }
               if (modern) {
                 if (!workflow.needsChange && workflow.checksCurrent() && finalText.trim()) return;
                 if (state.turns >= spec.budget.maxTurns || state.toolCalls >= spec.budget.maxToolCalls) { stop("review_incomplete", "修改待验证或缺少当前证据"); return; }
@@ -1077,6 +1125,11 @@ export class HarnessEngine extends EventEmitter {
     }
     const terminal = this.deps.tools.get("terminal");
     const results: VerificationRun["results"] = [];
+    const modernWorkflow = state.workflow instanceof LightweightWorkflow ? state.workflow : undefined;
+    const codeBefore = modernWorkflow ? await snapshotWorkspace(spec.workspacePath, state.controller.signal) : undefined;
+    if (codeBefore && state.workspaceSnapshot && modernWorkflow) modernWorkflow.applyEffect(compareWorkspace(state.workspaceSnapshot, codeBefore));
+    if (codeBefore) state.workspaceSnapshot = codeBefore;
+    const codeFingerprint = codeBefore ? workspaceFingerprint(codeBefore) : undefined;
     for (const item of items) {
       this.checkBudget(spec, state);
       if (state.controller.signal.aborted) throw new Error("Run cancelled");
@@ -1106,7 +1159,7 @@ export class HarnessEngine extends EventEmitter {
       const risk = terminal.assessRisk?.(verificationCall.input) ?? terminal.contract.risk;
       const decision = this.permission.decide("terminal", verificationCall.input, risk, spec.grants, spec.workspacePath);
       if (!decision.allowed) {
-        this.status(spec.id, state, "running");
+        if (state.status !== "running") this.status(spec.id, state, "running");
         // Bound the wait by the run's own remaining duration: an approval nobody answers must not
         // hold a verification, and with it the whole run, open past its budget.
         const authorization = await this.authorizeTool(spec, state, verificationCall, { approvalTtlMs: Math.max(1_000, spec.budget.maxDurationMs - (Date.now() - state.startedAt)) });
@@ -1126,7 +1179,7 @@ export class HarnessEngine extends EventEmitter {
         );
         const output = result.output as { exitCode?: number; stdout?: string; stderr?: string; timedOut?: boolean };
         const exitCode = typeof output.exitCode === "number" ? output.exitCode : null;
-        results.push({ itemId: item.id, command: item.command, cwd: item.cwd, exitCode, passed: result.isError !== true && output.timedOut !== true && exitCode !== null && item.expectedExitCodes.includes(exitCode), required: item.required, output: `${output.stdout ?? ""}\n${output.stderr ?? ""}`.trim().slice(0, 64_000), durationMs: Date.now() - started, timedOut: output.timedOut === true });
+        results.push({ fingerprint: createHash("sha256").update(JSON.stringify({ codeFingerprint, command: item.command, cwd: workspacePath, stdin: item.stdin, platform: process.platform, node: process.version })).digest("hex"), itemId: item.id, command: item.command, cwd: item.cwd, exitCode, passed: result.isError !== true && output.timedOut !== true && exitCode !== null && item.expectedExitCodes.includes(exitCode), required: item.required, output: `${output.stdout ?? ""}\n${output.stderr ?? ""}`.trim().slice(0, 64_000), durationMs: Date.now() - started, timedOut: output.timedOut === true });
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         results.push({ itemId: item.id, command: item.command, cwd: item.cwd, exitCode: null, passed: false, required: item.required, output: message, durationMs: Date.now() - started, timedOut: /timed? out/i.test(message) });
@@ -1136,7 +1189,17 @@ export class HarnessEngine extends EventEmitter {
       }
       if (results.at(-1)?.passed === false) break;
     }
-    const verification: VerificationRun = { id: verificationRunId, runId: spec.id, attempt, stage, epoch: state.workflow?.state.epoch ?? "legacy", revision: state.workflow?.state.revision ?? 0, results, passed: results.length === items.length && results.every(result => result.passed) && (stage === "broader" || !state.workflow?.needsChange || results.some(result => result.required && result.passed)), startedAt, finishedAt: nowIso() };
+    if (codeBefore && modernWorkflow) {
+      const after = await snapshotWorkspace(spec.workspacePath, state.controller.signal);
+      state.workspaceSnapshot = after;
+      const effect = compareWorkspace(codeBefore, after);
+      modernWorkflow.applyEffect(effect);
+      if (effect.kind !== "read") {
+        for (const item of results) { item.passed = false; item.output += "\nVerification invalidated: repository changed during execution or coverage is incomplete."; }
+        state.verifiedSnapshot = undefined;
+      } else if (results.length && results.every(item => item.passed)) state.verifiedSnapshot = after;
+    }
+    const verification: VerificationRun = { ...(codeFingerprint ? { codeFingerprint } : {}), id: verificationRunId, runId: spec.id, attempt, stage, epoch: state.workflow?.state.epoch ?? "legacy", revision: state.workflow?.state.revision ?? 0, results, passed: results.length === items.length && results.every(result => result.passed) && (stage === "broader" || !state.workflow?.needsChange || results.some(result => result.required && result.passed)), startedAt, finishedAt: nowIso() };
     verification.outcome = verification.passed ? "passed" : "failed";
     this.publishVerification(spec, state, verification);
     return verification;
@@ -1164,7 +1227,7 @@ export class HarnessEngine extends EventEmitter {
       status: state.status,
       transcript: state.transcript,
       ...(state.plan ? { planVersion: state.plan.version } : {}),
-      usage: { inputTokens: state.inputTokens, outputTokens: state.outputTokens, estimatedUsd: state.spentUsd },
+      usage: { inputTokens: state.inputTokens, outputTokens: state.outputTokens, estimatedUsd: state.spentUsd, costKnown: state.costKnown },
       turns: state.turns,
       toolCalls: state.toolCalls,
       repairAttemptsUsed: state.repairAttemptsUsed,
@@ -1209,12 +1272,12 @@ export class HarnessEngine extends EventEmitter {
       sequence: state.sequence++,
     } as AgentEvent;
     this.deps.database.appendEvent(complete);
-    const profileId = this.deps.database.getRun(runId)?.spec.profileId ?? "unknown";
+    const profileId = state.spec.profileId;
     const span = this.tracer.startSpan(`harness.${complete.type}`, { attributes: { "harness.run_id": runId, "harness.profile_id": profileId, "harness.event_type": complete.type, "harness.sequence": complete.sequence } });
     if (complete.type === "error") span.setStatus({ code: SpanStatusCode.ERROR, message: complete.code });
     else span.setStatus({ code: SpanStatusCode.OK });
     span.end();
-    this.deps.database.appendTrace({ id: newId("trace"), runId, type: complete.type, at: complete.at, attributes: traceAttributes(complete) });
+    if (complete.type !== "text_delta") this.deps.database.appendTrace({ id: newId("trace"), runId, type: complete.type, at: complete.at, attributes: traceAttributes(complete) });
     this.emit("event", complete);
     return complete;
   }

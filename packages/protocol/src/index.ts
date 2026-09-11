@@ -200,6 +200,7 @@ export const VerificationResultSchema = z.object({
 export type VerificationResult = z.infer<typeof VerificationResultSchema>;
 
 export const VerificationRunSchema = z.object({
+  codeFingerprint: z.string().optional(),
   outcome: z.enum(["passed", "failed", "skipped"]).optional(),
   skipReason: z.string().optional(),
   epoch: z.string().optional(),
@@ -356,7 +357,7 @@ export const RunStopInfoSchema = z.object({
   usage: z.object({
     toolCalls: RunUsageCounterSchema, modelTurns: RunUsageCounterSchema,
     repairs: z.object({ used: z.number().int().nonnegative(), limit: z.null() }),
-    usd: RunUsageCounterSchema, durationMs: RunUsageCounterSchema,
+    usd: RunUsageCounterSchema.extend({ costKnown: z.boolean().optional() }), durationMs: RunUsageCounterSchema,
   }),
   pending: z.array(z.string()),
   lastFailure: z.object({ tool: z.string().optional(), message: z.string() }).optional(),
@@ -404,6 +405,7 @@ export const AgentEventSchema = z.discriminatedUnion("type", [
   z.object({ ...eventBase, type: z.literal("plugin_event"), pluginId: z.string(), action: z.string(), detail: z.string().optional() }),
   z.object({ ...eventBase, type: z.literal("search_usage"), providerId: z.string(), searchId: z.string(), resultCount: z.number().int().nonnegative(), usage: z.record(z.string(), z.unknown()).default({}) }),
   z.object({ ...eventBase, type: z.literal("recovery_event"), checkpointId: z.string().optional(), action: z.enum(["restored", "paused_non_idempotent", "failed"]), detail: z.string() }),
+  z.object({ ...eventBase, type: z.literal("model_request_finished"), purpose: z.enum(["main", "compaction", "review"]), durationMs: z.number().nonnegative(), succeeded: z.boolean() }),
   z.object({ ...eventBase, type: z.literal("usage"), usage: UsageSchema }),
   z.object({ ...eventBase, type: z.literal("error"), code: z.string(), message: z.string(), retryable: z.boolean() }),
   z.object({ ...eventBase, type: z.literal("result"), text: z.string(), status: RunStatusSchema, stop: RunStopInfoSchema.optional() })

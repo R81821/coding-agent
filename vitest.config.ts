@@ -17,6 +17,8 @@ export default defineConfig({
   },
   test: {
     environment: "node",
+    // Vault KDF and real SQLite/process fixtures contend heavily at machine-wide concurrency.
+    maxWorkers: 4,
     coverage: { reporter: ["text", "html"] }
   }
 });

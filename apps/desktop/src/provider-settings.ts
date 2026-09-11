@@ -4,6 +4,8 @@ import { dirname } from "node:path";
 export interface ProviderSettings {
   openaiCompatibleBaseUrl: string;
   openaiCompatibleModel: string;
+  apiProtocol?: "auto" | "responses" | "chat_completions";
+  maxContextTokens?: number;
 }
 
 export const DEFAULT_PROVIDER_SETTINGS: ProviderSettings = {
@@ -29,6 +31,10 @@ export function normalizeProviderSettings(input: unknown): ProviderSettings {
   if (model.length > 200) throw new Error("模型名称不能超过 200 个字符");
   if (Boolean(rawBaseUrl) !== Boolean(model))
     throw new Error("Base URL 与模型名称必须同时填写，或同时留空以禁用");
+  const protocol = value.apiProtocol;
+  if (protocol !== undefined && !["auto", "responses", "chat_completions"].includes(String(protocol))) throw new Error("API 协议必须为 auto、responses 或 chat_completions");
+  const capacity = value.maxContextTokens;
+  if (capacity !== undefined && (typeof capacity !== "number" || !Number.isSafeInteger(capacity) || capacity <= 0)) throw new Error("上下文容量必须为正整数 tokens");
   if (!rawBaseUrl) return DEFAULT_PROVIDER_SETTINGS;
   let url: URL;
   try {
@@ -45,6 +51,8 @@ export function normalizeProviderSettings(input: unknown): ProviderSettings {
   return {
     openaiCompatibleBaseUrl: url.toString().replace(/\/$/, ""),
     openaiCompatibleModel: model,
+    ...(protocol === undefined ? {} : { apiProtocol: protocol as ProviderSettings["apiProtocol"] & string }),
+    ...(capacity === undefined ? {} : { maxContextTokens: capacity as number }),
   };
 }
 
@@ -82,5 +90,7 @@ export function providerSettingsEnvironment(
   return {
     OPENAI_COMPATIBLE_BASE_URL: settings.openaiCompatibleBaseUrl,
     OPENAI_COMPATIBLE_MODEL: settings.openaiCompatibleModel,
+    ...(settings.apiProtocol ? { OPENAI_COMPATIBLE_API_PROTOCOL: settings.apiProtocol } : {}),
+    ...(settings.maxContextTokens ? { OPENAI_COMPATIBLE_MAX_CONTEXT_TOKENS: String(settings.maxContextTokens) } : {}),
   };
 }

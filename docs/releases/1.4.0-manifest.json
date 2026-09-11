@@ -1,0 +1,49 @@
+{
+  "version": "1.4.0",
+  "artifact": "Harness-Agent-1.4.0-x64.exe",
+  "platform": "win32-x64",
+  "bytes": 119306875,
+  "sha256": "e802561a1b9e364fb84f3bd109aa8d2cf548557e84bbdf428c0944539eec8066",
+  "authenticode": "NotSigned",
+  "validation": {
+    "testFiles": 57,
+    "testsPassed": 331,
+    "typecheck": "passed",
+    "lint": "passed",
+    "build": "passed",
+    "packageRuntime": {
+      "version": "1.4.0",
+      "electron": "37.3.1",
+      "node": "22.18.0",
+      "architecture": "x64",
+      "appFiles": "ok",
+      "rendererVersion": "1.4.0",
+      "daemonVersion": "1.4.0",
+      "daemonMarkers": "27/27",
+      "stylesheetMarkers": "2/2",
+      "sharpPngBytes": 95,
+      "sqliteWasm": "shipped",
+      "daemonMentionsSqlJsWasm": false,
+      "daemonSyntax": "ok",
+      "walRoundTrip": {
+        "journalMode": "wal",
+        "walBytes": 12392,
+        "rowReadBack": "committed"
+      }
+    },
+    "daemonHealth": {
+      "status": "ok",
+      "version": "1.4.0",
+      "activeRuns": "available",
+      "providerIds": [],
+      "connectors": []
+    },
+    "legacyMigration": "synthetic encrypted SQLite/sql.js fixtures passed; no live user-data migration"
+  },
+  "unmeasured": [
+    "three real-model performance comparisons",
+    "live Docker probe integration with preinstalled image",
+    "manual full desktop UI acceptance",
+    "physical power-loss and disk-full fault injection"
+  ]
+}

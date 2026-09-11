@@ -10,6 +10,8 @@ export function BuiPromptBar({
   disabled,
   busy,
   providerLabel,
+  taskMode = "auto",
+  onTaskModeChange,
   attachments,
   actions,
 }: {
@@ -20,6 +22,8 @@ export function BuiPromptBar({
   disabled: boolean;
   busy: boolean;
   providerLabel?: string;
+  taskMode?: "auto" | "analysis" | "change";
+  onTaskModeChange?: (mode: "auto" | "analysis" | "change") => void;
   attachments?: React.ReactNode;
   actions?: React.ReactNode;
 }) {
@@ -58,7 +62,7 @@ export function BuiPromptBar({
         }}
       />
       <div className="prompt-toolbar">
-        <div className="prompt-actions">{actions}</div>
+        <div className="prompt-actions">{actions}{onTaskModeChange && <select aria-label="任务模式" title="自动判断、只读分析或修改代码" value={taskMode} disabled={disabled} onChange={event => onTaskModeChange(event.target.value as "auto" | "analysis" | "change")} className="rounded-lg border border-line bg-transparent px-2 py-1 text-xs text-text"><option value="auto">自动判断</option><option value="analysis">只读分析</option><option value="change">修改代码</option></select>}</div>
         <div className="prompt-meta">
           {providerLabel && (
             <span className="prompt-model" title={providerLabel}>{providerLabel}</span>

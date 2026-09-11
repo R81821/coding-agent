@@ -4,7 +4,7 @@ export class BudgetExceededError extends Error {
   constructor(readonly code: RunStopInfo["code"], message: string) { super(message); }
 }
 
-interface StopUsage { toolCalls: number; turns: number; repairAttemptsUsed: number; spentUsd: number; startedAt: number }
+interface StopUsage { toolCalls: number; turns: number; repairAttemptsUsed: number; spentUsd: number; costKnown?: boolean; startedAt: number }
 export function buildRunStop(code: RunStopInfo["code"], message: string, spec: RunSpec, usage: StopUsage, workflow?: WorkflowState, summaryError?: string): RunStopInfo {
   const pending: string[] = [];
   if (workflow && (workflow.intent === "change" || workflow.revision > 0)) {
@@ -14,7 +14,7 @@ export function buildRunStop(code: RunStopInfo["code"], message: string, spec: R
     if (workflow.diffRevision !== workflow.revision) pending.push("当前修改 diff 检查");
     if (workflow.requirementsRevision !== workflow.revision) pending.push("需求核对");
     if (workflow.reviewedRevision !== workflow.revision) pending.push("最终评审");
-    if (workflow.reviewPolicy === "risk_based" && workflow.riskFlags.length && workflow.independentReview.status !== "passed") pending.push("独立评审");
+    if ((workflow.schemaVersion >= 3 || (workflow.reviewPolicy === "risk_based" && workflow.riskFlags.length)) && workflow.independentReview.status !== "passed") pending.push("独立评审");
   } else if (workflow) pending.push("分析结论与未检查范围");
   const lastFailure = workflow?.observations.findLast(item => item.failed && item.kind !== "verification");
   const failureMessage = lastFailure?.summary ?? workflow?.lastFailure;
@@ -24,7 +24,7 @@ export function buildRunStop(code: RunStopInfo["code"], message: string, spec: R
       toolCalls: { used: usage.toolCalls, limit: spec.budget.maxToolCalls },
       modelTurns: { used: usage.turns, limit: spec.budget.maxTurns },
       repairs: { used: usage.repairAttemptsUsed, limit: null },
-      usd: { used: usage.spentUsd, limit: spec.budget.maxUsd },
+      usd: { used: usage.spentUsd, limit: spec.budget.maxUsd, ...(usage.costKnown !== undefined ? { costKnown: usage.costKnown } : {}) },
       durationMs: { used: Math.max(0, Date.now() - usage.startedAt), limit: spec.budget.maxDurationMs },
     }, pending,
     ...(failureMessage ? { lastFailure: { message: failureMessage.slice(0, 1200), ...(lastFailure ? {tool: lastFailure.tool.slice(0, 120)} : {}) } } : {}),

@@ -48,14 +48,15 @@ export class ModelRouter {
   }
 }
 
-export function descriptor(input: Partial<ModelDescriptor> & Pick<ModelDescriptor, "providerId" | "modelId" | "displayName">): ModelDescriptor {
+export function descriptor(input: Partial<ModelDescriptor> & Pick<ModelDescriptor, "providerId" | "modelId" | "displayName"> & { maxContextTokens?: number }): ModelDescriptor {
+  const { maxContextTokens = 128_000, ...modelInput } = input;
   return {
     capabilities: {
       vision: true,
       tools: true,
       parallelTools: true,
       structuredOutput: true,
-      maxContextTokens: 128_000,
+      maxContextTokens,
       dataPolicy: input.providerId === "openai-compatible" ? "local" : input.providerId === "gateway" ? "gateway" : "cloud"
     },
     pricingKnown: input.pricingKnown ?? (input.inputUsdPerMillion !== undefined && input.outputUsdPerMillion !== undefined),
@@ -64,7 +65,7 @@ export function descriptor(input: Partial<ModelDescriptor> & Pick<ModelDescripto
     outputUsdPerMillion: 0,
     latencyScore: 0.7,
     healthy: true,
-    ...input
+    ...modelInput
   };
 }
 

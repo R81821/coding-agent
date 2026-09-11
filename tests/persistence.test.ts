@@ -2,11 +2,23 @@ import { afterEach, describe, expect, it } from "vitest";
 import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { ensureV2Storage, HarnessDatabase, VaultCrypto } from "@harness/persistence";
-import { DEFAULT_PROFILE, nowIso, type MemoryRecord, type Profile } from "@harness/protocol";
+import {
+  ensureV2Storage,
+  HarnessDatabase,
+  VaultCrypto,
+} from "@harness/persistence";
+import {
+  DEFAULT_PROFILE,
+  nowIso,
+  type MemoryRecord,
+  type Profile,
+} from "@harness/protocol";
 
 const temporary: string[] = [];
-afterEach(async () => { for (const path of temporary.splice(0)) await rm(path, { recursive: true, force: true }); });
+afterEach(async () => {
+  for (const path of temporary.splice(0))
+    await rm(path, { recursive: true, force: true });
+});
 
 describe("encrypted persistence", () => {
   it("rejects a wrong application passphrase", async () => {
@@ -15,14 +27,22 @@ describe("encrypted persistence", () => {
     const envelope = join(root, "key-envelope.json");
     const vault = await VaultCrypto.open(envelope, "correct-password");
     vault.dispose();
-    await expect(VaultCrypto.open(envelope, "incorrect-password")).rejects.toThrow(/Invalid application passphrase/);
+    await expect(
+      VaultCrypto.open(envelope, "incorrect-password"),
+    ).rejects.toThrow(/Invalid application passphrase/);
   });
 
   it("round-trips encrypted records and searches memory without plaintext indexes", async () => {
     const root = await mkdtemp(join(tmpdir(), "harness-db-test-"));
     temporary.push(root);
-    const vault = await VaultCrypto.open(join(root, "key-envelope.json"), "correct-password");
-    const database = await HarnessDatabase.open(join(root, "harness.sqlite"), vault);
+    const vault = await VaultCrypto.open(
+      join(root, "key-envelope.json"),
+      "correct-password",
+    );
+    const database = await HarnessDatabase.open(
+      join(root, "harness.sqlite"),
+      vault,
+    );
     const legacyProfile = { ...DEFAULT_PROFILE } as Partial<Profile>;
     delete legacyProfile.resiliencePolicy;
     database.saveProfile(legacyProfile as Profile);
@@ -36,7 +56,7 @@ describe("encrypted persistence", () => {
       status: "approved",
       pinned: false,
       approvedBy: "tester",
-      createdAt: nowIso()
+      createdAt: nowIso(),
     };
     database.saveMemory(memory);
     expect(database.listProfiles()[0]).toMatchObject({
@@ -47,12 +67,14 @@ describe("encrypted persistence", () => {
         maxToolSelfCorrections: null,
       },
     });
-    expect(database.searchMemories("permission engine", ["project-1"])).toMatchObject([{ id: "memory-1" }]);
+    expect(
+      database.searchMemories("permission engine", ["project-1"]),
+    ).toMatchObject([{ id: "memory-1" }]);
     database.close();
     vault.dispose();
   });
 
-  it("performs the destructive v2 reset exactly once and preserves provider settings", async () => {
+  it("marks v2 compatibility without clearing history and preserves provider settings", async () => {
     const root = await mkdtemp(join(tmpdir(), "harness-v2-reset-test-"));
     temporary.push(root);
     await writeFile(join(root, "harness.sqlite"), "v1", "utf8");
@@ -62,10 +84,15 @@ describe("encrypted persistence", () => {
     await writeFile(join(root, "provider-settings.json"), "preserve", "utf8");
     const first = await ensureV2Storage(root);
     expect(first.migrated).toBe(true);
-    await expect(readFile(join(root, "harness.sqlite"), "utf8")).rejects.toThrow();
-    expect(await readFile(join(root, "provider-settings.json"), "utf8")).toBe("preserve");
+    expect(await readFile(join(root, "harness.sqlite"), "utf8")).toBe("v1");
+    expect(await readFile(join(root, "provider-settings.json"), "utf8")).toBe(
+      "preserve",
+    );
     await writeFile(join(root, "harness.sqlite"), "v2", "utf8");
-    expect(await ensureV2Storage(root)).toMatchObject({ migrated: false, removed: [] });
+    expect(await ensureV2Storage(root)).toMatchObject({
+      migrated: false,
+      removed: [],
+    });
     expect(await readFile(join(root, "harness.sqlite"), "utf8")).toBe("v2");
   });
 });

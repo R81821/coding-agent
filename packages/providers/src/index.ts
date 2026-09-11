@@ -22,7 +22,7 @@ export function createConfiguredProviders(options: ProviderFactoryOptions): Mode
         resolveAttachment: options.attachmentResolver,
         ...(options.fetchImpl ? { fetchImpl: options.fetchImpl } : {}),
         models: [
-          descriptor({ providerId: "openai", modelId: env.OPENAI_MODEL ?? "gpt-5.4", displayName: "OpenAI", qualityScore: 0.95, latencyScore: 0.72, inputUsdPerMillion: 2.5, outputUsdPerMillion: 15 })
+          descriptor({ ...contextOption(env.OPENAI_MAX_CONTEXT_TOKENS), providerId: "openai", modelId: env.OPENAI_MODEL ?? "gpt-5.4", displayName: "OpenAI", qualityScore: 0.95, latencyScore: 0.72, inputUsdPerMillion: 2.5, outputUsdPerMillion: 15 })
         ]
       })
     );
@@ -35,7 +35,7 @@ export function createConfiguredProviders(options: ProviderFactoryOptions): Mode
         baseUrl: env.ANTHROPIC_BASE_URL ?? "https://api.anthropic.com/v1",
         resolveAttachment: options.attachmentResolver,
         ...(options.fetchImpl ? { fetchImpl: options.fetchImpl } : {}),
-        models: [descriptor({ providerId: "anthropic", modelId: env.ANTHROPIC_MODEL ?? "claude-sonnet-4-6", displayName: "Anthropic Claude", qualityScore: 0.93, latencyScore: 0.7, inputUsdPerMillion: 3, outputUsdPerMillion: 15 })]
+        models: [descriptor({ ...contextOption(env.ANTHROPIC_MAX_CONTEXT_TOKENS), providerId: "anthropic", modelId: env.ANTHROPIC_MODEL ?? "claude-sonnet-4-6", displayName: "Anthropic Claude", qualityScore: 0.93, latencyScore: 0.7, inputUsdPerMillion: 3, outputUsdPerMillion: 15 })]
       })
     );
   }
@@ -47,7 +47,7 @@ export function createConfiguredProviders(options: ProviderFactoryOptions): Mode
         baseUrl: env.GEMINI_BASE_URL ?? "https://generativelanguage.googleapis.com/v1beta",
         resolveAttachment: options.attachmentResolver,
         ...(options.fetchImpl ? { fetchImpl: options.fetchImpl } : {}),
-        models: [descriptor({ providerId: "gemini", modelId: env.GEMINI_MODEL ?? "gemini-2.5-pro", displayName: "Google Gemini", qualityScore: 0.9, latencyScore: 0.78, inputUsdPerMillion: 1.25, outputUsdPerMillion: 10 })]
+        models: [descriptor({ ...contextOption(env.GEMINI_MAX_CONTEXT_TOKENS), providerId: "gemini", modelId: env.GEMINI_MODEL ?? "gemini-2.5-pro", displayName: "Google Gemini", qualityScore: 0.9, latencyScore: 0.78, inputUsdPerMillion: 1.25, outputUsdPerMillion: 10 })]
       })
     );
   }
@@ -60,7 +60,7 @@ export function createConfiguredProviders(options: ProviderFactoryOptions): Mode
         baseUrl: env.OPENAI_COMPATIBLE_BASE_URL,
         resolveAttachment: options.attachmentResolver,
         ...(options.fetchImpl ? { fetchImpl: options.fetchImpl } : {}),
-        models: [descriptor({ providerId: "openai-compatible", modelId: env.OPENAI_COMPATIBLE_MODEL, displayName: "OpenAI-compatible", qualityScore: Number(env.OPENAI_COMPATIBLE_QUALITY ?? 0.75), latencyScore: Number(env.OPENAI_COMPATIBLE_LATENCY ?? 0.8) })]
+        models: [descriptor({ ...contextOption(env.OPENAI_COMPATIBLE_MAX_CONTEXT_TOKENS), providerId: "openai-compatible", modelId: env.OPENAI_COMPATIBLE_MODEL, displayName: "OpenAI-compatible", qualityScore: Number(env.OPENAI_COMPATIBLE_QUALITY ?? 0.75), latencyScore: Number(env.OPENAI_COMPATIBLE_LATENCY ?? 0.8) })]
       })
     );
   }
@@ -73,7 +73,7 @@ export function createConfiguredProviders(options: ProviderFactoryOptions): Mode
         baseUrl: `${env.HARNESS_GATEWAY_URL.replace(/\/$/, "")}/v1`,
         resolveAttachment: options.attachmentResolver,
         ...(options.fetchImpl ? { fetchImpl: options.fetchImpl } : {}),
-        models: [descriptor({ providerId: "gateway", modelId: env.HARNESS_GATEWAY_MODEL, displayName: "Team Gateway", qualityScore: 0.85, latencyScore: 0.65 })]
+        models: [descriptor({ ...contextOption(env.HARNESS_GATEWAY_MAX_CONTEXT_TOKENS), providerId: "gateway", modelId: env.HARNESS_GATEWAY_MODEL, displayName: "Team Gateway", qualityScore: 0.85, latencyScore: 0.65 })]
       })
     );
   }
@@ -85,7 +85,14 @@ export function createRouter(options: ProviderFactoryOptions): ModelRouter {
 }
 
 function protocolOption(value: string | undefined): { apiProtocol?: ApiProtocol } {
-  if (!value) return {};
+  if (!value || value === "auto") return {};
   if (value !== "chat_completions" && value !== "responses") throw new Error("API protocol must be chat_completions or responses");
   return { apiProtocol: value };
+}
+
+function contextOption(value: string | undefined): { maxContextTokens?: number } {
+  if (!value) return {};
+  const capacity = Number(value);
+  if (!/^\d+$/.test(value) || !Number.isSafeInteger(capacity) || capacity <= 0) throw new Error("Model context capacity must be a positive integer");
+  return { maxContextTokens: capacity };
 }

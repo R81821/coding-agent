@@ -22,6 +22,7 @@ const call = (id: string, name: string, input: Record<string, unknown>): Provide
 
 type ModernOptions = {
   taskMode?: RunSpec["taskMode"];
+  verificationWritesSource?: boolean;
   /** Give the profile a real local check so `verify()` has an item to run. */
   verificationItems?: boolean;
   /** Simulate the storage failure that killed the daemon mid-run: the whole-database export fails once. */
@@ -70,7 +71,7 @@ async function analysisRun(
       },
     };
     const tools = new ToolRegistry();
-    for (const tool of [readFileFixture, terminalFixture]) tools.register({ ...tool, async execute(input, context) { executions.push(tool.contract.name); return tool.execute(input, context); } });
+    for (const tool of [readFileFixture, terminalFixture]) tools.register({ ...tool, async execute(input, context) { executions.push(tool.contract.name); if (options.verificationWritesSource && tool.contract.name === "terminal") await writeFile(join(root, "memory.ts"), "export const memory = 2;\n"); return tool.execute(input, context); } });
     const engine = new HarnessEngine({ database, providers: [provider], tools, memory: new MemoryService(database), skills: new SkillService(join(root, "skills")), projectTrust: new ProjectTrustService(database) });
     const profile: Profile = {
       ...DEFAULT_PROFILE,
@@ -245,11 +246,11 @@ describe("1.4.0 modern analysis path end to end", () => {
     expect(observed.result.status).toBe("completed");
   });
 
-  it("runs a controlled probe in analysis mode from an isolated directory", async () => {
+  it("runs a permission-checked host probe in auto mode from a scratch directory", async () => {
     const observed = await analysisRun((_request, turn) => turn === 1
       ? [call("probe-1", "probe", { command: "pwd" })]
       : [say("探针结果已记录；未修改仓库。")],
-    { taskMode: "analysis", autoApprove: true });
+    { taskMode: "auto", autoApprove: true });
 
     // The gate admits the probe instead of rejecting it as an arbitrary script.
     const output = observed.requests.map((request) => toolOutput(request, "probe-1")).join("");
@@ -270,7 +271,7 @@ describe("1.4.0 modern analysis path end to end", () => {
       : turn === 2
         ? [call("probe-2", "probe", { command: "echo two" })]
         : [say("两个探针都已记录。")],
-    { taskMode: "analysis", autoApprove: true });
+    { taskMode: "auto", autoApprove: true });
 
     // The second probe of the same program reused the run grant: no second interruption.
     expect(observed.events.filter((event) => event.type === "approval_required")).toHaveLength(1);
@@ -280,15 +281,38 @@ describe("1.4.0 modern analysis path end to end", () => {
     }
   });
 
-  it("still detects a probe that changes the repository", async () => {
+  it("analysis probes cannot write repository source through host absolute paths", async () => {
     const observed = await analysisRun((_request, turn, workspace) => turn === 1
       ? [call("probe-1", "probe", { command: `echo changed > ${workspace.replaceAll("\\", "/")}/memory.ts` })]
-      : [say("探针修改了仓库文件，已记录为仓库写入。")],
+      : turn === 2 ? [call("read", "read_file", { path: "memory.ts" })] : [say("已读取源码；探针未通过，结论有未验证范围。")],
     { taskMode: "analysis", autoApprove: true });
-
-    // A probe cannot silently edit tracked content: the before/after comparison still sees it.
-    const revisions = observed.checkpoints.map((checkpoint) => checkpoint.workflow?.revision).filter((revision) => revision !== undefined);
-    expect(Math.max(...revisions)).toBeGreaterThan(0);
-    expect(observed.checkpoints.map((checkpoint) => checkpoint.workflow?.effect)).toContain("repository_write");
+    const revisions = observed.checkpoints.map(checkpoint => checkpoint.workflow?.revision ?? 0);
+    expect(Math.max(...revisions)).toBe(0);
+    expect(observed.requests.map(request => toolOutput(request, "read")).join("")).toContain("export const memory = 1");
   });
+});
+
+it("verification records fingerprints and rejects a command that edits source", async () => {
+ const observed = await analysisRun((_request, turn) => turn === 1 ? [call("check", "run_verification", {command:"fixture-verify"})] : [say("验证改变了文件，需要重新检查。")], { taskMode:"auto", verificationItems:true, verificationWritesSource:true });
+ const receipt = observed.events.find(e => e.type === "verification_finished");
+ expect(receipt?.type === "verification_finished" && receipt.verification.passed).toBe(false);
+ if (receipt?.type !== "verification_finished") throw new Error("Missing verification receipt");
+ expect(receipt.verification.codeFingerprint).toMatch(/^[a-f0-9]{64}$/);
+ expect(receipt.verification.results[0]?.fingerprint).toMatch(/^[a-f0-9]{64}$/);
+ expect(receipt.verification.results[0]?.output).toContain("Verification invalidated");
+ expect(receipt.verification.revision).toBeGreaterThan(0);
+});
+
+it("reuses unchanged file evidence without executing the read again", async () => {
+  const observed = await analysisRun((_request, turn) => turn <= 2 ? [call("read-" + turn, "read_file", { path: "memory.ts" })] : [say("analysis complete")]);
+  expect(toolOutput(observed.requests[1], "read-1")).toContain("export const memory");
+  expect(toolOutput(observed.requests[2], "read-2")).toContain("reusedEvidenceId");
+  const timings = observed.events.filter(event => event.type === "model_request_finished");
+  expect(timings).toHaveLength(observed.requests.length);
+  expect(timings.every(event => event.purpose === "main" && event.succeeded && event.durationMs >= 0)).toBe(true);
+});
+it("retains different verification commands within the same stage", async () => {
+  const observed = await analysisRun((_request, turn) => turn <= 2 ? [call("check-" + turn, "run_verification", { command: "fixture-check-" + turn, stage: "local" })] : [say("checks observed")], { taskMode: "auto", autoApprove: true });
+  const latest = observed.events.filter(event => event.type === "verification_finished").at(-1);
+  expect(latest?.verification.results.map(result => result.command)).toEqual(["fixture-check-1", "fixture-check-2"]);
 });

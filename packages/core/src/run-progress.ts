@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import type { ToolCall } from "@harness/protocol";
 import type { ToolDefinition, ToolResult } from "@harness/tools";
 
-const RECON_TOOLS = new Set(["read_file", "list_files", "search_text", "git_diff"]);
+const RECON_TOOLS = new Set(["read_file", "list_files", "search_text", "search_files", "read_range", "git_diff"]);
 
 /** Bounded runtime observations; raw output remains in the audited transcript. */
 export class RunProgress {

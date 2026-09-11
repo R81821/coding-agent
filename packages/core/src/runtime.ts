@@ -138,7 +138,8 @@ export async function createRuntime(options: { appDataPath?: string; passphrase:
             inputTokens: total.inputTokens + event.usage.inputTokens,
             outputTokens: total.outputTokens + event.usage.outputTokens,
             estimatedUsd: total.estimatedUsd + event.usage.estimatedUsd,
-          }), { inputTokens: 0, outputTokens: 0, estimatedUsd: 0 });
+            costKnown: total.costKnown && event.usage.costKnown !== false,
+          }), { inputTokens: 0, outputTokens: 0, estimatedUsd: 0, costKnown: true });
         engine.reportChildUsage(parentRun.id, childUsage);
         return { taskId: task.id, runId: childId, mode: task.mode, status: result.status, text: result.text };
       }

@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { existsSync, statSync } from "node:fs";
-import { mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import {
@@ -28,25 +28,24 @@ describe("key envelope atomic write and backup", () => {
     await writeFile(path, "{corrupted json", "utf8");
     const reopened = await VaultCrypto.open(path, "correct-password");
     reopened.dispose();
-    const restored = JSON.parse(await readFile(path, "utf8")) as { version?: number };
+    const restored = JSON.parse(await readFile(path, "utf8")) as {
+      version?: number;
+    };
     expect(restored.version).toBe(1);
   });
 });
 
-describe("v2 storage migration backs up v1 data instead of deleting it", () => {
-  it("moves v1 targets into backup/v1-* and keeps marker idempotency", async () => {
+describe("v2 storage marker preserves existing identity", () => {
+  it("preserves v1 targets and keeps marker idempotency", async () => {
     const root = await mkdtemp(join(tmpdir(), "harness-schema-v2-"));
     temporary.push(root);
     await writeFile(join(root, "harness.sqlite"), "old-db", "utf8");
     await writeFile(join(root, "key-envelope.json"), "{}", "utf8");
     const first = await ensureV2Storage(root);
     expect(first.migrated).toBe(true);
-    expect(existsSync(join(root, "harness.sqlite"))).toBe(false);
-    expect(existsSync(join(root, "key-envelope.json"))).toBe(false);
-    const backups = await readdir(join(root, "backup"));
-    expect(backups).toHaveLength(1);
-    expect(backups[0]).toMatch(/^v1-/);
-    expect(await readFile(join(root, "backup", backups[0]!, "harness.sqlite"), "utf8")).toBe("old-db");
+    expect(await readFile(join(root, "harness.sqlite"), "utf8")).toBe("old-db");
+    expect(await readFile(join(root, "key-envelope.json"), "utf8")).toBe("{}");
+    expect(first.removed).toEqual([]);
     expect(existsSync(join(root, "schema-v2.marker"))).toBe(true);
     const second = await ensureV2Storage(root);
     expect(second.migrated).toBe(false);
@@ -81,11 +80,20 @@ describe("blob store path containment", () => {
   it("rejects attachments whose encryptedPath escapes the blob root", async () => {
     const root = await mkdtemp(join(tmpdir(), "harness-blob-root-"));
     temporary.push(root);
-    const vault = await VaultCrypto.open(join(root, "key-envelope.json"), "correct-password");
+    const vault = await VaultCrypto.open(
+      join(root, "key-envelope.json"),
+      "correct-password",
+    );
     const store = new EncryptedBlobStore(join(root, "blobs"), vault);
-    const ref = await store.put({ bytes: Buffer.from("hello"), mimeType: "image/png", source: "file" });
+    const ref = await store.put({
+      bytes: Buffer.from("hello"),
+      mimeType: "image/png",
+      source: "file",
+    });
     await writeFile(join(root, "outside.txt"), "secret", "utf8");
-    await expect(store.read({ ...ref, encryptedPath: join(root, "outside.txt") })).rejects.toThrow("escapes");
+    await expect(
+      store.read({ ...ref, encryptedPath: join(root, "outside.txt") }),
+    ).rejects.toThrow("escapes");
     vault.dispose();
   });
 });
@@ -94,7 +102,10 @@ describe("sqlite single-writer lock", () => {
   it("rejects a second open of the same database until the first closes", async () => {
     const root = await mkdtemp(join(tmpdir(), "harness-db-lock-"));
     temporary.push(root);
-    const vault = await VaultCrypto.open(join(root, "key-envelope.json"), "correct-password");
+    const vault = await VaultCrypto.open(
+      join(root, "key-envelope.json"),
+      "correct-password",
+    );
     const path = join(root, "harness.sqlite");
     const first = await HarnessDatabase.open(path, vault);
     await expect(HarnessDatabase.open(path, vault)).rejects.toThrow("locked");

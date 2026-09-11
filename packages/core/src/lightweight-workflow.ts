@@ -8,10 +8,6 @@ const readOnlyGitQuery = /^(?:git status --short|git diff --no-ext-diff|git log 
 function isReadOnlyGitQuery(call: ToolCall): boolean {
   return call.name === "terminal" && call.input.stdin === undefined && readOnlyGitQuery.test(String(call.input.command).trim());
 }
-/** A successful repository recheck: a complete diff, or one of the allowlisted read-only Git queries. */
-function isRepositoryRecheck(call: ToolCall): boolean {
-  return call.name === "git_diff" || isReadOnlyGitQuery(call);
-}
 
 /** Runtime-owned gates; todo status is never acceptance evidence. */
 export class LightweightWorkflow extends CodingWorkflow {
@@ -21,16 +17,15 @@ export class LightweightWorkflow extends CodingWorkflow {
     this.state.taskMode = taskMode;
     this.state.todos ??= [];
     this.state.intent = taskMode === "change" || this.state.revision > 0 ? "change" : "analysis";
-    this.state.requirements = [objective.slice(0, 3000)];
-    this.state.requirementIds = ["req-1"];
+    const requirements = objective.split(/\n+/).map(line => line.replace(/^\s*(?:[-*]|\d+[.)、])\s*/, "").trim()).filter(Boolean);
+    this.state.requirements = requirements.length > 1 ? requirements : [objective];
+    this.state.requirementIds = this.state.requirements.map((_, index) => `req-${index + 1}`);
   }
   override before(call: ToolCall, tool: ToolDefinition): string | undefined {
     if (this.state.taskMode !== "analysis") return;
     const risk = tool.assessRisk?.(call.input) ?? tool.contract.risk;
     if (risk === "read") return;
-    // A probe is the one sanctioned way to run a local program during analysis: it executes inside
-    // an isolated probe directory outside the repository, its own artifacts never count as a
-    // repository change, and any change it makes to tracked content is still detected afterwards.
+    // Analysis probes execute in a container with a read-only repository mount and a tmpfs.
     // Destructive commands, raw terminal commands and repository writes keep the original policy.
     if (call.name === "probe" && risk !== "destructive") return;
     if (isReadOnlyGitQuery(call)) return;
@@ -54,7 +49,7 @@ export class LightweightWorkflow extends CodingWorkflow {
     if (effect.kind !== "repository_write") {
       // An unconfirmed effect is sticky: an ordinary read must never clear it. Only a confirmed
       // write (below) or a successful repository recheck in observe() resolves it.
-      if (this.state.effect !== "unknown") this.state.effect = "read";
+      this.state.effect = "read";
       return;
     }
     this.state.effect = "repository_write";
@@ -67,7 +62,6 @@ export class LightweightWorkflow extends CodingWorkflow {
   }
   override observe(call: ToolCall, result: ToolResult): void {
     if (["todo", "read_evidence", "run_verification"].includes(call.name)) return;
-    if (this.state.effect === "unknown" && result.isError !== true && isRepositoryRecheck(call)) this.state.effect = "read";
     super.observe(call, result);
     if (!this.needsChange) this.state.diagnosisRequired = false;
   }
@@ -76,6 +70,11 @@ export class LightweightWorkflow extends CodingWorkflow {
     this.state.diagnosisRequired = false;
   }
   override recordVerification(run: VerificationRun): void {
+    if (run.results.some(item => item.output.startsWith("verification_config_missing"))) {
+      const check = { status: "pending" as const, revision: this.state.revision, epoch: this.state.epoch, runId: run.id, reason: "缺少验证配置" };
+      if (run.stage === "broader") this.state.broaderCheck = check; else this.state.localCheck = check;
+      return;
+    }
     if (!this.needsChange && !run.passed) { this.move("inspect_result", "探针失败；可修复或说明未验证范围"); return; }
     super.recordVerification(run);
     this.state.diagnosisRequired = false;
@@ -90,25 +89,35 @@ export class LightweightWorkflow extends CodingWorkflow {
   override missingVerificationStages(): ("local" | "broader")[] {
     return this.needsChange ? super.missingVerificationStages() : [];
   }
-  override get requiresIndependentReview(): boolean { return this.needsChange && this.state.riskFlags.length > 0; }
+  override get requiresIndependentReview(): boolean { return this.needsChange; }
   acceptFinalReport(text: string): void {
     if (!text.trim() || !this.checksCurrent() || (this.needsChange && this.state.diffRevision !== this.state.revision)) return;
     const evidence = this.state.observations.filter(o => !o.failed && o.complete && o.epoch === this.state.epoch);
     if (!evidence.length) return;
     const diff = evidence.findLast(o => o.tool === "git_diff" && o.revision === this.state.revision);
-    this.state.requirementsRevision = this.state.revision;
-    this.state.reviewedRevision = this.state.revision;
+    this.state.requirementsRevision = this.needsChange ? -1 : this.state.revision;
+    this.state.reviewedRevision = this.needsChange ? -1 : this.state.revision;
     this.state.review = text.slice(0, 3000);
     this.state.reviewEvidenceIds = diff ? [diff.id] : [evidence.at(-1)!.id];
-    this.state.requirementReceipts = [{ requirementId: "req-1", summary: text.slice(0, 3000), observationIds: this.state.reviewEvidenceIds, verificationIds: [this.state.localCheck.runId].filter(Boolean), diffObservationId: diff?.id ?? "" }];
+    this.state.requirementReceipts = this.state.requirementIds.map(requirementId => ({ requirementId, summary: "Pending independent requirement review: " + text.slice(0, 2400), observationIds: this.state.reviewEvidenceIds, verificationIds: [this.state.localCheck.runId, this.state.broaderCheck.runId].filter(Boolean), diffObservationId: diff?.id ?? "" }));
   }
   override baseCanFinish(): boolean {
-    return this.checksCurrent() && (!this.needsChange || this.state.diffRevision === this.state.revision) && this.state.reviewedRevision === this.state.revision;
+    return this.checksCurrent() && (!this.needsChange || this.state.diffRevision === this.state.revision) && !!this.state.review && this.state.requirementReceipts.length === this.state.requirements.length;
+  }
+  override recordIndependentReview(passed: boolean, summary: string): void {
+    super.recordIndependentReview(passed, summary);
+    if (passed) { this.state.requirementsRevision = this.state.revision; this.state.reviewedRevision = this.state.revision; }
   }
   projection(): Record<string, unknown> {
-    return { taskMode: this.state.taskMode, intent: this.state.intent, objective: this.state.objective.slice(0, 1000), phase: this.state.phase,
-      revision: this.state.revision, effect: this.state.effect, todos: this.state.todos,
-      checks: { local: this.state.localCheck, broader: this.state.broaderCheck }, changedFiles: this.state.changedFiles.slice(0, 40),
-      observationSequence: this.state.observationSequence, evidence: Object.fromEntries(this.state.observations.slice(-8).map(o => [o.id, { sequence: o.sequence, tool: o.tool, failed: o.failed, revision: o.revision }])) };
+    const excerpt = (value: string, size: number) => value.length <= size ? value : value.slice(0, size - 1) + "…";
+    const check = (value: WorkflowState["localCheck"]) => ({ status: value.status, revision: value.revision, epoch: value.epoch, runId: excerpt(value.runId, 120), reason: excerpt(value.reason, 240) });
+    return { taskMode: this.state.taskMode, intent: this.state.intent, objective: excerpt(this.state.objective, 800), phase: this.state.phase,
+      revision: this.state.revision, effect: this.state.effect,
+      todos: (this.state.todos ?? []).slice(0, 20).map(todo => ({ id: excerpt(todo.id, 40), text: excerpt(todo.text, 100), status: todo.status })),
+      checks: { local: check(this.state.localCheck), broader: check(this.state.broaderCheck) },
+      changedFiles: this.state.changedFiles.slice(0, 12).map(path => excerpt(path, 100)),
+      omittedChangedFiles: Math.max(0, this.state.changedFiles.length - 12),
+      details: "Projection excerpts are bounded; full evidence remains available through read_evidence.",
+      observationSequence: this.state.observationSequence, evidence: Object.fromEntries(this.state.observations.slice(-6).map(o => [excerpt(o.id, 100), { sequence: o.sequence, tool: excerpt(o.tool, 80), failed: o.failed, revision: o.revision }])) };
   }
 }

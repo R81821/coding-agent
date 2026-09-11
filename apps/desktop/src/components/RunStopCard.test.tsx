@@ -52,3 +52,10 @@ describe("RunStopCard", () => {
     expect(html).not.toContain("待完成：");
   });
 });
+
+it("does not present missing cost data as a free run", () => {
+ const unknown = renderToStaticMarkup(<RunStopCard stop={{ ...stop, usage: { ...stop.usage, usd: { used: 0, limit: 5, costKnown: false } } }} />);
+ expect(unknown).toContain("费用 未知/$5.00");
+ const free = renderToStaticMarkup(<RunStopCard stop={{ ...stop, usage: { ...stop.usage, usd: { used: 0, limit: 5, costKnown: true } } }} />);
+ expect(free).toContain("费用 $0.00/$5.00");
+});

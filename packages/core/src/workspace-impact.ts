@@ -7,11 +7,11 @@ import { runProcess } from "@harness/tools";
 export interface WorkspaceSnapshot { files: Record<string, string>; complete: boolean; scanned: number; skipped: number; truncated: boolean }
 export interface ExecutionEffect { kind: "read" | "probe" | "repository_write" | "unknown"; changedFiles: string[] }
 const excluded = new Set([".git", "node_modules", ".cache", ".pnpm-store", ".harness-agent", "dist", "build", "release", ".venv"]);
-export async function snapshotWorkspace(root: string): Promise<WorkspaceSnapshot> {
+export async function snapshotWorkspace(root: string, signal = new AbortController().signal): Promise<WorkspaceSnapshot> {
   const snapshot: WorkspaceSnapshot = { files: {}, complete: true, scanned: 0, skipped: 0, truncated: false };
   let paths: string[] = [];
   try {
-    const git = await runProcess("git", ["ls-files", "-c", "-o", "--exclude-standard", "-z"], { cwd: root, signal: new AbortController().signal, timeoutMs: 10000, maxOutputBytes: 4_000_000 });
+    const git = await runProcess("git", ["ls-files", "-c", "-o", "--exclude-standard", "-z"], { cwd: root, signal, timeoutMs: 10000, maxOutputBytes: 4_000_000 });
     if (git.exitCode === 0 && !git.truncated) paths = [...new Set(git.stdout.split("\0").filter(Boolean))];
     else {
       const walk = async (directory: string, prefix = "") => {
@@ -26,20 +26,20 @@ export async function snapshotWorkspace(root: string): Promise<WorkspaceSnapshot
       await walk(root);
     }
     if (paths.length > 20000) { snapshot.complete = false; snapshot.truncated = true; paths = paths.slice(0, 20000); }
-    // Coverage counters let compareWorkspace tell "the same things were observed" apart from
-    // "the observation range changed", so an incomplete snapshot does not become permanently unknown.
+    // Coverage counters describe the limits of this evidence; incomplete coverage stays unknown.
     snapshot.scanned = paths.length;
     for (const path of paths.sort()) {
+      signal.throwIfAborted();
       try {
         const absolute = join(root, path);
         const info = await lstat(absolute);
         if (!info.isFile() || info.size > 64_000_000) { snapshot.complete = false; snapshot.skipped++; continue; }
         const hash = createHash("sha256");
-        for await (const chunk of createReadStream(absolute)) hash.update(chunk);
+        for await (const chunk of createReadStream(absolute, { signal })) hash.update(chunk);
         snapshot.files[path.replaceAll("\\", "/")] = hash.digest("hex");
       } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") { snapshot.complete = false; snapshot.skipped++; } }
     }
-  } catch { snapshot.complete = false; }
+  } catch { signal.throwIfAborted(); snapshot.complete = false; }
   return snapshot;
 }
 export function compareWorkspace(before: WorkspaceSnapshot, after: WorkspaceSnapshot): ExecutionEffect {
@@ -48,9 +48,9 @@ export function compareWorkspace(before: WorkspaceSnapshot, after: WorkspaceSnap
   // snapshot was incomplete, otherwise a real edit would never advance the repository revision.
   if (changedFiles.length) return { kind: "repository_write", changedFiles };
   if (before.complete && after.complete) return { kind: "read", changedFiles: [] };
-  // Both sides observed the same range (same file count, same skipped count, same truncation
-  // state) and saw no difference: treat it as read so large workspaces cannot block on a
-  // permanently incomplete snapshot. A changed observation range stays unconfirmed.
-  const sameCoverage = before.scanned > 0 && after.scanned > 0 && before.scanned === after.scanned && before.skipped === after.skipped && before.truncated === after.truncated;
-  return { kind: sameCoverage ? "read" : "unknown", changedFiles: [] };
+  return { kind: "unknown", changedFiles: [] };
+}
+
+export function workspaceFingerprint(snapshot: WorkspaceSnapshot): string {
+  return createHash("sha256").update(JSON.stringify(Object.entries(snapshot.files).sort(([a],[b]) => a.localeCompare(b)))).digest("hex");
 }

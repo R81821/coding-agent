@@ -24,7 +24,7 @@ import type {
   SkillManifest,
   TaskSpec,
 } from "@harness/protocol";
-import { newId, nowIso, WORKFLOW_LABELS } from "@harness/protocol";
+import { newId, nowIso } from "@harness/protocol";
 import type { DesktopAttachment } from "./preload.js";
 import type { ProviderSettings } from "./provider-settings.js";
 import { BuiBadge } from "./ui/badge.js";
@@ -37,6 +37,8 @@ import { BuiToolChip } from "./ui/tool-chip.js";
 import { MemoryManager } from "./memory-manager.js";
 import { assistantMessages } from "./assistant-messages.js";
 import { MarkdownMessage } from "./markdown-message.js";
+import { RunTiming } from "./components/RunTiming.js";
+import { WorkflowProgress } from "./components/WorkflowProgress.js";
 import { PromptCacheStats } from "./components/PromptCacheStats.js";
 import { RunStopCard } from "./components/RunStopCard.js";
 import { RecycleBin } from "./recycle-bin.js";
@@ -106,6 +108,7 @@ function App() {
   >([]);
   const [plugins, setPlugins] = useState<PluginRecord[]>([]);
   const [prompt, setPrompt] = useState("");
+  const [taskMode, setTaskMode] = useState<"auto" | "analysis" | "change">("auto");
   const [attachments, setAttachments] = useState<DesktopAttachment[]>([]);
   const [events, setEvents] = useState<AgentEvent[]>([]);
   const [activeRun, setActiveRun] = useState<string>();
@@ -305,6 +308,7 @@ function App() {
     setProfileId(session.profileId);
     setActiveSessionId(session.id);
     setSessionDetail({ session, runs: [] });
+    setTaskMode("auto");
     setActiveRun(undefined);
     setEvents([]);
     setPrompt("");
@@ -352,6 +356,7 @@ function App() {
       id: runId,
       sessionId: activeSessionId,
       request,
+      taskMode,
       workspacePath: workspace,
       profileId: profile.id,
       attachments: attachments.map((item) => item.attachment),
@@ -469,6 +474,7 @@ function App() {
       setProfileId(stored.session.profileId);
       setActiveSessionId(stored.session.id);
       setSessionDetail(stored);
+      setTaskMode(stored.runs.at(-1)?.spec.taskMode ?? "auto");
       setActiveRun(latest?.spec.id);
       setEvents(latest ? latest.events : []);
       setPrompt("");
@@ -775,7 +781,7 @@ function App() {
         </details>
         </div>
         <div className="sidebar-foot">
-          <BuiButton variant="ghost" onClick={() => setTab("settings")} className="sidebar-settings"><Settings size={17} /><span>设置</span><small>v1.4.0-beta.3</small></BuiButton>
+          <BuiButton variant="ghost" onClick={() => setTab("settings")} className="sidebar-settings"><Settings size={17} /><span>设置</span><small>v1.4.0</small></BuiButton>
           <div className="sidebar-connection"><span className="status-dot" />本地运行时已解锁</div>
         </div>
       </aside>
@@ -807,6 +813,8 @@ function App() {
               {...(profile ? { profile } : {})}
               prompt={prompt}
               setPrompt={setPrompt}
+              taskMode={taskMode}
+              setTaskMode={setTaskMode}
               attachments={attachments}
               setAttachments={setAttachments}
               events={events}
@@ -940,6 +948,8 @@ function ChatView(props: {
   profile?: Profile;
   prompt: string;
   setPrompt: (value: string) => void;
+  taskMode: "auto" | "analysis" | "change";
+  setTaskMode: (mode: "auto" | "analysis" | "change") => void;
   attachments: DesktopAttachment[];
   setAttachments: React.Dispatch<React.SetStateAction<DesktopAttachment[]>>;
   events: AgentEvent[];
@@ -1018,6 +1028,8 @@ function ChatView(props: {
         </div>
         <BuiPromptBar
           value={props.prompt}
+          taskMode={props.taskMode}
+          onTaskModeChange={props.setTaskMode}
           onChange={props.setPrompt}
           onSubmit={props.onSend}
           placeholder={
@@ -1117,6 +1129,7 @@ function ConversationTurnView({ turn, busy }: { turn: SessionTurn; busy: boolean
       )}
       <PromptCacheStats usages={turn.events.flatMap(event => event.type === "usage" ? [event.usage] : [])} />
       <WorkflowProgress events={turn.events} />
+      <RunTiming events={turn.events} />
       {result?.stop && <RunStopCard stop={result.stop} />}
       {busy && !finalText && <div className="mb-3"><BuiLoadingState label="Agent 正在思考与执行…" /></div>}
       {finalText && (
@@ -1140,25 +1153,6 @@ function ConversationTurnView({ turn, busy }: { turn: SessionTurn; busy: boolean
   );
 }
 
-function WorkflowProgress({ events }: { events: AgentEvent[] }) {
-  const stages = events.filter((event): event is Extract<AgentEvent, { type: "workflow_updated" }> => event.type === "workflow_updated");
-  const latest = stages.at(-1);
-  if (!latest) return null;
-  const state = latest.workflow;
-  const chain = state.failureChains?.find(item => item.id === state.activeChainId && item.status === "open");
-  const checkLabels = { pending: "待验证", passed: "通过", failed: "失败", skipped: "已跳过" };
-  return <details className="glass mb-3 px-4 py-3 workflow-progress">
-    <summary className="cursor-pointer text-sm text-text"><strong>{WORKFLOW_LABELS[state.phase]}</strong><span className="ml-3 text-xs text-text-muted">修改版本 {state.revision} · 累计失败 {state.failures} · 当前故障重复 {chain?.count ?? 0} 次</span></summary>
-    <p className="mt-2 text-xs text-text-muted">{latest.detail}</p>
-    {state.activity && <p className="mt-2 break-words text-xs text-text-muted">工具活动：{state.activity}</p>}
-    <div className="mt-3 space-y-1 text-xs text-text workflow-checks">{(["localCheck", "broaderCheck"] as const).map((key, index) => <p key={key}>{index === 0 ? "局部验证" : "扩大验证"}：{state[key] ? checkLabels[state[key].status] : "历史记录，未区分验证与跳过"}{state[key]?.reason && <span className="ml-2 text-text-muted">{state[key].reason}</span>}</p>)}
-    <p>独立只读评审：{state.reviewPolicy !== "risk_based" ? "未启用" : !state.riskFlags?.length ? "未触发" : checkLabels[state.independentReview?.status ?? "pending"]}</p></div>
-    <ol className="mt-3 space-y-1 text-xs text-text-muted">{stages.slice(-16).map(event => <li key={event.id}>{WORKFLOW_LABELS[event.workflow.phase]}：{event.detail}</li>)}</ol>
-    {state.hypotheses.length > 0 && <p className="mt-3 text-xs text-text">当前假设：{state.hypotheses.at(-1)?.cause}</p>}
-    {state.requirementReceipts?.length > 0 && <p className="mt-2 text-xs text-text-muted">证据引用已核对；业务语义结论由模型评审。</p>}
-    {state.requirements.length > 0 && <ul className="mt-2 space-y-1 text-xs text-text">{state.requirements.map((item, index) => <li key={index}>{state.requirementsRevision === state.revision && state.requirementReceipts?.some(receipt => receipt.requirementId === state.requirementIds?.[index]) ? "✓" : "○"} {item}</li>)}</ul>}
-  </details>;
-}
 
 function EventRow({ event }: { event: AgentEvent }) {
   if (event.type === "provider_retry")
@@ -2395,6 +2389,15 @@ function SettingsView({ refresh, refreshHistory }: { refresh: () => Promise<void
           }
           placeholder="模型 ID，例如 qwen3-coder"
         />
+        <label className="text-xs text-text-muted">API 协议
+          <select aria-label="API 协议" className="mt-1 w-full rounded-xl border border-line bg-black/30 px-3 py-2 text-sm text-text" value={providerSettings.apiProtocol ?? "auto"} onChange={event => setProviderSettings(current => ({ ...current, apiProtocol: event.target.value as "auto" | "responses" | "chat_completions" }))}>
+            <option value="auto">自动选择</option><option value="responses">Responses</option><option value="chat_completions">Chat Completions</option>
+          </select>
+        </label>
+        <label className="text-xs text-text-muted">模型上下文容量（tokens，可选）
+          <input aria-label="模型上下文容量" type="number" min={1} step={1} className="mt-1 w-full rounded-xl border border-line bg-black/30 px-3 py-2 text-sm text-text" value={providerSettings.maxContextTokens ?? ""} placeholder="留空沿用兼容默认 128000" onChange={event => setProviderSettings(current => { const { maxContextTokens: _previous, ...rest } = current; return event.target.value === "" ? rest : { ...rest, maxContextTokens: Number(event.target.value) }; })} />
+        </label>
+        <p className="text-xs text-text-muted">容量请以服务商公布的模型规格为准；默认值不代表已验证的模型上限。</p>
         <BuiButton
           variant="primary"
           size="sm"

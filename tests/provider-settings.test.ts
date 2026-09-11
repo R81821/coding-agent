@@ -71,3 +71,11 @@ describe("desktop provider settings", () => {
     }
   });
 });
+
+it("validates and persists explicit protocol and context capacity", async () => {
+  const settings = normalizeProviderSettings({ openaiCompatibleBaseUrl: "https://fixture.test/v1", openaiCompatibleModel: "fixture", apiProtocol: "responses", maxContextTokens: 65536 });
+  expect(settings).toMatchObject({ apiProtocol: "responses", maxContextTokens: 65536 });
+  expect(providerSettingsEnvironment(settings)).toMatchObject({ OPENAI_COMPATIBLE_API_PROTOCOL: "responses", OPENAI_COMPATIBLE_MAX_CONTEXT_TOKENS: "65536" });
+  for (const invalid of [0, -1, 1.5, "NaN", "128k"]) expect(() => normalizeProviderSettings({ ...settings, maxContextTokens: invalid })).toThrow(/上下文/);
+  expect(() => normalizeProviderSettings({ ...settings, apiProtocol: "invalid" })).toThrow(/协议/);
+});
