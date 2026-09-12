@@ -13,6 +13,7 @@ import { DatabaseSync, type StatementSync } from "node:sqlite";
 import { resolve } from "node:path";
 import { randomUUID } from "node:crypto";
 
+export interface StorageProgress { stage: "storage_open" | "storage_backup" | "storage_copy" | "storage_migrate" | "storage_validate" | "storage_switch"; completed?: number; total?: number }
 const openPaths = new Set<string>();
 
 /**
@@ -41,7 +42,9 @@ export class SQLiteFile {
   static async open(
     path: string,
     migrate?: (database: SQLiteFile) => void,
+    onProgress?: (progress: StorageProgress) => void,
   ): Promise<SQLiteFile> {
+    onProgress?.({ stage: "storage_open" });
     path = resolve(path);
     if (openPaths.has(path))
       throw new Error(`Database is locked by this process: ${path}`);
@@ -97,7 +100,9 @@ export class SQLiteFile {
           stage = `${path}.stage-${suffix}`;
         // VACUUM INTO is a consistent SQLite snapshot including committed WAL pages.
         // It never touches the envelope or blobs. Backups are retained indefinitely.
+        onProgress?.({ stage: "storage_backup" });
         database.exec(`VACUUM INTO '${backup.replace(/'/g, "''")}'`);
+        onProgress?.({ stage: "storage_copy" });
         copyFileSync(backup, stage);
         const counts = database
           .prepare(
@@ -119,7 +124,9 @@ export class SQLiteFile {
         try {
           staged = new DatabaseSync(stage);
           staged.exec("PRAGMA journal_mode=DELETE; PRAGMA synchronous=FULL");
+          onProgress?.({ stage: "storage_migrate" });
           migrate(new SQLiteFile(stage, staged));
+          onProgress?.({ stage: "storage_validate" });
           if (
             staged.prepare("PRAGMA integrity_check").get()?.integrity_check !==
             "ok"
@@ -149,6 +156,7 @@ export class SQLiteFile {
           database = undefined;
           // A single rename replaces the closed source. Failure leaves the original intact;
           // a crash before/after this point leaves either the old or validated new DB.
+          onProgress?.({ stage: "storage_switch" });
           renameSync(stage, path);
           database = new DatabaseSync(path);
         } catch (error) {

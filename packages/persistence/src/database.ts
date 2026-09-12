@@ -31,7 +31,7 @@ import {
   SessionRecordSchema,
 } from "@harness/protocol";
 import type { VaultCrypto } from "./crypto.js";
-import { SQLiteFile } from "./sqlite.js";
+import { SQLiteFile, type StorageProgress } from "./sqlite.js";
 
 interface RunRow {
   id: string;
@@ -87,6 +87,7 @@ export class HarnessDatabase {
   private constructor(
     database: SQLiteFile,
     private readonly crypto: VaultCrypto,
+    private readonly onProgress?: (progress: StorageProgress) => void,
   ) {
     this.db = database;
     this.migrate();
@@ -95,51 +96,11 @@ export class HarnessDatabase {
   static async open(
     path: string,
     crypto: VaultCrypto,
+    onProgress?: (progress: StorageProgress) => void,
   ): Promise<HarnessDatabase> {
     await mkdir(dirname(path), { recursive: true });
-    const file = await SQLiteFile.open(path, (staged) => {
-      const before = staged
-        .prepare(
-          "SELECT name FROM sqlite_master WHERE type='table' AND name='checkpoints'",
-        )
-        .get();
-      const originals = before
-        ? staged
-            .prepare("SELECT id, payload FROM checkpoints")
-            .all()
-            .map((row) =>
-              crypto.decryptJson<RunCheckpoint>(
-                String(row.payload),
-                `checkpoints:${row.id}`,
-              ),
-            )
-        : [];
-      const converted = new HarnessDatabase(staged, crypto);
-      const latest = new Map<string, RunCheckpoint>();
-      for (const checkpoint of originals) {
-        if (
-          !latest.has(checkpoint.runId) ||
-          latest.get(checkpoint.runId)!.sequence < checkpoint.sequence
-        )
-          latest.set(checkpoint.runId, checkpoint);
-        const restored = converted.get<RunCheckpoint>(
-          "checkpoints",
-          checkpoint.id,
-        );
-        if (!isDeepStrictEqual(restored, checkpoint))
-          throw new Error(
-            `Checkpoint migration validation failed: ${checkpoint.id}`,
-          );
-      }
-      for (const [runId, checkpoint] of latest)
-        if (
-          converted.getLatestCheckpoint(runId)?.sequence !== checkpoint.sequence
-        )
-          throw new Error(
-            `Latest checkpoint migration validation failed: ${runId}`,
-          );
-    });
-    return new HarnessDatabase(file, crypto);
+    const file = await SQLiteFile.open(path, staged => { new HarnessDatabase(staged, crypto, onProgress); }, onProgress);
+    return new HarnessDatabase(file, crypto, onProgress);
   }
 
   close(): void {
@@ -1039,6 +1000,15 @@ export class HarnessDatabase {
     return rows.map((row) => this.decode<T>(table, row));
   }
 
+  /** Keyset iteration retains only one encrypted row and decoded checkpoint at a time. */
+  private *migrationRows(table: "runs" | "checkpoints" | "compactions" | "verification_runs"): Generator<GenericRow> {
+    let row = this.db.prepare(`SELECT id,payload FROM ${table} ORDER BY id LIMIT 1`).get() as GenericRow | undefined;
+    while (row) {
+      yield row;
+      row = this.db.prepare(`SELECT id,payload FROM ${table} WHERE id>? ORDER BY id LIMIT 1`).get(row.id) as GenericRow | undefined;
+    }
+  }
+
   private migrate(): void {
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS runs (id TEXT PRIMARY KEY, status TEXT NOT NULL, payload TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
@@ -1073,13 +1043,16 @@ export class HarnessDatabase {
         const runColumns = this.db.prepare("PRAGMA table_info(runs)").all();
         if (!runColumns.some((row) => row.name === "session_id"))
           this.db.exec("ALTER TABLE runs ADD COLUMN session_id TEXT");
-        for (const run of this.allRuns())
-          this.db
-            .prepare("UPDATE runs SET session_id=? WHERE id=?")
-            .run(run.spec.sessionId, run.spec.id);
+        for (const row of this.migrationRows("runs")) {
+          const run = this.crypto.decryptJson<RunSpec>(row.payload, "run:" + row.id);
+          this.db.prepare("UPDATE runs SET session_id=? WHERE id=?").run(run.sessionId, row.id);
+        }
         this.db.exec(
           "CREATE INDEX IF NOT EXISTS runs_session ON runs(session_id, created_at, id)",
         );
+        const latest = new Map<string, number>();
+        const total = Number(this.db.prepare("SELECT COUNT(*) AS n FROM checkpoints").get()?.n ?? 0);
+        let completed = 0;
         for (const table of [
           "checkpoints",
           "compactions",
@@ -1090,11 +1063,23 @@ export class HarnessDatabase {
             this.db.exec(`ALTER TABLE ${table} ADD COLUMN run_id TEXT`);
           if (!columns.some((row) => row.name === "sequence"))
             this.db.exec(`ALTER TABLE ${table} ADD COLUMN sequence INTEGER`);
-          for (const record of this.list<Record<string, unknown>>(table))
-            this.upsert(table, String(record.id), record);
+          for (const row of this.migrationRows(table)) {
+            const record = this.decode<Record<string, unknown>>(table, row);
+            this.upsert(table, row.id, record);
+            if (table === "checkpoints") {
+              const restored = this.get<RunCheckpoint>(table, row.id);
+              if (!isDeepStrictEqual(restored, record)) throw new Error("Checkpoint migration validation failed: " + row.id);
+              const runId = String(record.runId), sequence = Number(record.sequence);
+              latest.set(runId, Math.max(latest.get(runId) ?? -1, sequence));
+              this.onProgress?.({ stage: "storage_migrate", completed: ++completed, total });
+            }
+          }
           this.db.exec(
             `CREATE INDEX IF NOT EXISTS ${table}_run ON ${table}(run_id, sequence DESC)`,
           );
+        }
+        for (const [runId, sequence] of latest) {
+          if (this.getLatestCheckpoint(runId)?.sequence !== sequence) throw new Error("Latest checkpoint migration validation failed: " + runId);
         }
         this.db.exec("PRAGMA user_version=3; COMMIT");
       } catch (error) {

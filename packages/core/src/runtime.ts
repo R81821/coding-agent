@@ -1,7 +1,7 @@
 import { join } from "node:path";
 import { homedir } from "node:os";
 import { newId, nowIso, type AgentEvent, type Profile, type RunSpec, type TaskSpec } from "@harness/protocol";
-import { EncryptedBlobStore, ensureV2Storage, HarnessDatabase, VaultCrypto } from "@harness/persistence";
+import { EncryptedBlobStore, ensureV2Storage, HarnessDatabase, VaultCrypto, type StorageProgress } from "@harness/persistence";
 import { createConfiguredProviders, ParallelSearchProvider } from "@harness/providers";
 import { createDefaultToolRegistry, createWebSearchTool, type ToolDefinition } from "@harness/tools";
 import { ConcurrencyPool, MemoryService, PluginService, SkillService, TaskScheduler, WorktreeManager } from "@harness/extensions";
@@ -28,12 +28,13 @@ export interface HarnessRuntime {
   close(): Promise<void>;
 }
 
-export async function createRuntime(options: { appDataPath?: string; passphrase: string; env?: NodeJS.ProcessEnv }): Promise<HarnessRuntime> {
+export async function createRuntime(options: { appDataPath?: string; passphrase: string; env?: NodeJS.ProcessEnv; onStartupProgress?: (progress: StorageProgress | { stage: "unlocking" | "runtime_ready" }) => void }): Promise<HarnessRuntime> {
   const env = options.env ?? process.env;
   const appData = options.appDataPath ?? join(process.env.LOCALAPPDATA ?? join(homedir(), ".local", "share"), "HarnessAgent");
   await ensureV2Storage(appData);
+  options.onStartupProgress?.({ stage: "unlocking" });
   const crypto = await VaultCrypto.open(join(appData, "key-envelope.json"), options.passphrase);
-  const database = await HarnessDatabase.open(join(appData, "harness.sqlite"), crypto);
+  const database = await HarnessDatabase.open(join(appData, "harness.sqlite"), crypto, options.onStartupProgress);
   const blobs = new EncryptedBlobStore(join(appData, "blobs"), crypto);
   const providers = createConfiguredProviders({
     env,

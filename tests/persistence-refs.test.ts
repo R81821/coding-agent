@@ -398,3 +398,28 @@ it("permanent deletion reclaims only unshared objects of that session", async ()
     expect(db.getToolEvidence("retained", "retained")).toMatchObject({ output: "private-retained" });
   } finally { raw.close(); db.close(); vault.dispose(); }
 });
+
+it("reports staged migration progress while checking each checkpoint without a bulk history load", async () => {
+  const { path, vault } = await fixture();
+  await legacy(path, vault);
+  const raw = new DatabaseSync(path);
+  for (let i = 0; i < 24; i++) {
+    const value = checkpoint("cp-" + String(i).padStart(2, "0"), "run", i + 2);
+    raw.prepare("INSERT INTO checkpoints(id,payload,updated_at) VALUES (?,?,?)").run(value.id, vault.encryptJson(value, "checkpoints:" + value.id), at);
+  }
+  raw.close();
+  const progress: Array<{stage:string;completed?:number;total?:number}> = [];
+  // A future regression to list() would expand the entire encrypted history in memory.
+  const prototype = HarnessDatabase.prototype as unknown as {list(table: string): unknown[]};
+  const original = prototype.list;
+  vi.spyOn(prototype, "list").mockImplementation(function(this: typeof prototype, table) {
+    if (["checkpoints", "compactions", "verification_runs"].includes(table)) throw new Error("Bulk migration read");
+    return original.call(this, table);
+  });
+  const db = await HarnessDatabase.open(path, vault, value => progress.push(value));
+  try {
+    expect(db.getLatestCheckpoint("run")?.sequence).toBe(25);
+    expect(progress.map(value => value.stage)).toEqual(expect.arrayContaining(["storage_backup", "storage_copy", "storage_migrate", "storage_validate", "storage_switch"]));
+    expect(progress.filter(value => value.completed !== undefined).at(-1)).toMatchObject({completed:25,total:25});
+  } finally { db.close(); vault.dispose(); }
+});

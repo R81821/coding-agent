@@ -1,0 +1,55 @@
+{
+  "version": "1.4.1",
+  "artifact": "Harness-Agent-1.4.1-x64.exe",
+  "bytes": 119311602,
+  "sha256": "b24ab98dccb2c402f915420d46d60dc2dea93bee26ed6a2477ad8588cd27a057",
+  "authenticode": "NotSigned",
+  "validation": {
+    "testFiles": 57,
+    "testsPassed": 339,
+    "typecheck": "passed",
+    "lint": "passed",
+    "build": "passed",
+    "packageRuntime": {
+      "version": "1.4.1",
+      "electron": "37.3.1",
+      "node": "22.18.0",
+      "architecture": "x64",
+      "appFiles": "ok",
+      "rendererVersion": "1.4.1",
+      "daemonVersion": "1.4.1",
+      "daemonMarkers": "27/27",
+      "stylesheetMarkers": "2/2",
+      "sharpPngBytes": 95,
+      "sqliteWasm": "shipped",
+      "daemonMentionsSqlJsWasm": false,
+      "daemonSyntax": "ok",
+      "walRoundTrip": {
+        "journalMode": "wal",
+        "walBytes": 12392,
+        "rowReadBack": "committed"
+      }
+    },
+    "daemonHealth": {
+      "status": "ok",
+      "version": "1.4.1",
+      "activeRuns": "available",
+      "providerIds": [],
+      "connectors": []
+    },
+    "syntheticLargeMigration": {
+      "sourceBytes": 746852352,
+      "durationMs": 12763.4251,
+      "progressUpdates": 2126,
+      "maxHeapBytes": 60196348,
+      "checkpoints": 2120,
+      "heapLimitMiB": 96,
+      "description": "Standalone persistence benchmark executed with packaged Electron/Node runtime; no live user-data migration"
+    }
+  },
+  "limitations": [
+    "No actual user vault migrated or modified during diagnosis",
+    "No guarantee for single backup/copy/integrity phase taking over 5 minutes on extremely slow storage",
+    "Installer is unsigned"
+  ]
+}

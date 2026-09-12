@@ -29,7 +29,15 @@ const endpointName = daemonEndpointName(process.env.HARNESS_DAEMON_INSTANCE);
 const pipePath = process.platform === "win32" ? `\\\\.\\pipe\\${endpointName}` : join(tmpdir(), `${endpointName}.sock`);
 if (process.platform !== "win32" && existsSync(pipePath)) unlinkSync(pipePath);
 
-const runtime = await createRuntime({ passphrase, ...(process.env.HARNESS_APP_DATA_PATH ? { appDataPath: process.env.HARNESS_APP_DATA_PATH } : {}) });
+let lastProgressAt = 0, lastProgressStage = "";
+const runtime = await createRuntime({ passphrase, onStartupProgress: progress => {
+  const now = Date.now();
+  if (progress.stage !== lastProgressStage || now - lastProgressAt >= 500 || ("completed" in progress && progress.completed === progress.total)) {
+    process.stderr.write("HARNESS_STARTUP_PROGRESS:" + JSON.stringify(progress) + "\n");
+    lastProgressAt = now; lastProgressStage = progress.stage;
+  }
+}, ...(process.env.HARNESS_APP_DATA_PATH ? { appDataPath: process.env.HARNESS_APP_DATA_PATH } : {}) });
+process.stderr.write('HARNESS_STARTUP_PROGRESS:{"stage":"runtime_ready"}\n');
 const pairing = new PairingService();
 const connectors = new Map<string, MessageConnector>();
 const remoteRuns = new Map<string, { connector: MessageConnector; chatId: string }>();
@@ -83,7 +91,7 @@ async function dispatchLine(line: string): Promise<DaemonResponse> {
 async function dispatch(request: DaemonRequest, target: HarnessRuntime): Promise<unknown> {
   switch (request.method) {
     case "health":
-      return { status: "ok", version: "1.4.0", activeRuns: "available", providerIds: target.providerIds, connectors: [...connectors.keys()] };
+      return { status: "ok", version: "1.4.1", activeRuns: "available", providerIds: target.providerIds, connectors: [...connectors.keys()] };
     case "sessions.create":
       return target.database.createSession(request.params);
     case "sessions.list":

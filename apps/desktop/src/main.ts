@@ -31,7 +31,7 @@ import {
   providerSettingsEnvironment,
   saveProviderSettings,
 } from "./provider-settings.js";
-import { appendBounded, daemonStartupError } from "./daemon-startup.js";
+import { appendBounded, daemonStartupError, DaemonStartupMonitor } from "./daemon-startup.js";
 import { sanitizeRendererRequest } from "./renderer-ipc.js";
 import { messageHttpUrl } from "./message-links.js";
 
@@ -422,15 +422,16 @@ async function startDaemon(passphrase: string): Promise<void> {
         env: daemonEnvironment,
       },
     );
-  daemon.stdin?.write(`${passphrase}\n`);
-  daemon.stdin?.end();
+  const startup = new DaemonStartupMonitor();
   let stderr = "";
   let spawnError: Error | undefined;
   let exited: { code: number | null; signal: NodeJS.Signals | null } | undefined;
   daemon.stdout?.on("data", (chunk: Buffer | string) => process.stdout.write(chunk));
+  daemon.stderr?.setEncoding("utf8");
   daemon.stderr?.on("data", (chunk: Buffer | string) => {
     const text = String(chunk);
     stderr = appendBounded(stderr, text);
+    for (const progress of startup.consume(text)) void logLifecycle("daemon-startup-progress", { ...progress, ...startup.diagnostics() });
     process.stderr.write(text);
   });
   daemon.once("error", (error) => { spawnError = error; });
@@ -438,11 +439,14 @@ async function startDaemon(passphrase: string): Promise<void> {
     exited = { code, signal };
     void logLifecycle("daemon-exit", { code, signal, stderr });
   });
-  const deadline = Date.now() + 30_000;
-  while (Date.now() < deadline) {
+  daemon.stdin?.write(`${passphrase}\n`);
+  daemon.stdin?.end();
+  while (!startup.expired) {
     await new Promise((resolveWait) => setTimeout(resolveWait, 250));
     if (spawnError) throw spawnError;
+    if (startup.failure) throw startup.failure;
     if (exited) throw daemonStartupError(stderr, exited.code);
+    if (startup.expired) break;
     try {
       await daemonRequest({ id: newId("request"), method: "health" }, 500);
       void logLifecycle("daemon-ready");
@@ -451,8 +455,8 @@ async function startDaemon(passphrase: string): Promise<void> {
       /* wait */
     }
   }
-  void logLifecycle("daemon-timeout", { stderr });
-  throw stderr ? daemonStartupError(stderr, daemon?.exitCode ?? null) : new Error("daemon 在 30 秒内未建立通信管道。详情已写入桌面生命周期日志。");
+  void logLifecycle("daemon-timeout", { stderr, ...startup.diagnostics() });
+  throw startup.timeoutError();
 }
 
 async function restartDaemon(): Promise<void> {
