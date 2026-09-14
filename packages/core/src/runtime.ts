@@ -1,3 +1,4 @@
+import { waitForAll, waitForRunResult } from "./run-completion.js";
 import { join } from "node:path";
 import { homedir } from "node:os";
 import { newId, nowIso, type AgentEvent, type Profile, type RunSpec, type TaskSpec } from "@harness/protocol";
@@ -83,6 +84,7 @@ export async function createRuntime(options: { appDataPath?: string; passphrase:
     },
     assessRisk: (input) => Array.isArray(input.tasks) && input.tasks.some((task) => isDelegateTask(task) && task.mode === "write") ? "high" : "read",
     execute: async (input, context) => {
+      context.signal.throwIfAborted();
       const parent = database.getRun(context.runId)?.spec;
       if (!parent) throw new Error(`Parent run not found: ${context.runId}`);
       const profile = profiles.get(parent.profileId);
@@ -94,15 +96,15 @@ export async function createRuntime(options: { appDataPath?: string; passphrase:
       const gitWorkspace = await isGitWorkspace(parent.workspacePath, context.signal);
       const reads = tasks.filter((task) => task.mode === "read");
       const writes = tasks.filter((task) => task.mode === "write");
-      const results = await Promise.all(reads.map((task) => pool.run(() => runDelegatedTask(task, parent, profile, parent.workspacePath))));
-      if (gitWorkspace) results.push(...await Promise.all(writes.map((task) => pool.run(async () => {
+      const results = await waitForAll(reads.map((task) => pool.run(() => runDelegatedTask(task, parent, profile, parent.workspacePath), context.signal)));
+      if (gitWorkspace) results.push(...await waitForAll(writes.map((task) => pool.run(async () => {
         const lease = await worktrees.create(parent.workspacePath, parent.id, task.id, context.signal);
         try {
           const result = await runDelegatedTask(task, parent, profile, lease.path);
           const diff = await tools.get("git_diff")?.execute({}, { ...context, workspacePath: lease.path });
           return { ...result, branch: lease.branch, patch: diff?.output };
         } finally { await lease.cleanup(); }
-      }))));
+      }, context.signal))));
       else {
         for (const task of writes) results.push(await runDelegatedTask(task, parent, profile, parent.workspacePath));
       }
@@ -130,9 +132,7 @@ export async function createRuntime(options: { appDataPath?: string; passphrase:
           parentRunId: parentRun.id,
           createdAt: nowIso()
         };
-        const completion = waitForResult(childId, context.signal);
-        engine.start(child, childProfile);
-        const result = await completion;
+        const result = await waitForRunResult(engine, childId, context.signal, () => engine.start(child, childProfile));
         const childUsage = database.listEvents(childId)
           .filter((event): event is Extract<AgentEvent, { type: "usage" }> => event.type === "usage")
           .reduce((total, event) => ({
@@ -143,19 +143,6 @@ export async function createRuntime(options: { appDataPath?: string; passphrase:
           }), { inputTokens: 0, outputTokens: 0, estimatedUsd: 0, costKnown: true });
         engine.reportChildUsage(parentRun.id, childUsage);
         return { taskId: task.id, runId: childId, mode: task.mode, status: result.status, text: result.text };
-      }
-
-      function waitForResult(runId: string, signal: AbortSignal): Promise<Extract<AgentEvent, { type: "result" }>> {
-        return new Promise((resolveResult, rejectResult) => {
-          const onEvent = (event: AgentEvent) => {
-            if (event.runId !== runId || event.type !== "result") return;
-            cleanup(); resolveResult(event);
-          };
-          const onAbort = () => { engine.cancel(runId); cleanup(); rejectResult(signal.reason ?? new Error("Delegation cancelled")); };
-          const cleanup = () => { engine.off("event", onEvent); signal.removeEventListener("abort", onAbort); };
-          engine.on("event", onEvent);
-          signal.addEventListener("abort", onAbort, { once: true });
-        });
       }
     }
   };
@@ -213,12 +200,14 @@ function isDelegateTask(value: unknown): value is DelegatedTask {
 }
 
 async function isGitWorkspace(workspacePath: string, signal: AbortSignal): Promise<boolean> {
+  signal.throwIfAborted();
   const { spawn } = await import("node:child_process");
+  signal.throwIfAborted();
   return new Promise((resolveGit) => {
     const child = spawn("git", ["rev-parse", "--is-inside-work-tree"], { cwd: workspacePath, windowsHide: true, stdio: "ignore" });
     const abort = () => child.kill();
     signal.addEventListener("abort", abort, { once: true });
-    child.on("error", () => resolveGit(false));
+    child.on("error", () => { signal.removeEventListener("abort", abort); resolveGit(false); });
     child.on("close", (code) => { signal.removeEventListener("abort", abort); resolveGit(code === 0); });
   });
 }

@@ -1,0 +1,22 @@
+/* Shared approval/deletion card, matching the reference in both themes. */
+dialog.decision-dialog.approval-overlay { position:fixed; inset:0; margin:auto; padding:0; width:min(574px,calc(100vw - 32px)); height:fit-content; max-height:calc(100dvh - 40px); max-width:none; border:0; background:transparent; color:#e9e9eb; overflow:visible; backdrop-filter:none; z-index:1000; }
+dialog.decision-dialog:not([open]) { display:none; }
+dialog.decision-dialog::backdrop { background:rgba(12,13,15,.64); backdrop-filter:blur(3px); }
+.decision-card { display:flex; flex-direction:column; width:100%; max-height:calc(100dvh - 40px); padding:20px 16px 16px; border:1px solid #36373a; border-radius:18px; background:#232426; box-shadow:0 4px 12px #0003; box-sizing:border-box; }
+.decision-card header { display:flex; align-items:flex-start; gap:12px; padding:0 2px; flex-shrink:0; }
+.decision-card h2 { flex:1; margin:0; font-size:20px; font-weight:600; line-height:1.4; letter-spacing:-.4px; color:#e9e9eb; }
+.decision-card .decision-close { background:transparent; border:0; color:#a0a1a5; padding:0 4px; font-size:21px; line-height:26px; }
+.decision-body { min-height:0; overflow:auto; padding:12px 2px 2px; color:#a5a6ab; font-size:15px; line-height:1.65; overflow-wrap:anywhere; }
+.decision-description { margin:0 0 10px; }
+.decision-subject { display:inline-block; border-radius:999px; padding:2px 10px; background:#2d2e31; color:#e9e9eb; font-size:14px; overflow-wrap:anywhere; max-width:100%; }
+.decision-card footer { display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:14px; padding-top:30px; flex-shrink:0; }
+.decision-status { display:flex; align-items:center; gap:10px; color:#a5a6ab; font-size:14px; }
+.decision-status i { display:flex; gap:3px; }.decision-status b { display:block; width:5px; height:14px; background:#3ac781; border-radius:4px; }.decision-status.is-danger b { background:#f3a356; }
+.decision-actions { display:flex; gap:10px; margin-left:auto; }
+.decision-actions button { border-radius:999px; padding:8px 17px; min-height:40px; font-size:15px; line-height:22px; font-weight:600; white-space:nowrap; }
+.decision-secondary { background:transparent; border:1px solid #3b3c3f; color:#e9e9eb; }.decision-primary { background:#3996ff; border:1px solid #62acff; color:white; }
+.decision-primary:hover { background:#51a3ff; }.decision-secondary:hover { background:#2e3033; }
+.decision-card button:focus-visible { outline:2px solid #96c7ff; outline-offset:3px; }.decision-card button:disabled { opacity:.5; cursor:wait; }
+.decision-card .approval-readable { gap:8px; }.decision-card .approval-readable small { color:#a5a6ab; }.decision-card .approval-readable pre { background:#1c1d1f; border:1px solid #303134; border-radius:10px; color:#e3e4e7; max-height:30vh; }
+.decision-error { color:#ffabae; margin-top:12px; }.decision-plan { margin:12px 0 0; padding-left:22px; }.decision-plan li { margin:8px 0; }.decision-plan strong { color:#e9e9eb; display:block; }
+@media(max-width:480px) { .decision-card h2 {font-size:18px}.decision-card footer {padding-top:22px}.decision-status {font-size:12px}.decision-actions button {padding:7px 14px} }

@@ -52,3 +52,49 @@ describe("model router", () => {
   });
 });
 
+
+
+describe("parallel model discovery", () => {
+  const requirements = { needsVision: false, needsTools: true, needsStructuredOutput: false, estimatedInputTokens: 1000, estimatedOutputTokens: 500 };
+  it("continues routing when one provider's model lookup fails", async () => {
+    const broken = provider("broken", true, 1, 0);
+    broken.listModels = async () => { throw new Error("lookup failed"); };
+    const healthy = provider("healthy", true, 0.8, 0);
+    const router = new ModelRouter([broken, healthy]);
+    const result = await router.route({ ...DEFAULT_PROFILE, allowedProviders: ["broken", "healthy"] }, requirements);
+    expect(result.provider.id).toBe("healthy");
+    await expect(new ModelRouter([broken]).route({ ...DEFAULT_PROFILE, allowedProviders: ["broken"] }, requirements)).rejects.toThrow(/broken.*模型列表/);
+  });
+
+  it("bounds simultaneous lookups and retains deterministic tie ordering", async () => {
+    let release!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    let active = 0, maximum = 0;
+    const started: string[] = [];
+    const providers = Array.from({ length: 9 }, (_, index) => {
+      const entry = provider(String(index), true, 0.8, 0);
+      const listModels = entry.listModels;
+      entry.listModels = async () => {
+        active++;
+        maximum = Math.max(maximum, active);
+        started.push(entry.id);
+        await gate;
+        active--;
+        return listModels();
+      };
+      return entry;
+    });
+    const blocked = provider("blocked", true, 1, 0);
+    blocked.listModels = async () => { started.push("blocked"); throw new Error("unauthorized"); };
+    const pending = new ModelRouter([...providers, blocked]).route({ ...DEFAULT_PROFILE, allowedProviders: providers.map(item => item.id) }, requirements);
+    await new Promise<void>(done => setImmediate(done));
+    const initialStarted = started.length;
+    release();
+    const result = await pending;
+    expect(initialStarted).toBeGreaterThan(1);
+    expect(maximum).toBeLessThanOrEqual(4);
+    expect(started).not.toContain("blocked");
+    expect(started).toHaveLength(9);
+    expect(result.provider.id).toBe("0");
+  });
+});

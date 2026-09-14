@@ -9,9 +9,21 @@ export class ModelRouter {
     const weights = routeWeights(profile);
     const candidates: RouteDecision[] = [];
     const exclusions: string[] = [];
+    const allowed = this.providers.filter(provider => profile.allowedProviders.includes(provider.id));
+    const discovered = new Map<ModelProvider, ModelDescriptor[] | undefined>();
+    let nextProvider = 0;
+    await Promise.all(Array.from({ length: Math.min(4, allowed.length) }, async () => {
+      while (nextProvider < allowed.length) {
+        const provider = allowed[nextProvider++]!;
+        try { discovered.set(provider, await provider.listModels()); }
+        catch { discovered.set(provider, undefined); }
+      }
+    }));
+    // Score in configured order, independent of lookup completion order.
     for (const provider of this.providers) {
       if (!profile.allowedProviders.includes(provider.id)) { exclusions.push(`${provider.id}: 当前 Profile 未授权此服务商`); continue; }
-      const models = await provider.listModels();
+      const models = discovered.get(provider);
+      if (!models) { exclusions.push(`${provider.id}: 模型列表查询失败`); continue; }
       if (!models.length) exclusions.push(`${provider.id}: 未提供模型列表`);
       for (const model of models) {
         const reasons: string[] = [];

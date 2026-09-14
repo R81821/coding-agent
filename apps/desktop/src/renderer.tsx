@@ -70,13 +70,22 @@ import {
   UserCog,
   X,
 } from "lucide-react";
+import { ThemePicker } from "./components/ThemePicker.js";
+import { THEMES, applyTheme, isThemeId, readTheme, saveTheme, type ThemeId } from "./theme.js";
+import { SIDEBAR_MAX, SIDEBAR_MIN, clampSidebarWidth, readSidebarWidth, saveSidebarWidth } from "./layout-preferences.js";
 import "./styles.css";
 import "./tailwind.css";
 import "./workbench.css";
+import "./themes.css";
+import "./code-changes.css";
+import { CodeChanges } from "./components/CodeChanges.js";
+import { DecisionDialog, useConfirmation } from "./components/DecisionDialog.js";
+import { ApprovalContent } from "./components/ApprovalContent.js";
 
 type Tab =
   | "chat"
   | "tasks"
+  | "changes"
   | "approvals"
   | "plan"
   | "memory"
@@ -90,13 +99,24 @@ type ApprovalPrompt =
   | { kind: "tool"; approval: ApprovalRequest }
   | { kind: "plan"; plan: PlanSpec };
 
+const initialTheme = readTheme();
+applyTheme(initialTheme);
+
 function App() {
+  const { confirm, confirmationDialog } = useConfirmation();
+  const [theme, setTheme] = useState<ThemeId>(initialTheme);
+  const [themeSaved, setThemeSaved] = useState(true);
+  function changeTheme(next: ThemeId) {
+    setTheme(next);
+    setThemeSaved(saveTheme(next));
+  }
   const [unlocked, setUnlocked] = useState(false);
   const [passphrase, setPassphrase] = useState("");
   const [rememberDevice, setRememberDevice] = useState(false);
   const [unlockError, setUnlockError] = useState("");
   const [tab, setTab] = useState<Tab>("chat");
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [sidebarWidth, setSidebarWidth] = useState(readSidebarWidth);
   const [workspace, setWorkspace] = useState("");
   const [profiles, setProfiles] = useState<Profile[]>([]);
   const [profileId, setProfileId] = useState("default");
@@ -411,7 +431,7 @@ function App() {
   }
 
   async function deleteSession(item: SessionSummary) {
-    if (busy || !window.confirm(`将会话“${item.title}”移到设置中的已删除会话？长期记忆会保留。`)) return;
+    if (busy || !await confirm({title:"删除这个会话？",description:"会话将移到设置中的已删除会话，可随时恢复。长期记忆会保留。",subject:item.title,confirmLabel:"删除会话",status:"可恢复"})) return;
     setHistoryError("");
     try {
       await window.harness.request({ method: "session.delete", params: { sessionId: item.id } });
@@ -434,7 +454,7 @@ function App() {
   }
 
   async function deleteProject(project: ProjectRecord) {
-    if (busy || !window.confirm(`从 Harness 隐藏项目“${basename(project.workspacePath)}”？磁盘中的代码与文件不会被删除，会话和记忆也会保留。`)) return;
+    if (busy || !await confirm({title:"删除这个项目？",description:"项目将从 Harness 隐藏。磁盘中的代码与文件不会被删除，会话和记忆也会保留。",subject:project.workspacePath,confirmLabel:"删除项目",status:"仅从列表隐藏"})) return;
     setHistoryError("");
     try {
       await window.harness.request({ method: "project.delete", params: { projectId: project.id } });
@@ -683,6 +703,7 @@ function App() {
   return (
     <div
       className={`app-shell workbench${sidebarCollapsed ? " sidebar-collapsed" : ""}`}
+      style={{ "--sidebar-width": `${sidebarWidth}px` } as React.CSSProperties}
       onDragOver={(event) => event.preventDefault()}
       onDrop={(event) => {
         event.preventDefault();
@@ -712,6 +733,7 @@ function App() {
             [
               "chat",
               "tasks",
+              "changes",
               "approvals",
               "plugins",
             ] as Tab[]
@@ -781,10 +803,15 @@ function App() {
         </details>
         </div>
         <div className="sidebar-foot">
-          <BuiButton variant="ghost" onClick={() => setTab("settings")} className="sidebar-settings"><Settings size={17} /><span>设置</span><small>v1.4.1</small></BuiButton>
+          <BuiButton variant="ghost" onClick={() => setTab("settings")} className="sidebar-settings"><Settings size={17} /><span>设置</span><small>v1.4.2</small></BuiButton>
           <div className="sidebar-connection"><span className="status-dot" />本地运行时已解锁</div>
         </div>
       </aside>
+      <SidebarResizeHandle
+        value={sidebarWidth}
+        onResize={(value) => setSidebarWidth(clampSidebarWidth(value))}
+        onCommit={(value) => setSidebarWidth(saveSidebarWidth(value))}
+      />
       <main>
         <header className="topbar">
           <div className="workbench-heading">
@@ -792,6 +819,9 @@ function App() {
             <h1>{tab === "chat" ? "开发会话" : tabLabel(tab)}</h1>
           </div>
           <div className="top-actions">
+            <select className="theme-quick-switch" aria-label="界面主题" value={theme} onChange={event => { if (isThemeId(event.target.value)) changeTheme(event.target.value); }}>
+              {THEMES.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}
+            </select>
             <select
               aria-label="选择 Profile"
               value={profileId}
@@ -834,6 +864,7 @@ function App() {
               createTask={createTask}
             />
           )}
+          {tab === "changes" && <CodeChanges events={conversationTurns.length ? conversationTurns.flatMap(turn => turn.events) : events} />}
           {tab === "approvals" && (
             <ApprovalsView approvals={approvals} decide={decideApproval} />
           )}
@@ -854,7 +885,7 @@ function App() {
               {...(activeRun ? { runId: activeRun } : {})}
             />
           )}
-          {tab === "settings" && <SettingsView key={recycleVersion} refresh={refresh} refreshHistory={refreshHistory} />}
+          {tab === "settings" && <SettingsView key={recycleVersion} refresh={refresh} refreshHistory={refreshHistory} theme={theme} onThemeChange={changeTheme} themeSaved={themeSaved} />}
         </section>
       </main>
       {capture && (
@@ -874,6 +905,7 @@ function App() {
           }}
         />
       )}
+      {confirmationDialog}
       {approvalPrompt && (
         <ApprovalPromptDialog
           prompt={approvalPrompt}
@@ -965,12 +997,6 @@ function ChatView(props: {
   const followLatestRef = useRef(true);
   const eventCount = props.turns.reduce((total, turn) => total + turn.events.length, 0);
   const currentFinalText = assistantMessages(props.events).text;
-  const route = props.events.find((event) => event.type === "route") as
-    Extract<AgentEvent, { type: "route" }> | undefined;
-  const status = [...props.events]
-    .reverse()
-    .find((event) => event.type === "status") as
-    Extract<AgentEvent, { type: "status" }> | undefined;
 
   useEffect(() => {
     const conversation = conversationRef.current;
@@ -1037,11 +1063,6 @@ function ChatView(props: {
           }
           disabled={!props.workspace || !props.hasSession || props.busy}
           busy={props.busy}
-          {...(props.profile
-            ? {
-                providerLabel: route ? `${route.providerId} / ${route.modelId}` : `自动路由 · ${props.profile.allowedProviders.join(" / ")}`,
-              }
-            : {})}
           {...(props.attachments.length > 0
             ? {
                 attachments: (
@@ -1102,15 +1123,56 @@ function ChatView(props: {
             </>
           }
         />
-        {status && (
-          <div className="mt-2 flex items-center justify-center gap-2 text-xs text-text-muted">
-            <span className="inline-block h-1.5 w-1.5 rounded-full bg-success" />
-            {status.status}
-          </div>
-        )}
       </div>
     </div>
   );
+}
+
+function SidebarResizeHandle({ value, onResize, onCommit }: {
+  value: number;
+  onResize: (value: number) => void;
+  onCommit: (value: number) => void;
+}) {
+  const start = useRef({ x: 0, width: value });
+  const latest = useRef(value);
+  latest.current = value;
+  function setFromKeyboard(next: number) {
+    const clamped = clampSidebarWidth(next);
+    onResize(clamped);
+    onCommit(clamped);
+  }
+  return <div
+    className="sidebar-resizer"
+    role="separator"
+    aria-label="调整侧栏宽度"
+    aria-orientation="vertical"
+    aria-valuemin={SIDEBAR_MIN}
+    aria-valuemax={SIDEBAR_MAX}
+    aria-valuenow={value}
+    tabIndex={0}
+    onDoubleClick={() => setFromKeyboard(258)}
+    onKeyDown={(event) => {
+      const next = event.key === "ArrowLeft" ? value - 12 : event.key === "ArrowRight" ? value + 12 : event.key === "Home" ? SIDEBAR_MIN : event.key === "End" ? SIDEBAR_MAX : undefined;
+      if (next !== undefined) { event.preventDefault(); setFromKeyboard(next); }
+    }}
+    onPointerDown={(event) => {
+      start.current = { x: event.clientX, width: value };
+      latest.current = value;
+      event.currentTarget.setPointerCapture(event.pointerId);
+      event.currentTarget.classList.add("is-dragging");
+    }}
+    onPointerMove={(event) => {
+      if (!event.currentTarget.hasPointerCapture(event.pointerId)) return;
+      const next = clampSidebarWidth(start.current.width + event.clientX - start.current.x);
+      latest.current = next;
+      onResize(next);
+    }}
+    onPointerUp={(event) => {
+      if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
+      event.currentTarget.classList.remove("is-dragging");
+      onCommit(latest.current);
+    }}
+  />;
 }
 
 function ConversationTurnView({ turn, busy }: { turn: SessionTurn; busy: boolean }) {
@@ -1373,98 +1435,9 @@ function ApprovalPromptDialog({
 }) {
   const isTool = prompt.kind === "tool";
   const risk = isTool ? prompt.approval.risk : prompt.plan.scope.maxRisk;
-  const riskBorder =
-    risk === "destructive"
-      ? "border-danger/40"
-      : risk === "high"
-        ? "border-warning/40"
-        : "border-warning/30";
-  return (
-    <div className="approval-overlay" role="dialog" aria-modal="true">
-      <BuiGlassPanel
-        strong
-        className={`flex max-h-full w-[560px] max-w-[92vw] flex-col overflow-hidden border ${riskBorder} p-5`}
-      >
-        <header className="flex shrink-0 items-start justify-between gap-3">
-          <div>
-            <small className="text-[10px] font-semibold tracking-widest text-text-muted">
-              WAITING APPROVAL
-            </small>
-            <h2 className="mt-1 text-base font-semibold text-text">
-              {isTool ? "工具请求审批" : "执行计划请求审批"}
-            </h2>
-          </div>
-          <BuiButton variant="ghost" size="sm" aria-label="稍后处理" onClick={onClose}>
-            <X size={14} />
-          </BuiButton>
-        </header>
-        {isTool ? (
-          <div className="mt-4 flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto">
-            <p className="flex items-center gap-2 text-sm">
-              <BuiBadge tone={riskTone(risk)}>{risk}</BuiBadge>
-              <strong className="font-mono text-text">{prompt.approval.toolName}</strong>
-            </p>
-            <p className="text-sm text-text-muted">{prompt.approval.reason}</p>
-            <pre className="max-h-[40vh] overflow-auto rounded-xl bg-black/30 p-3 font-mono text-xs text-text-muted">
-              {formatToolContext(prompt.approval.normalizedInput)}
-            </pre>
-            <footer className="mt-1 flex justify-end gap-2">
-              <BuiButton
-                variant="ghost"
-                onClick={() => void onDecideTool(prompt.approval.id, false)}
-              >
-                拒绝
-              </BuiButton>
-              <BuiButton
-                variant="primary"
-                onClick={() => void onDecideTool(prompt.approval.id, true)}
-              >
-                批准一次
-              </BuiButton>
-            </footer>
-          </div>
-        ) : (
-          <div className="mt-4 flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto">
-            <p className="text-sm text-text">{prompt.plan.goal}</p>
-            <ol className="flex flex-col gap-2">
-              {prompt.plan.steps.map((step, index) => (
-                <li
-                  key={step.id}
-                  className="flex items-start gap-3 rounded-xl border border-line bg-white/5 px-3 py-2.5"
-                >
-                  <span className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-accent-soft font-mono text-[10px] text-accent-text">
-                    {index + 1}
-                  </span>
-                  <div className="min-w-0">
-                    <strong className="block truncate text-sm text-text">
-                      {step.title}
-                    </strong>
-                    <small className="block truncate text-xs text-text-muted">
-                      {step.acceptanceCriteria.join("；")}
-                    </small>
-                  </div>
-                </li>
-              ))}
-            </ol>
-            <footer className="mt-1 flex justify-end gap-2">
-              <BuiButton
-                variant="ghost"
-                onClick={() => void onDecidePlan(prompt.plan, false)}
-              >
-                拒绝
-              </BuiButton>
-              <BuiButton
-                variant="primary"
-                onClick={() => void onDecidePlan(prompt.plan, true)}
-              >
-                批准计划
-              </BuiButton>
-            </footer>
-          </div>
-        )}
-      </BuiGlassPanel>
-    </div>
-  );
+  return <DecisionDialog title={isTool ? "允许执行这项操作？" : "批准这个执行计划？"} status={risk === "destructive" ? "破坏性操作 · 请谨慎确认" : risk === "high" ? "高风险 · 需要审批" : "需要你的批准"} destructive={risk === "destructive" || risk === "high"} confirmLabel={isTool ? "批准一次" : "批准计划"} cancelLabel="拒绝" onDismiss={onClose} onCancel={() => isTool ? onDecideTool(prompt.approval.id,false) : onDecidePlan(prompt.plan,false)} onConfirm={() => isTool ? onDecideTool(prompt.approval.id,true) : onDecidePlan(prompt.plan,true)}>
+   {isTool ? <><p className="decision-description">{prompt.approval.reason}</p><span className="decision-subject">{prompt.approval.toolName}</span><ApprovalContent input={prompt.approval.normalizedInput}/></> : <><p className="decision-description">{prompt.plan.goal}</p><ol className="decision-plan">{prompt.plan.steps.map(step=><li key={step.id}><strong>{step.title}</strong><span>{step.acceptanceCriteria.join("；")}</span></li>)}</ol></>}
+  </DecisionDialog>;
 }
 
 function riskTone(risk: string): "danger" | "warning" | "info" {
@@ -1663,9 +1636,7 @@ function ApprovalsView({
             </small>
           </div>
           <p className="mt-2 text-sm text-text-muted">{approval.reason}</p>
-          <pre className="mt-2 max-h-[40vh] overflow-auto rounded-xl bg-black/30 p-3 font-mono text-xs text-text-muted">
-            {formatToolContext(approval.normalizedInput)}
-          </pre>
+          <ApprovalContent input={approval.normalizedInput} />
           {approval.status === "pending" && (
             <footer className="mt-3 flex justify-end gap-2">
               <BuiButton
@@ -2205,7 +2176,7 @@ function TraceView({
   );
 }
 
-function SettingsView({ refresh, refreshHistory }: { refresh: () => Promise<void>; refreshHistory: () => Promise<void> }) {
+function SettingsView({ refresh, refreshHistory, theme, onThemeChange, themeSaved }: { refresh: () => Promise<void>; refreshHistory: () => Promise<void>; theme: ThemeId; onThemeChange: (theme: ThemeId) => void; themeSaved: boolean }) {
   const [pairing, setPairing] = useState<string>();
   const [credentials, setCredentials] = useState<Record<string, boolean>>({});
   const [credentialValue, setCredentialValue] = useState("");
@@ -2288,6 +2259,7 @@ function SettingsView({ refresh, refreshHistory }: { refresh: () => Promise<void
   }
   return (
     <div className="grid grid-cols-2 gap-3">
+      <ThemePicker value={theme} onChange={onThemeChange} saved={themeSaved} />
       <RecycleBin onChanged={refreshHistory} />
       <article className="glass flex flex-col gap-2 p-4">
         <small className="text-[10px] font-semibold tracking-widest text-accent-text">
@@ -2558,6 +2530,7 @@ function Icon({ name }: { name: Tab }) {
   const map: Record<Tab, React.ReactNode> = {
     chat: <MessageSquare size={16} />,
     tasks: <SquareKanban size={16} />,
+    changes: <ClipboardList size={16} />,
     approvals: <ShieldCheck size={16} />,
     plan: <ClipboardList size={16} />,
     memory: <Brain size={16} />,
@@ -2576,6 +2549,7 @@ function tabLabel(tab: Tab): string {
   return {
     chat: "会话",
     tasks: "任务板",
+    changes: "代码变更",
     approvals: "审批",
     plan: "计划与验证",
     memory: "记忆",

@@ -1,6 +1,6 @@
 {
   "name": "@harness/protocol",
-  "version": "1.4.1",
+  "version": "1.4.2",
   "type": "module",
   "exports": "./src/index.ts",
   "dependencies": { "zod": "^4.1.5" }

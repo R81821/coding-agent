@@ -2,9 +2,13 @@ import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { expect, it } from "vitest";
 import { BuiPromptBar } from "./prompt-bar.js";
-it("offers explicit task modes and disables mode changes while running", () => {
+it("shows only the color-coded current mode and an accessible additions button", () => {
  const html = renderToStaticMarkup(<BuiPromptBar value="检查" onChange={() => {}} onSubmit={() => {}} placeholder="" disabled={true} busy={true} taskMode="analysis" onTaskModeChange={() => {}} />);
- expect(html).toContain('aria-label="任务模式"'); expect(html).toContain('value="analysis" selected=""');
- expect(html).toContain('value="auto"'); expect(html).toContain('value="change"');
- expect(html.match(/<select[^>]+>/)?.[0]).toContain('disabled=""');
+ expect(html).toContain('aria-label="添加内容"');
+ expect(html).toContain('class="prompt-current-mode mode-analysis"');
+ expect(html).toContain('>Plan</span>');
+ expect(html).not.toContain('Shift+Tab');
+ expect(html).not.toContain('自动路由');
+ expect(html).not.toContain('<select');
+ expect(html.match(/<button[^>]+aria-label="添加内容"[^>]*>/)?.[0]).toContain('disabled=""');
 });

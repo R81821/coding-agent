@@ -269,10 +269,10 @@ function createWindow(show: boolean): void {
   void logLifecycle("create-window", { show });
   window = new BrowserWindow({
     show,
-    width: 1480,
-    height: 920,
-    minWidth: 1060,
-    minHeight: 700,
+    width: 1200,
+    height: 800,
+    minWidth: 900,
+    minHeight: 620,
     backgroundColor: "#211e27",
     titleBarStyle: "hiddenInset",
     webPreferences: {

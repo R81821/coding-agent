@@ -1,6 +1,6 @@
 {
   "name": "@harness/providers",
-  "version": "1.4.1",
+  "version": "1.4.2",
   "type": "module",
   "exports": "./src/index.ts",
   "dependencies": { "@harness/protocol": "workspace:*", "zod": "^4.1.5" }

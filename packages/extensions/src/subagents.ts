@@ -47,23 +47,40 @@ export class ConcurrencyPool {
   private readonly waiting: Array<() => void> = [];
 
   constructor(readonly limit = 4) {
-    if (limit < 1 || limit > 8) throw new Error("Sub-agent concurrency must be between 1 and 8");
+    if (!Number.isInteger(limit) || limit < 1 || limit > 8) throw new Error("Sub-agent concurrency must be between 1 and 8");
   }
 
-  async run<T>(operation: () => Promise<T>): Promise<T> {
-    await this.acquire();
-    try { return await operation(); } finally { this.release(); }
+  async run<T>(operation: () => Promise<T>, signal?: AbortSignal): Promise<T> {
+    await this.acquire(signal);
+    try {
+      signal?.throwIfAborted();
+      return await operation();
+    } finally { this.release(); }
   }
 
-  private async acquire(): Promise<void> {
+  private async acquire(signal?: AbortSignal): Promise<void> {
+    signal?.throwIfAborted();
     if (this.active < this.limit) { this.active += 1; return; }
-    await new Promise<void>((resolveWait) => this.waiting.push(resolveWait));
-    this.active += 1;
+    await new Promise<void>((resolveWait, rejectWait) => {
+      const resume = () => {
+        signal?.removeEventListener("abort", abort);
+        resolveWait();
+      };
+      const abort = () => {
+        const index = this.waiting.indexOf(resume);
+        if (index >= 0) this.waiting.splice(index, 1);
+        rejectWait(signal?.reason ?? new Error("Queued operation cancelled"));
+      };
+      this.waiting.push(resume);
+      signal?.addEventListener("abort", abort, { once: true });
+    });
   }
 
   private release(): void {
-    this.active -= 1;
-    this.waiting.shift()?.();
+    const next = this.waiting.shift();
+    // Transfer ownership directly: newcomers must not steal a queued waiter's slot.
+    if (next) next();
+    else this.active -= 1;
   }
 }
 
