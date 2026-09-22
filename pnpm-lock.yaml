@@ -94,6 +94,9 @@ importers:
       '@harness/protocol':
         specifier: workspace:*
         version: link:../../packages/protocol
+      '@harness/tools':
+        specifier: workspace:*
+        version: link:../../packages/tools
       lowlight:
         specifier: ^3.3.0
         version: 3.3.0

@@ -1,0 +1,45 @@
+.workbench.app-shell.browser-open { grid-template-columns: var(--sidebar-width, 258px) 6px minmax(300px, 1fr) 6px minmax(340px, min(var(--browser-width, 440px), calc(100vw - var(--sidebar-width, 258px) - 350px))); }
+.workbench.sidebar-collapsed.browser-open { grid-template-columns: 0 0 minmax(300px, 1fr) 6px minmax(340px, min(var(--browser-width, 440px), calc(100vw - 350px))); }
+.browser-open > main { grid-column: 3; container: browser-chat / inline-size; }
+.browser-open > .browser-resizer { grid-column: 4; }
+.browser-open > .browser-panel { grid-column: 5; }
+@container browser-chat (max-width: 650px) {
+  .workbench .topbar { padding: 8px 12px; gap: 6px; }
+  .workbench .topbar h1, .workbench .secure { display: none; }
+  .workbench-heading { flex-shrink: 0; }
+  .top-actions { min-width: 0; flex: 1; gap: 6px; }
+  .workbench .topbar select { min-width: 0; width: 0; flex: 1; }
+  .workbench .composer-wrap { width: calc(100% - 32px); }
+  .composer-project-bar { gap: 10px; padding: 8px 12px; }
+  .composer-project-bar > span { white-space: nowrap; }
+  .composer-profile { display: none; }
+  .workbench .conversation { padding-left: 18px; padding-right: 18px; }
+}
+.browser-panel { display: flex; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden; background: var(--panel); border: 1px solid var(--line); border-radius: 16px; color: var(--color-text); }
+.browser-panel button { display: inline-flex; justify-content: center; align-items: center; flex-shrink: 0; border: 0; border-radius: 7px; padding: 6px; background: transparent; color: var(--color-text-muted); cursor: pointer; }
+.browser-panel button:hover:not(:disabled) { color: var(--color-text); background: var(--accent-soft); }
+.browser-panel button:disabled { opacity: .4; cursor: default; }
+.browser-panel-heading { display: flex; align-items: center; gap: 8px; padding: 8px 10px; min-height: 42px; border-bottom: 1px solid var(--line); }
+.browser-panel-heading strong { font-size: 12px; color: var(--color-text); }
+.browser-panel-heading small { margin-right: auto; font-size: 10px; color: var(--muted); }
+.browser-tab-strip { display: flex; gap: 4px; padding: 7px 7px 0; overflow-x: auto; flex-shrink: 0; }
+.browser-tab { display: flex; align-items: center; flex: 0 0 auto; max-width: 175px; border-radius: 8px 8px 0 0; background: var(--bg); }
+.browser-tab.active { background: var(--accent-soft); }
+.browser-tab button[role="tab"] { gap: 6px; min-width: 0; max-width: 145px; font-size: 11px; }
+.browser-tab span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.browser-address-bar { display: flex; align-items: center; gap: 2px; padding: 8px 6px; border-bottom: 1px solid var(--line); }
+.workbench .browser-address-bar input { min-width: 0; flex: 1; width: 0; border: 1px solid var(--line); border-radius: 8px; padding: 7px 9px; font-size: 11px; box-shadow: none; }
+.browser-viewport { flex: 1; min-height: 120px; position: relative; }
+.browser-empty { display: flex; height: 100%; align-items: center; justify-content: center; flex-direction: column; gap: 14px; padding: 25px; text-align: center; color: var(--muted); }
+.browser-empty strong { color: var(--color-text); font-size: 14px; }
+.browser-empty p { font-size: 12px; line-height: 1.7; }
+.browser-resizer { width: 6px; cursor: col-resize; touch-action: none; -webkit-app-region: no-drag; }
+.browser-resizer:hover, .browser-resizer:focus-visible { background: var(--accent-soft); }
+.browser-error { flex-shrink: 0; max-height: 80px; overflow: auto; padding: 8px 12px; color: var(--danger); font-size: 12px; overflow-wrap: anywhere; }
+.browser-downloads { flex-shrink: 0; max-height: 180px; overflow-y: auto; border-bottom: 1px solid var(--line); padding: 8px; font-size: 11px; }
+.browser-downloads article { padding: 8px; border-bottom: 1px solid var(--line); }
+.browser-downloads strong, .browser-downloads small { display: block; overflow-wrap: anywhere; color: var(--color-text); }
+.browser-downloads small { margin-top: 4px; color: var(--muted); }
+.browser-spin { animation: browser-spin 1s linear infinite; }
+@keyframes browser-spin { to { transform: rotate(360deg); } }
+@media (max-width: 1100px) { .workbench.app-shell.browser-open { grid-template-columns: 0 0 minmax(300px, 1fr) 6px minmax(340px, min(var(--browser-width, 440px), calc(100vw - 350px))); } .browser-open > .sidebar, .browser-open > .sidebar-resizer { visibility: hidden; } }

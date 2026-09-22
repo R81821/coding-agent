@@ -144,9 +144,12 @@ describe("1.4.0 modern analysis path end to end", () => {
     expect(observed.events.some((event) => event.type === "tool_finished" && event.callId === "read" && event.isError === true)).toBe(false);
     // The model never sees the legacy large workflow tool, only the lightweight runtime set.
     for (const request of observed.requests) {
-      // The 8192 ceiling is only reachable when the planner asks for it. A 4096 estimate used to be
-      // the binding limit, so a long single answer came back truncated (max_output_tokens).
-      expect(request.maxOutputTokens).toBe(8_192);
+      // Preserve the configured large-output ceiling while fitting this model's remaining
+      // context. The former fixed 8192 ceiling must not silently return.
+      expect(request.maxOutputTokens).toBeGreaterThan(8_192);
+      expect(request.maxOutputTokens).toBeLessThanOrEqual(393_216);
+      const inputEstimate = Math.ceil(JSON.stringify({ messages: request.messages, tools: request.tools }).length / 4);
+      expect(request.maxOutputTokens + inputEstimate).toBeLessThan(request.model.capabilities.maxContextTokens);
       expect(request.tools.map((tool) => tool.name).sort()).toEqual(["probe", "read_evidence", "read_file", "run_verification", "terminal", "todo"]);
       for (const tool of request.tools) {
         const schema = tool.inputSchema as { properties?: Record<string, { default?: unknown }>; required?: string[] };

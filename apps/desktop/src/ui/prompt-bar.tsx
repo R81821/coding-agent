@@ -1,5 +1,5 @@
 import React, { useEffect, useId, useRef, useState } from "react";
-import { ArrowUp, Check, Loader2, Plus, ListChecks, Hammer, Sparkles } from "lucide-react";
+import { ArrowUp, Check, Plus, ListChecks, Hammer, Sparkles, Square } from "lucide-react";
 import { shouldSubmitComposerKey } from "../composer-keys.js";
 import "./prompt-bar.css";
 
@@ -10,7 +10,60 @@ const modes = [
   { value: "auto", label: "Auto", icon: Sparkles },
 ] as const;
 
-export function BuiPromptBar({ value, onChange, onSubmit, placeholder, disabled, busy, taskMode = "auto", onTaskModeChange, attachments, actions }: {
+/**
+ * One control for the three things a composer can do, chosen by what the user has in hand. Typing
+ * always wins: text is submitted (a steering note while a run is active, otherwise a new task), so
+ * the button never parks a run the moment someone starts a correction. With nothing typed it takes
+ * on the run's own state — pause while working, continue once parked.
+ */
+function TrailingAction({ locked, runLocked, hasText, busy, onHold, holding, onRelease, canRelease, onSubmit }: {
+  /** Blocks submitting text: the composer is unavailable or idle. */
+  locked: boolean;
+  /**
+   * Blocks the run controls. Deliberately not `locked`: a run is busy precisely while it can be
+   * paused, so gating pause on the busy flag disables the button exactly when it is needed.
+   */
+  runLocked: boolean;
+  hasText: boolean;
+  busy: boolean;
+  onHold?: (() => void) | undefined;
+  holding?: boolean | undefined;
+  onRelease?: (() => void) | undefined;
+  canRelease?: boolean | undefined;
+  onSubmit: () => void;
+}) {
+  if (hasText) {
+    return (
+      <button type="button" className="prompt-send" disabled={locked} aria-label={busy ? "发送补充说明" : "发送"}
+        title={busy ? "发送补充说明，将在下一个回合边界读取" : "发送"} onClick={onSubmit}>
+        <ArrowUp size={20} aria-hidden="true" />
+      </button>
+    );
+  }
+  if (holding && onRelease) {
+    return (
+      <button type="button" className="prompt-send is-holding" disabled={runLocked || canRelease === false}
+        aria-label="继续" title="继续运行" onClick={onRelease}>
+        <ArrowUp size={20} aria-hidden="true" />
+      </button>
+    );
+  }
+  if (busy && onHold) {
+    return (
+      <button type="button" className="prompt-send is-running" disabled={runLocked}
+        aria-label="暂停" title="在下一个回合边界暂停" onClick={onHold}>
+        <Square size={14} fill="currentColor" strokeWidth={0} aria-hidden="true" />
+      </button>
+    );
+  }
+  return (
+    <button type="button" className="prompt-send" disabled aria-label="发送">
+      <ArrowUp size={20} aria-hidden="true" />
+    </button>
+  );
+}
+
+export function BuiPromptBar({ value, onChange, onSubmit, placeholder, disabled, busy, taskMode = "auto", onTaskModeChange, attachments, actions, skillChips, skillPicker, onHold, holding, onRelease, canRelease, runDisabled = false }: {
   value: string;
   onChange: (value: string) => void;
   onSubmit: () => void;
@@ -21,6 +74,16 @@ export function BuiPromptBar({ value, onChange, onSubmit, placeholder, disabled,
   onTaskModeChange?: (mode: TaskMode) => void;
   attachments?: React.ReactNode;
   actions?: React.ReactNode;
+  skillChips?: React.ReactNode;
+  skillPicker?: React.ReactNode;
+  /** Set while a run the caller can hold is active; makes the trailing control a pause button. */
+  onHold?: () => void;
+  /** True once the run has actually parked. The same control then resumes it. */
+  holding?: boolean;
+  onRelease?: () => void;
+  canRelease?: boolean;
+  /** Blocks the pause/continue control only. Defaults to `disabled`; never derived from `busy`. */
+  runDisabled?: boolean;
 }) {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const shellRef = useRef<HTMLDivElement>(null);
@@ -36,7 +99,7 @@ export function BuiPromptBar({ value, onChange, onSubmit, placeholder, disabled,
     textarea.style.height = "0px";
     textarea.style.height = `${Math.min(Math.max(textarea.scrollHeight, 40), 168)}px`;
   }, [value]);
-  useEffect(() => { if (locked) setOpen(false); }, [locked]);
+  useEffect(() => { if (disabled) setOpen(false); }, [disabled]);
   useEffect(() => {
     if (!open) return;
     const close = (event: PointerEvent) => {
@@ -59,8 +122,10 @@ export function BuiPromptBar({ value, onChange, onSubmit, placeholder, disabled,
           onTaskModeChange(modes[(modes.findIndex(mode => mode.value === taskMode) + 1) % modes.length]!.value);
         }
       }}>
+      {skillChips}
+      {skillPicker}
       {attachments && <div className="prompt-attachments">{attachments}</div>}
-      {open && !locked && <div id={menuId} className="prompt-add-panel" role="dialog" aria-label="添加内容与任务模式">
+      {open && !disabled && <div id={menuId} className="prompt-add-panel" role="dialog" aria-label="添加内容与任务模式">
         {actions && <div className="prompt-add-files" onClick={event => {
           const button = (event.target as Element).closest("button");
           if (button && !button.disabled) { setOpen(false); textareaRef.current?.focus(); }
@@ -74,7 +139,7 @@ export function BuiPromptBar({ value, onChange, onSubmit, placeholder, disabled,
         </div>}
       </div>}
       <div className="prompt-compose-row">
-        <button ref={triggerRef} type="button" className="prompt-add" aria-label="添加内容" aria-haspopup="dialog" aria-expanded={open && !locked} aria-controls={open && !locked ? menuId : undefined} disabled={locked} onClick={() => setOpen(!open)}><Plus size={21} aria-hidden="true" /></button>
+        <button ref={triggerRef} type="button" className="prompt-add" aria-label="添加内容" aria-haspopup="dialog" aria-expanded={open && !disabled} aria-controls={open && !disabled ? menuId : undefined} disabled={disabled} onClick={() => setOpen(!open)}><Plus size={21} aria-hidden="true" /></button>
         <textarea ref={textareaRef} rows={1} value={value} onChange={event => onChange(event.target.value)} placeholder={placeholder} disabled={disabled}
           aria-label="向 Harness Agent 发送消息" className="prompt-textarea"
           onKeyDown={event => {
@@ -85,9 +150,17 @@ export function BuiPromptBar({ value, onChange, onSubmit, placeholder, disabled,
           }} />
         <div className="prompt-meta">
           {onTaskModeChange && <span className={`prompt-current-mode mode-${current.value}`} aria-live="polite">{current.label}</span>}
-          <button type="button" className="prompt-send" disabled={locked || !value.trim()} aria-label={busy ? "正在运行" : "发送"} title={busy ? "正在运行" : "发送"} onClick={onSubmit}>
-            {busy ? <Loader2 size={15} className="animate-spin" aria-hidden="true" /> : <ArrowUp size={20} aria-hidden="true" />}
-          </button>
+          <TrailingAction
+            locked={locked}
+            runLocked={runDisabled || disabled}
+            hasText={Boolean(value.trim())}
+            busy={busy}
+            onHold={onHold}
+            holding={holding}
+            onRelease={onRelease}
+            canRelease={canRelease}
+            onSubmit={onSubmit}
+          />
         </div>
       </div>
     </div>

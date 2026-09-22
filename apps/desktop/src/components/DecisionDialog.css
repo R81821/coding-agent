@@ -14,9 +14,15 @@ dialog.decision-dialog::backdrop { background:rgba(12,13,15,.64); backdrop-filte
 .decision-status i { display:flex; gap:3px; }.decision-status b { display:block; width:5px; height:14px; background:#3ac781; border-radius:4px; }.decision-status.is-danger b { background:#f3a356; }
 .decision-actions { display:flex; gap:10px; margin-left:auto; }
 .decision-actions button { border-radius:999px; padding:8px 17px; min-height:40px; font-size:15px; line-height:22px; font-weight:600; white-space:nowrap; }
-.decision-secondary { background:transparent; border:1px solid #3b3c3f; color:#e9e9eb; }.decision-primary { background:#3996ff; border:1px solid #62acff; color:white; }
-.decision-primary:hover { background:#51a3ff; }.decision-secondary:hover { background:#2e3033; }
+.decision-secondary { background:transparent; border:1px solid #3b3c3f; color:#e9e9eb; }.decision-primary { background:#2563eb; border:1px solid #62acff; color:white; }
+.decision-primary:hover { background:#1d4ed8; }.decision-secondary:hover { background:#2e3033; }
 .decision-card button:focus-visible { outline:2px solid #96c7ff; outline-offset:3px; }.decision-card button:disabled { opacity:.5; cursor:wait; }
 .decision-card .approval-readable { gap:8px; }.decision-card .approval-readable small { color:#a5a6ab; }.decision-card .approval-readable pre { background:#1c1d1f; border:1px solid #303134; border-radius:10px; color:#e3e4e7; max-height:30vh; }
+/* Disclosure for detail that would otherwise bury the actions: one toggle, closed by default. */
+.decision-alternatives { background:transparent; border:1px solid #3b3c3f; color:#e9e9eb; }
+.decision-alternatives:hover { background:#2e3033; }
+.decision-alternatives[aria-expanded="true"] { background:#2e3033; border-color:#4c4d51; }
+.decision-alternatives-panel { margin-top:14px; border-top:1px solid #36373a; padding-top:12px; }
+.decision-alternatives-panel[hidden] { display:none; }
 .decision-error { color:#ffabae; margin-top:12px; }.decision-plan { margin:12px 0 0; padding-left:22px; }.decision-plan li { margin:8px 0; }.decision-plan strong { color:#e9e9eb; display:block; }
 @media(max-width:480px) { .decision-card h2 {font-size:18px}.decision-card footer {padding-top:22px}.decision-status {font-size:12px}.decision-actions button {padding:7px 14px} }

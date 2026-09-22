@@ -2,6 +2,7 @@ import type { PermissionGrant, RiskLevel, ToolContract } from "@harness/protocol
 
 export interface ToolContext {
   runId: string;
+  sessionId?: string;
   workspacePath: string;
   grants: PermissionGrant[];
   signal: AbortSignal;

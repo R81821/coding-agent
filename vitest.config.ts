@@ -9,6 +9,7 @@ export default defineConfig({
       "@harness/protocol": `${root}packages/protocol/src/index.ts`,
       "@harness/providers": `${root}packages/providers/src/index.ts`,
       "@harness/persistence": `${root}packages/persistence/src/index.ts`,
+      "@harness/tools/paths": `${root}packages/tools/src/paths.ts`,
       "@harness/tools": `${root}packages/tools/src/index.ts`,
       "@harness/extensions": `${root}packages/extensions/src/index.ts`,
       "@harness/core": `${root}packages/core/src/index.ts`,

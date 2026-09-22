@@ -6,9 +6,9 @@
   --color-surface-strong: #29282b;
   --color-line: rgba(148, 163, 184, 0.14);
   --color-line-strong: rgba(148, 163, 184, 0.28);
-  --color-text: #ecebed;
-  --color-text-muted: #a29fa8;
-  --color-accent: #3b82f6;
+  --color-text: #f5f3f7;
+  --color-text-muted: #c4c0cc;
+  --color-accent: #2563eb;
   --color-accent-soft: rgba(163, 132, 206, 0.12);
   --color-accent-text: #c4a4ef;
   --color-success: #34d399;

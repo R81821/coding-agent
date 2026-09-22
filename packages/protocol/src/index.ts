@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { SkillReferenceSchema } from "./skills.js";
 import { WorkflowStateSchema } from "./workflow.js";
 export * from "./workflow.js";
 
@@ -407,6 +408,9 @@ export const AgentEventSchema = z.discriminatedUnion("type", [
   z.object({ ...eventBase, type: z.literal("recovery_event"), checkpointId: z.string().optional(), action: z.enum(["restored", "paused_non_idempotent", "failed"]), detail: z.string() }),
   z.object({ ...eventBase, type: z.literal("model_request_finished"), purpose: z.enum(["main", "compaction", "review"]), durationMs: z.number().nonnegative(), succeeded: z.boolean() }),
   z.object({ ...eventBase, type: z.literal("usage"), usage: UsageSchema }),
+  // A steering message is user input injected mid-run. It is a user_request, never a grant, and the
+  // event marks the exact point the model received it.
+  z.object({ ...eventBase, type: z.literal("steering_delivered"), text: z.string() }),
   z.object({ ...eventBase, type: z.literal("error"), code: z.string(), message: z.string(), retryable: z.boolean() }),
   z.object({ ...eventBase, type: z.literal("result"), text: z.string(), status: RunStatusSchema, stop: RunStopInfoSchema.optional() })
 ]);
@@ -438,6 +442,8 @@ export const RunBudgetSchema = z.object({
 export type RunBudget = z.infer<typeof RunBudgetSchema>;
 
 export const RunSpecSchema = z.object({
+  skillSelection: z.array(z.string()).max(100).optional(),
+  skills: z.array(SkillReferenceSchema).max(100).optional(),
   taskMode: z.enum(["auto", "analysis", "change"]).default("auto").optional(),
   workflowVersion: z.union([z.literal(1), z.literal(2)]).optional(),
   id: z.string(),
@@ -457,6 +463,7 @@ export type RunHistoryItem = Pick<RunSpec, "id" | "sessionId" | "request" | "wor
 export interface RunHistoryPage { items: RunHistoryItem[]; hasMore: boolean }
 
 export const SessionRecordSchema = z.object({
+  skillSelection: z.array(z.string()).max(100).optional(),
   id: z.string().min(1), workspacePath: z.string().min(1), profileId: z.string().min(1),
   title: z.string().trim().min(1).max(300), createdAt: z.string().datetime(), updatedAt: z.string().datetime(),
   deletedAt: z.string().datetime().optional(),
@@ -562,6 +569,7 @@ export type MemoryScopeSelection = Pick<MemoryRecord, "scope" | "scopeId">;
 export interface MemoryExport { schemaVersion: 1; exportedAt: string; records: MemoryRecord[] }
 
 export const SkillManifestSchema = z.object({
+  key: z.string().optional(),
   id: z.string(),
   name: z.string(),
   version: z.string(),
@@ -594,6 +602,13 @@ export const TaskSpecSchema = z.object({
 export type TaskSpec = z.infer<typeof TaskSpecSchema>;
 
 export const DaemonRequestSchema = z.discriminatedUnion("method", [
+  z.object({ id: z.string(), method: z.literal("session.skills"), params: z.object({ sessionId: z.string().min(1), skillSelection: z.array(z.string().min(1)).max(100) }) }),
+  z.object({ id: z.string(), method: z.literal("skills.recommend"), params: z.object({ profileId: z.string().min(1), query: z.string().trim().min(1).max(4000) }) }),
+  z.object({ id: z.string(), method: z.literal("skills.preview"), params: z.object({ command: z.string().trim().min(1).max(4000) }) }),
+  z.object({ id: z.string(), method: z.literal("skills.install"), params: z.object({ previewId: z.string(), skillPath: z.string(), replace: z.boolean().default(false) }) }),
+  z.object({ id: z.string(), method: z.literal("skills.job"), params: z.object({ jobId: z.string() }) }),
+  z.object({ id: z.string(), method: z.literal("skills.cancel"), params: z.object({ jobId: z.string() }) }),
+  z.object({ id: z.string(), method: z.literal("skills.location") }),
   z.object({ id: z.string(), method: z.literal("health") }),
   z.object({ id: z.string(), method: z.literal("sessions.create"), params: SessionRecordSchema.omit({ deletedAt: true }) }),
   z.object({ id: z.string(), method: z.literal("sessions.list"), params: z.object({ deleted: z.boolean().default(false), limit: z.number().int().positive().max(200).default(50), offset: z.number().int().nonnegative().default(0) }).default({ deleted: false, limit: 50, offset: 0 }) }),
@@ -609,6 +624,8 @@ export const DaemonRequestSchema = z.discriminatedUnion("method", [
   z.object({ id: z.string(), method: z.literal("run.get"), params: z.object({ runId: z.string().min(1) }) }),
   z.object({ id: z.string(), method: z.literal("run.resume"), params: z.object({ runId: z.string() }) }),
   z.object({ id: z.string(), method: z.literal("run.cancel"), params: z.object({ runId: z.string() }) }),
+  z.object({ id: z.string(), method: z.literal("run.pause"), params: z.object({ runId: z.string() }) }),
+  z.object({ id: z.string(), method: z.literal("run.steer"), params: z.object({ runId: z.string(), text: z.string().min(1).max(4_000) }) }),
   z.object({ id: z.string(), method: z.literal("run.events"), params: z.object({ runId: z.string(), afterSequence: z.number().int().default(-1) }) }),
   z.object({ id: z.string(), method: z.literal("plan.get"), params: z.object({ runId: z.string() }) }),
   z.object({ id: z.string(), method: z.literal("plan.decide"), params: z.object({ planId: z.string(), version: z.number().int().positive(), approved: z.boolean(), actor: z.string(), feedback: z.string().optional() }) }),
@@ -626,7 +643,7 @@ export const DaemonRequestSchema = z.discriminatedUnion("method", [
   z.object({ id: z.string(), method: z.literal("memory.export"), params: z.object({ memoryIds: z.array(z.string()).max(1000) }) }),
   z.object({ id: z.string(), method: z.literal("profiles.memoryScopes"), params: z.object({ profileId: z.string(), memoryScopes: z.array(z.enum(["session", "project", "global"])) }) }),
   z.object({ id: z.string(), method: z.literal("skills.list"), params: z.object({ workspacePath: z.string().optional() }).optional() }),
-  z.object({ id: z.string(), method: z.literal("skills.trust"), params: z.object({ sourcePath: z.string() }) }),
+  z.object({ id: z.string(), method: z.literal("skills.trust"), params: z.object({ sourcePath: z.string(), expectedHash: z.string().optional() }) }),
   z.object({ id: z.string(), method: z.literal("skills.untrust"), params: z.object({ skillId: z.string() }) }),
   z.object({ id: z.string(), method: z.literal("plugins.list") }),
   z.object({ id: z.string(), method: z.literal("plugins.install"), params: z.object({ sourcePath: z.string() }) }),
@@ -692,3 +709,5 @@ export function nowIso(): string {
 }
 
 export * from "./prompt-cache.js";
+export * from "./browser.js";
+export * from "./skills.js";

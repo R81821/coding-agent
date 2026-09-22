@@ -11,6 +11,8 @@ import { ProjectTrustService } from "./project-trust.js";
 import { configureTelemetry } from "./telemetry.js";
 import { HarnessEvalRunner } from "@harness/evals";
 import { loadProfilesWithBudgetMigration } from "./budget-migration.js";
+import { SkillInstaller } from "@harness/extensions";
+import { SkillJobs } from "./skill-jobs.js";
 
 export interface HarnessRuntime {
   providerIds: string[];
@@ -20,6 +22,7 @@ export interface HarnessRuntime {
   scheduler: TaskScheduler;
   memory: MemoryService;
   skills: SkillService;
+  skillJobs: SkillJobs;
   projectTrust: ProjectTrustService;
   plugins: PluginService;
   search?: ParallelSearchProvider;
@@ -48,6 +51,7 @@ export async function createRuntime(options: { appDataPath?: string; passphrase:
   const projectTrust = new ProjectTrustService(database);
   const tools = createDefaultToolRegistry();
   const search = env.PARALLEL_API_KEY ? new ParallelSearchProvider(env.PARALLEL_API_KEY, env.PARALLEL_BASE_URL) : undefined;
+  const skillJobs = new SkillJobs(new SkillInstaller(skills, fetch, env.GITHUB_TOKEN), providers, doc => database.saveSkill(doc.manifest), search);
   if (search) tools.register(createWebSearchTool(search));
   const plugins = new PluginService(database);
   const evals = new HarnessEvalRunner(database, providers, env);
@@ -177,6 +181,7 @@ export async function createRuntime(options: { appDataPath?: string; passphrase:
     scheduler,
     memory,
     skills,
+    skillJobs,
     projectTrust,
     plugins,
     ...(search ? { search } : {}),
@@ -185,6 +190,7 @@ export async function createRuntime(options: { appDataPath?: string; passphrase:
     profiles,
     async close() {
       scheduler.stop();
+      await skillJobs.close();
       await telemetry.shutdown();
       database.close();
       crypto.dispose();

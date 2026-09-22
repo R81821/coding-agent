@@ -138,7 +138,7 @@ html[data-theme="kelo"] .is-selected .theme-check { color: #11131b; background: 
   --panel-2: #f7f8fa;
   --line: #e0e3e9;
   --line-strong: #c5cad4;
-  --muted: #737986;
+  --muted: #535b6b;
   --accent: #6366d9;
   --accent-strong: #3438a5;
   --accent-soft: #eef0ff;
@@ -149,10 +149,15 @@ html[data-theme="kelo"] .is-selected .theme-check { color: #11131b; background: 
   --color-line: #e0e3e9;
   --color-line-strong: #c5cad4;
   --color-text: #242833;
-  --color-text-muted: #737986;
+  --color-text-muted: #535b6b;
   --color-accent: #6366d9;
   --color-accent-soft: #eef0ff;
   --color-accent-text: #4d51bd;
+  --color-success: #087443;
+  --color-warning: #915000;
+  --color-danger: #b4233b;
+  --danger: #b4233b;
+  --warning: #915000;
   --kelo-background: #fff;
   background: #fff;
 }
@@ -162,7 +167,7 @@ html[data-theme="kelo"] * { scrollbar-color: #c4c9d2 transparent; }
 html[data-theme="kelo"] .workbench.app-shell { background: #fff; }
 html[data-theme="kelo"] .workbench .brand-mark { color: #4d51bd; background: #f1f2ff; }
 html[data-theme="kelo"] .workbench .brand strong { color: #222631; }
-html[data-theme="kelo"] .workbench :is(.brand small, .sidebar-section-label, .sidebar-hint, .sidebar-tools > summary, .sidebar-settings small, .sidebar-connection, .project-folder-count, .history-session-content small) { color: #777d89; }
+html[data-theme="kelo"] .workbench :is(.brand small, .sidebar-section-label, .sidebar-hint, .sidebar-tools > summary, .sidebar-settings small, .sidebar-connection, .project-folder-count, .history-session-content small) { color: var(--muted); }
 html[data-theme="kelo"] .workbench :is(.new-task-button, .sidebar nav button, .project-folder, .project-session, .sidebar-settings) { color: #4c5260; }
 html[data-theme="kelo"] .workbench :is(.sidebar nav button[aria-current="page"], .history-session.active) { color: #353aa5; background: #eef0ff; }
 html[data-theme="kelo"] .workbench :is(.sidebar nav button:hover, .project-folder:hover) { background: #f4f5f8; }
@@ -172,7 +177,7 @@ html[data-theme="kelo"] .workbench .topbar :is(h1, .secure) { color: #656b78; }
 html[data-theme="kelo"] .workbench .topbar select,
 html[data-theme="kelo"] .workbench :is(input:not([type="checkbox"]):not([type="radio"]), select) { color: #303540; background: #fff; border-color: #dfe2e8; }
 html[data-theme="kelo"] .workspace-welcome h2 { color: #20242d; }
-html[data-theme="kelo"] .workspace-welcome > p { color: #737986; }
+html[data-theme="kelo"] .workspace-welcome > p { color: var(--muted); }
 html[data-theme="kelo"] .welcome-symbol { color: #5459c8; background: #f7f7ff; }
 html[data-theme="kelo"] .task-starter { color: #343945; background: #fff; border-color: #e0e3e9; }
 html[data-theme="kelo"] .task-starter:hover { background: #f8f9fb; border-color: #c5cad4; }
@@ -181,8 +186,8 @@ html[data-theme="kelo"] .composer-project-bar button { color: #3f4551; }
 html[data-theme="kelo"] .workbench-prompt { background: #fff; border-color: #d9dde5; box-shadow: 0 15px 40px rgba(31, 39, 57, .10); }
 html[data-theme="kelo"] .workbench-prompt:focus-within { border-color: #7378db; }
 html[data-theme="kelo"] .workbench-prompt .prompt-textarea,
-html[data-theme="kelo"] .workbench textarea { color: #252a34; }
-html[data-theme="kelo"] .prompt-textarea::placeholder { color: #959ba7; }
+html[data-theme="kelo"] .workbench textarea { color: #252a34; background-color: #fff; }
+html[data-theme="kelo"] :is(input, textarea)::placeholder { color: var(--muted); opacity: 1; }
 html[data-theme="kelo"] .prompt-add { color: #555c69; background: #f4f5f7; }
 html[data-theme="kelo"] .prompt-send { color: #fff; background: #5c61d4; }
 html[data-theme="kelo"] :is(.glass, .glass-strong) { color: #242833; background-color: #fff; border-color: #e0e3e9; }
@@ -194,3 +199,35 @@ html[data-theme="kelo"] :is(.md-code-toolbar, .md-content th) { color: #555c69; 
 html[data-theme="kelo"] .workbench .markdown-message .md-code-block pre { color: #303642; }
 html[data-theme="kelo"] .md-content tr:nth-child(even) td { background: #f8f9fb; }
 html[data-theme="kelo"] .unlock, html[data-theme="kelo"] .unlock > div { background: #fff; }
+
+/* Light surfaces need their own foregrounds, including syntax and state colors. */
+html[data-theme="kelo"] .project-folder .folder-icon { color: var(--muted); }
+html[data-theme="kelo"] .project-folder-tag { color: #4348a5; background: #eef0ff; }
+html[data-theme="kelo"] :is(.prompt-actions button, .prompt-model, .prompt-key-hint, .row-icon-action, .recycle-row small, .md-action) { color: var(--muted); }
+html[data-theme="kelo"] :is(.recycle-row strong, .user-message) { color: var(--color-text); }
+html[data-theme="kelo"] .user-message { background: #eef0f5; }
+html[data-theme="kelo"] :is(.md-action:hover, .row-icon-action:hover:not(:disabled)) { color: #242833; background: #e5e8ef; }
+html[data-theme="kelo"] .prompt-send:hover:not(:disabled) { color: #fff; background: #464bb5; }
+html[data-theme="kelo"] .prompt-current-mode.mode-analysis { color: #7042ab; }
+html[data-theme="kelo"] .prompt-current-mode.mode-change { color: #97500b; }
+html[data-theme="kelo"] .prompt-current-mode.mode-auto { color: #1566a3; }
+html[data-theme="kelo"] .md-content a { color: #4149ae; }
+html[data-theme="kelo"] .md-content a:hover { color: #292f7c; }
+html[data-theme="kelo"] .md-content li::marker { color: var(--muted); }
+html[data-theme="kelo"] .md-content blockquote { color: #414b60; background: #eef0f5; }
+html[data-theme="kelo"] .md-content :not(pre) > code { color: #3f438b; background: #eef0f8; border-color: #ccd1e1; }
+html[data-theme="kelo"] .workbench .markdown-message .md-source { color: #303642; background: #f7f8fa; border-color: var(--line); }
+html[data-theme="kelo"] :is(.hljs-keyword, .hljs-selector-tag, .hljs-literal) { color: #7635a0; }
+html[data-theme="kelo"] :is(.hljs-string, .hljs-attr, .hljs-addition) { color: #216638; }
+html[data-theme="kelo"] :is(.hljs-title, .hljs-function, .hljs-section) { color: #175da2; }
+html[data-theme="kelo"] :is(.hljs-number, .hljs-symbol, .hljs-built_in) { color: #914b16; }
+html[data-theme="kelo"] :is(.hljs-deletion, .hljs-tag, .md-link-error, .history-error) { color: #ad2943; }
+html[data-theme="kelo"] :is(.diff-plus, .diff-add) { color: #185c32; }
+html[data-theme="kelo"] :is(.diff-minus, .diff-delete) { color: #9a2335; }
+html[data-theme="kelo"] .diff-add { background: #e3f3e8; }
+html[data-theme="kelo"] .diff-delete { background: #fce8eb; }
+html[data-theme="kelo"] .approval-readable pre { background: #eef0f5; }
+html[data-theme="kelo"] .workbench :is(pre, code, div)[class~="bg-black/30"],
+html[data-theme="kelo"] .workbench :is(pre, code, div)[class~="bg-black/20"] { background-color: #eef0f5; }
+/* Decision dialogs deliberately retain a dark surface in either theme. */
+html[data-theme="kelo"] .decision-card .approval-readable pre { background: #1c1d1f; }

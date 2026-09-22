@@ -28,7 +28,7 @@ export function buildInitialMessages(input: ContextInputs): ModelMessage[] {
     messages.push({ role: "user", content: [{ type: "text", text: `Trusted project instructions:\n${input.trustedProjectInstructions}`, trust: "trusted_project" }] });
   }
   for (const skill of input.trustedSkills ?? []) {
-    messages.push({ role: "user", content: [{ type: "text", text: `Trusted skill ${skill.manifest.name}@${skill.manifest.version}:\n${skill.instructions}`, trust: "trusted_project" }] });
+    messages.push({ role: "user", content: [{ type: "text", text: `Trusted skill ${skill.manifest.name}@${skill.manifest.version} (source: ${skill.manifest.sourcePath}; bundled resources are relative to this file; existing tool permissions still apply):\n${skill.instructions}`, trust: "trusted_project" }] });
   }
   if (input.memories.length > 0) {
     messages.push({ role: "user", content: [{ type: "text", text: `User-approved memory (may be stale; verify before acting):\n${input.memories.map((memory) => `- ${memory.content} [source=${memory.source}]`).join("\n")}`, trust: "user_profile" }] });

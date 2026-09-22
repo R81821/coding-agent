@@ -45,11 +45,14 @@ import type { ProjectTrustService } from "./project-trust.js";
 
 const transitions: Record<RunStatus, RunStatus[]> = {
   queued: ["planning", "cancelled", "failed"],
-  planning: ["running", "review", "failed", "cancelled"],
+  planning: ["running", "review", "paused", "failed", "cancelled"],
   running: [
     "waiting_approval",
     "verifying",
     "review",
+    // A user pause is a legal boundary from any working state: the run keeps its checkpoint and
+    // resume() continues the same task.
+    "paused",
     "completed",
     "failed",
     "cancelled",
@@ -140,7 +143,15 @@ interface ActiveRun {
   hadSideEffect: boolean;
   consecutiveToolErrors: number;
   repairAttemptsUsed: number;
+  /** Set by pause(); the loop stops at the next turn boundary and the run settles as paused. */
+  pauseRequested: boolean;
+  /** User messages typed while the run is active, delivered at the next turn boundary. */
+  steering: string[];
 }
+
+/** Upper bound on queued steering text: a run accepts course corrections, not a second transcript. */
+const MAX_STEERING_MESSAGES = 8;
+export const MAX_STEERING_CHARS = 4_000;
 
 export class HarnessEngine extends EventEmitter {
   readonly approvals: ApprovalBroker;
@@ -159,8 +170,9 @@ export class HarnessEngine extends EventEmitter {
   start(spec: RunSpec, profile: Profile): void {
     if (this.active.has(spec.id))
       throw new Error(`Run is already active: ${spec.id}`);
-    this.deps.database.saveRun(spec, "queued");
     const session = this.deps.database.getSessionDetail(spec.sessionId)?.session;
+    spec = { ...spec, skillSelection: [...(spec.skillSelection ?? session?.skillSelection ?? profile.skillIds)] };
+    this.deps.database.saveRun(spec, "queued");
     if (session && !session.deletedAt) this.deps.database.touchSession(spec.sessionId, {
       profileId: spec.profileId,
       title: session.title === "新会话" && spec.request.trim()
@@ -186,11 +198,35 @@ export class HarnessEngine extends EventEmitter {
       hadSideEffect: false,
       consecutiveToolErrors: 0,
       repairAttemptsUsed: 0,
+      pauseRequested: false,
+      steering: [],
     };
     this.active.set(spec.id, state);
-    void this.execute(spec, profile, state).finally(() =>
-      this.active.delete(spec.id),
-    );
+    void this.execute(spec, profile, state).finally(() => {
+      this.active.delete(spec.id);
+      this.releasePlanDecisions(spec.id);
+    });
+  }
+
+  /**
+   * A finished run leaves nothing to decide. Any plan still parked on approval is marked rejected,
+   * so the UI stops offering a dialog whose decision has nowhere to go.
+   */
+  private releasePlanDecisions(runId: string): void {
+    // The result event is emitted before callers finish their teardown. If the database is closed
+    // immediately after that event, cleanup must not turn into an unhandled rejection from the
+    // fire-and-forget execute().finally() chain.
+    try {
+      for (const [planId, resolve] of this.planDecisions) {
+        if (this.deps.database.getPlan(planId)?.runId !== runId) continue;
+        this.planDecisions.delete(planId);
+        resolve({ approved: false, actor: "system:run-ended", feedback: "The run ended before the plan was approved" });
+      }
+      const plan = this.deps.database.getPlanForRun(runId);
+      if (plan?.status === "awaiting_approval") this.deps.database.savePlan({ ...plan, status: "rejected", updatedAt: nowIso() });
+    } catch {
+      // Storage teardown already owns the final state; there is nothing left to release safely.
+    }
   }
 
   resume(runId: string, profile: Profile): void {
@@ -222,9 +258,14 @@ export class HarnessEngine extends EventEmitter {
       hadSideEffect: checkpoint.toolCalls > 0,
       consecutiveToolErrors: 0,
       repairAttemptsUsed: checkpoint.repairAttemptsUsed ?? this.deps.database.listEvents(runId).filter(event => event.type === "repair_started").length,
+      pauseRequested: false,
+      steering: [],
     };
     this.active.set(runId, state);
-    void this.execute(stored.spec, profile, state, checkpoint).finally(() => this.active.delete(runId));
+    void this.execute(stored.spec, profile, state, checkpoint).finally(() => {
+      this.active.delete(runId);
+      this.releasePlanDecisions(runId);
+    });
   }
 
   decidePlan(planId: string, version: number, approved: boolean, actor: string, feedback?: string): PlanSpec {
@@ -244,8 +285,52 @@ export class HarnessEngine extends EventEmitter {
     return true;
   }
 
+  /**
+   * Ask the run to stop at the next turn boundary. Unlike cancel, this keeps the checkpoint and the
+   * transcript, so resume() continues the same task instead of starting over. A tool already in
+   * flight finishes; nothing is interrupted half-executed.
+   */
+  pause(runId: string): boolean {
+    const run = this.active.get(runId);
+    if (!run) return false;
+    run.pauseRequested = true;
+    // A run parked on plan approval never reaches a turn boundary on its own, so the pending
+    // decision is released here. Declining it unblocks the loop, which then stops at the pause flag
+    // instead of hanging on a dialog the user has already dismissed.
+    this.releasePlanDecisions(runId);
+    return true;
+  }
+
   isActive(runId: string): boolean {
     return this.active.has(runId);
+  }
+
+  /** Whether a pause has been requested but the run has not reached its turn boundary yet. */
+  isPausing(runId: string): boolean {
+    return this.active.get(runId)?.pauseRequested ?? false;
+  }
+
+  /**
+   * Queue a user message for the active run. It is delivered at the next turn boundary, so it can
+   * correct a plan mid-flight without discarding the work already done. Steering never grants
+   * permissions and never bypasses the completion gate: it is another user turn, nothing more.
+   */
+  steer(runId: string, text: string): { queued: number } {
+    const run = this.active.get(runId);
+    if (!run) throw new Error(`Run is not active: ${runId}`);
+    const trimmed = text.trim();
+    if (!trimmed) throw new Error("Steering message is empty");
+    if (trimmed.length > MAX_STEERING_CHARS) throw new Error(`Steering message exceeds ${MAX_STEERING_CHARS} characters`);
+    if (run.steering.length >= MAX_STEERING_MESSAGES) throw new Error(`At most ${MAX_STEERING_MESSAGES} steering messages may be queued for one run`);
+    run.steering.push(trimmed);
+    return { queued: run.steering.length };
+  }
+
+  private drainSteering(runId: string, state: ActiveRun): string[] {
+    if (!state.steering.length) return [];
+    const delivered = state.steering.splice(0, state.steering.length);
+    for (const text of delivered) this.emitEvent(runId, state, { type: "steering_delivered", text });
+    return delivered;
   }
 
   /**
@@ -281,8 +366,12 @@ export class HarnessEngine extends EventEmitter {
   recoverInterrupted(): string[] {
     const recovered = [];
     for (const { spec } of this.deps.database.listInterruptedRuns()) {
-      const checkpoint = this.deps.database.getLatestCheckpoint(spec.id);
-      this.deps.database.updateRunStatus(spec.id, checkpoint?.pendingNonIdempotentToolCalls.length ? "waiting_approval" : "paused");
+      // A run from an earlier process has no pending decision behind it, whatever it was doing when
+      // the process ended. Recovering it as `waiting_approval` claimed an approval was live, so the
+      // surface opened a dialog whose decision had nowhere to go and every click failed. `paused` is
+      // the honest state: resumable, and explicit about needing the user to continue it. The unknown
+      // non-idempotent calls are already marked when the checkpoint is restored.
+      this.deps.database.updateRunStatus(spec.id, "paused");
       recovered.push(spec.id);
     }
     return recovered;
@@ -324,11 +413,11 @@ export class HarnessEngine extends EventEmitter {
             : skill;
         }),
       );
-      const trustedSkills = skillDocuments.filter(
-        (skill) =>
-          skill.manifest.enabled &&
-          profile.skillIds.includes(skill.manifest.id),
-      );
+      const trustedSkills = resolveSelectedSkills(spec.skillSelection ?? profile.skillIds, skillDocuments, spec.skills);
+      if (!spec.skills) {
+        spec.skills = trustedSkills.map(skill => ({ key: skill.key, hash: skill.hash }));
+        this.deps.database.saveRun(spec, state.status);
+      }
       const trustedProjectInstructions =
         await this.deps.projectTrust.loadInstructions(spec.workspacePath);
       const repositorySnapshot = await repositoryBaseSnapshot(spec.workspacePath);
@@ -425,10 +514,6 @@ export class HarnessEngine extends EventEmitter {
           512,
           Math.ceil(JSON.stringify([...messages, ...conversationHistory]).length / 4),
         ),
-        // A 4096 estimate used to be the binding constraint here, so the 8192 ceiling below was dead
-        // code and a long single answer (an analysis report, a probe script) hit the cap and came
-        // back as a truncated response. Ask for the ceiling; the reserve ratio still protects models
-        // with a small context window.
         estimatedOutputTokens: 8_192,
       };
       const route = await this.router.route(profile, requirements);
@@ -472,7 +557,7 @@ export class HarnessEngine extends EventEmitter {
         contracts,
         resolveTool: (name) => modern ? runtimeTools.get(name) : name === "update_workflow" ? workflowTool : this.deps.tools.get(name),
         externalSignal: state.controller.signal,
-        maxOutputTokens: Math.min(8_192, requirements.estimatedOutputTokens, Math.max(1, Math.floor(route.model.capabilities.maxContextTokens * profile.contextPolicy.outputReserveRatio))),
+        maxOutputTokens: 393_216,
         parallelToolCalls: modern ? false : route.model.capabilities.parallelTools,
         providerRetryPolicy: {
           maxAttempts: resiliencePolicy.maxProviderAttempts,
@@ -480,6 +565,7 @@ export class HarnessEngine extends EventEmitter {
         },
         ...(state.transcript.length ? { resumeTranscript: state.transcript } : {}),
         contextPolicy: profile.contextPolicy,
+        drainSteering: () => this.drainSteering(spec.id, state),
         getPinnedContext: () => JSON.stringify({
           projectBaseSnapshot: repositorySnapshot,
           approvedPlan: state.plan?.status === "approved" ? state.plan : undefined,
@@ -550,6 +636,7 @@ export class HarnessEngine extends EventEmitter {
             const reused = readCache.lookup(readIdentity);
             const result = reused ?? await tool.execute(call.input, {
               runId: spec.id,
+              sessionId: spec.sessionId,
               workspacePath: spec.workspacePath,
               grants: spec.grants,
               signal,
@@ -621,6 +708,7 @@ export class HarnessEngine extends EventEmitter {
           if (!context.message.content.some((part) => part.type === "toolCall")) {
             finalText = context.message.content.flatMap((part) => part.type === "text" ? [part.text] : []).join("\n");
           }
+          if (state.pauseRequested) return true;
           if (summarizing) return true;
           if (context.toolResults.length > 0) {
             if (!stopReason && state.toolCalls >= spec.budget.maxToolCalls) stop("tool_call_limit", "工具调用额度已用完，保留现有结果供复核。");
@@ -710,6 +798,9 @@ export class HarnessEngine extends EventEmitter {
         },
         afterAgentRun: async (control) => {
           const finishStoppedRun = async () => {
+            // A paused run is not a stopped one: it has no summary to write, it is waiting for the
+            // user. Summarising here would spend budget on a turn the user did not ask for.
+            if (state.pauseRequested) return;
             if (!stopReason || summarizing || state.turns >= spec.budget.maxTurns || state.controller.signal.aborted) return;
             if (state.spentUsd >= spec.budget.maxUsd || Date.now() - state.startedAt >= spec.budget.maxDurationMs) return;
             summarizing = true;
@@ -717,10 +808,14 @@ export class HarnessEngine extends EventEmitter {
               await control.promptSummary(`Runtime stopping condition: ${stopReason}\nNo tools are available. Answer the original user request using only evidence already collected. State concrete findings and file paths, then unresolved questions and uninspected scope. Do not say you will keep exploring or claim the task is complete. Use the user's language.`);
             } catch (error) { summaryError = error instanceof Error ? error.message : String(error); }
           };
+          if (state.pauseRequested) return;
           if (stopReason) { await finishStoppedRun(); return; }
           try {
             for (;;) {
               this.checkBudget(spec, state);
+              // The inner loop has no other pause gate: a turn boundary can be reached here, after a
+              // verification or a review, without shouldStopAfterTurn ever seeing the request.
+              if (state.pauseRequested) return;
               if (workflow instanceof LightweightWorkflow) {
                 if (state.verifiedSnapshot && workflow.checksCurrent()) {
                   const current = await snapshotWorkspace(spec.workspacePath, state.controller.signal);
@@ -845,6 +940,18 @@ export class HarnessEngine extends EventEmitter {
       });
       state.transcript = bridgeResult.transcript;
       if (state.controller.signal.aborted) throw state.controller.signal.reason ?? new Error("Run cancelled");
+      if (state.pauseRequested) {
+        // Settle where the loop stopped. The checkpoint carries the full transcript, so resume()
+        // continues this task rather than starting it again; nothing is marked complete either way.
+        this.status(spec.id, state, "paused");
+        this.saveCheckpoint(spec.id, state, "manual");
+        this.emitEvent(spec.id, state, {
+          type: "result",
+          text: `${finalText.trim() ? `${finalText}\n\n` : ""}运行已暂停。可以继续，或补充说明后再继续。`,
+          status: "paused",
+        });
+        return;
+      }
       if (bridgeResult.errorMessage && !stopReason) {
         this.checkBudget(spec, state);
         if (state.turns > spec.budget.maxTurns) throw new BudgetExceededError("model_turn_limit", "模型轮次额度已用完");
@@ -988,6 +1095,13 @@ export class HarnessEngine extends EventEmitter {
 
   private async ensurePlanApproved(spec: RunSpec, state: ActiveRun, call: ToolCall, risk: "read" | "write" | "high" | "destructive"): Promise<boolean> {
     let plan = state.plan ?? this.deps.database.getPlanForRun(spec.id);
+    // A plan left awaiting approval by an earlier process has no pending decision behind it. Reusing
+    // it would park the run on a promise nothing can resolve, so it is retired and replaced instead.
+    if (plan?.status === "awaiting_approval" && !this.planDecisions.has(plan.id)) {
+      plan = { ...plan, status: "rejected", updatedAt: nowIso() };
+      this.deps.database.savePlan(plan);
+      state.plan = plan;
+    }
     if (plan?.status === "approved" && planCovers(plan, call, risk)) return true;
     const now = nowIso();
     if (!plan) {
@@ -1301,3 +1415,4 @@ function traceAttributes(event: AgentEvent): Record<string, unknown> {
     default: return {};
   }
 }
+import { resolveSelectedSkills } from "./skill-selection.js";

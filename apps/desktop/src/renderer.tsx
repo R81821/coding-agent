@@ -35,7 +35,7 @@ import { BuiPromptBar } from "./ui/prompt-bar.js";
 import { BuiSidebarNav } from "./ui/sidebar-nav.js";
 import { BuiToolChip } from "./ui/tool-chip.js";
 import { MemoryManager } from "./memory-manager.js";
-import { assistantMessages } from "./assistant-messages.js";
+import { assistantMessages, dedupeFinalText } from "./assistant-messages.js";
 import { MarkdownMessage } from "./markdown-message.js";
 import { RunTiming } from "./components/RunTiming.js";
 import { WorkflowProgress } from "./components/WorkflowProgress.js";
@@ -47,6 +47,7 @@ import {
   Activity,
   Bug,
   Brain,
+  BookOpen,
   Camera,
   ChevronDown,
   ChevronRight,
@@ -57,6 +58,7 @@ import {
   MessageSquare,
   Monitor,
   PanelLeft,
+  Pencil,
   Plus,
   Puzzle,
   Settings,
@@ -65,6 +67,8 @@ import {
   SquareKanban,
   SquarePen,
   Terminal,
+  RotateCcw,
+  TriangleAlert,
   Telescope,
   Trash2,
   UserCog,
@@ -79,8 +83,15 @@ import "./workbench.css";
 import "./themes.css";
 import "./code-changes.css";
 import { CodeChanges } from "./components/CodeChanges.js";
-import { DecisionDialog, useConfirmation } from "./components/DecisionDialog.js";
+import { changeSnapshots } from "./code-changes.js";
+import { defaultConversationLayout } from "./conversation-layout.js";
+import { toolActivity, toolSummary } from "./tool-summary.js";
+import { useConfirmation } from "./components/DecisionDialog.js";
+import { ApprovalDialog } from "./components/ApprovalDialog.js";
 import { ApprovalContent } from "./components/ApprovalContent.js";
+import { DesktopChrome } from "./components/DesktopChrome.js";
+import { SkillsView, SkillPicker, type DesktopSkill } from "./components/SkillsView.js";
+import { BrowserPanel } from "./components/BrowserPanel.js";
 
 type Tab =
   | "chat"
@@ -116,6 +127,7 @@ function App() {
   const [unlockError, setUnlockError] = useState("");
   const [tab, setTab] = useState<Tab>("chat");
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [browserOpen, setBrowserOpen] = useState(false);
   const [sidebarWidth, setSidebarWidth] = useState(readSidebarWidth);
   const [workspace, setWorkspace] = useState("");
   const [profiles, setProfiles] = useState<Profile[]>([]);
@@ -123,15 +135,16 @@ function App() {
   const [tasks, setTasks] = useState<TaskSpec[]>([]);
   const [approvals, setApprovals] = useState<ApprovalRequest[]>([]);
   const [memories, setMemories] = useState<MemoryRecord[]>([]);
-  const [skills, setSkills] = useState<
-    Array<{ manifest: SkillManifest; hash: string; changedSinceTrust: boolean }>
-  >([]);
+  const [skills, setSkills] = useState<DesktopSkill[]>([]);
+  const [skillSaving, setSkillSaving] = useState(false);
+  const [skillError, setSkillError] = useState("");
   const [plugins, setPlugins] = useState<PluginRecord[]>([]);
   const [prompt, setPrompt] = useState("");
   const [taskMode, setTaskMode] = useState<"auto" | "analysis" | "change">("auto");
   const [attachments, setAttachments] = useState<DesktopAttachment[]>([]);
   const [events, setEvents] = useState<AgentEvent[]>([]);
   const [activeRun, setActiveRun] = useState<string>();
+  const [pausedRun, setPausedRun] = useState<string>();
   const [activeSessionId, setActiveSessionId] = useState<string>();
   const [sessionDetail, setSessionDetail] = useState<SessionDetail>();
   const [sessionPage, setSessionPage] = useState<SessionPage>({ items: [], hasMore: false });
@@ -139,6 +152,10 @@ function App() {
   const [projects, setProjects] = useState<ProjectRecord[]>([]);
   const historyRequest = useRef(0);
   const viewVersion = useRef(0);
+  // Highest event sequence already consumed for the active run. Continuing must subscribe from here,
+  // never from the start: the previous attempt's `result` event is still in the log, and replaying it
+  // makes the follow loop exit immediately as if the run had just finished.
+  const lastSequence = useRef(-1);
   const [expandedProjects, setExpandedProjects] = useState<Set<string>>(new Set());
   const seededExpansion = useRef(false);
   const [historyLoading, setHistoryLoading] = useState(false);
@@ -154,6 +171,11 @@ function App() {
 
   const profile = profiles.find((item) => item.id === profileId);
   const conversationTurns = useMemo(() => sessionTurns(sessionDetail).map((turn) => turn.runId === activeRun ? { ...turn, events } : turn), [sessionDetail, activeRun, events]);
+  // The controls follow the run's recorded status rather than the polling flag: a run can be
+  // parked on an approval, or still be in the engine's active set, without this component polling.
+  const activeRunStatus = conversationTurns.find((turn) => turn.runId === activeRun)?.status;
+  const runParked = activeRunStatus === "paused" || activeRunStatus === "waiting_approval";
+  const canPauseRun = Boolean(activeRun) && !runParked && Boolean(activeRunStatus) && isLiveRun(activeRunStatus!);
   const historyGroups = useMemo(() => groupSessionsByProject(sessionPage.items, projects, workspace), [sessionPage.items, projects, workspace]);
   const currentProjectKey = workspace ? workspaceKey(workspace) : "";
 
@@ -218,13 +240,7 @@ function App() {
         window.harness.request<TaskSpec[]>({ method: "tasks.list" }),
         window.harness.request<ApprovalRequest[]>({ method: "approvals.list" }),
         window.harness.request<MemoryRecord[]>({ method: "memory.list" }),
-        window.harness.request<
-          Array<{
-            manifest: SkillManifest;
-            hash: string;
-            changedSinceTrust: boolean;
-          }>
-        >({
+        window.harness.request<DesktopSkill[]>({
           method: "skills.list",
           ...(workspace ? { params: { workspacePath: workspace } } : {}),
         }),
@@ -330,6 +346,7 @@ function App() {
     setSessionDetail({ session, runs: [] });
     setTaskMode("auto");
     setActiveRun(undefined);
+    lastSequence.current = -1;
     setEvents([]);
     setPrompt("");
     setAttachments([]);
@@ -368,7 +385,18 @@ function App() {
   }
 
   async function send() {
-    if (!profile || !workspace || !activeSessionId || !sessionDetail || !prompt.trim() || busy) return;
+    if (skillSaving) return;
+    if (!prompt.trim()) return;
+    // While a run is on screen the composer is a steering channel, not a second task. That includes a
+    // parked run: the note waits in its queue and is read when it continues, instead of starting a
+    // second task that would have to queue behind the first.
+    if (activeRun && (isLiveRun(activeRunStatus ?? "queued") || activeRunStatus === "paused")) {
+      const text = prompt;
+      setPrompt("");
+      await steerRun(text);
+      return;
+    }
+    if (!profile || !workspace || !activeSessionId || !sessionDetail || busy) return;
     const viewToken = ++viewVersion.current;
     const request = prompt.trim();
     const runId = newId("run");
@@ -387,6 +415,8 @@ function App() {
     setBusy(true);
     setEvents([]);
     setActiveRun(runId);
+    setPausedRun(undefined);
+    lastSequence.current = -1;
     setSessionDetail((current) => current ? { ...current, runs: [...current.runs, { spec: runSpec, status: "queued", events: [] }] } : current);
     try {
       await window.harness.request({
@@ -397,7 +427,8 @@ function App() {
       if (viewToken !== viewVersion.current) return;
       setPrompt("");
       setAttachments([]);
-      await pollRun(runId, -1, viewToken);
+      const status = await pollRun(runId, -1, viewToken);
+      if (viewToken === viewVersion.current && status === "paused") setPausedRun(runId);
     } catch (error) {
       if (viewToken !== viewVersion.current) return;
       setEvents((current) => [
@@ -496,6 +527,7 @@ function App() {
       setSessionDetail(stored);
       setTaskMode(stored.runs.at(-1)?.spec.taskMode ?? "auto");
       setActiveRun(latest?.spec.id);
+      lastSequence.current = latest ? (latest.events.at(-1)?.sequence ?? -1) : -1;
       setEvents(latest ? latest.events : []);
       setPrompt("");
       setAttachments([]);
@@ -512,9 +544,62 @@ function App() {
     }
   }
 
-  async function pollRun(runId: string, startSequence = -1, viewToken = viewVersion.current) {
+  /** Ask the active run to stop at its next turn boundary. It stays resumable, unlike cancel. */
+  async function pauseRun() {
+    if (!activeRun) return;
+    try {
+      const result = await window.harness.request<{ pausing: boolean }>({ method: "run.pause", params: { runId: activeRun } });
+      if (!result.pausing) setPausedRun(undefined);
+    } catch (error) { setHistoryError(`无法暂停：${error instanceof Error ? error.message : String(error)}`); }
+  }
+
+  /** Continue a paused run from its checkpoint, then follow the events that follow. */
+  async function resumeRun() {
+    const runId = pausedRun ?? activeRun;
+    if (!runId) return;
+    const viewToken = ++viewVersion.current;
+    setBusy(true);
+    setPausedRun(undefined);
+    setActiveRun(runId);
+    try {
+      await window.harness.request({ method: "run.resume", params: { runId } });
+      // The engine accepted the resume, so the run is working again. Reflect that immediately instead
+      // of waiting for the next poll to refresh the stored status — the follow loop may already have
+      // exited on the previous attempt's terminal event and would never refresh it.
+      if (viewToken === viewVersion.current) {
+        setSessionDetail((current) => current ? {
+          ...current,
+          runs: current.runs.map((run) => run.spec.id === runId ? { ...run, status: "running" as RunStatus } : run),
+        } : current);
+      }
+      // Follow from the last event already shown. Replaying the log would re-read this run's previous
+      // `result` and stop the loop before a single new event arrives.
+      const status = await pollRun(runId, lastSequence.current, viewToken);
+      if (viewToken === viewVersion.current && status === "paused") setPausedRun(runId);
+    } catch (error) {
+      if (viewToken === viewVersion.current) setHistoryError(`无法继续：${error instanceof Error ? error.message : String(error)}`);
+    } finally {
+      if (viewToken === viewVersion.current) setBusy(false);
+      await refreshHistory();
+    }
+  }
+
+  /**
+   * Send a correction to the run that is already working. It is read at the next turn boundary, so
+   * the run keeps its transcript, permissions and budget instead of starting over.
+   */
+  async function steerRun(text: string) {
+    const value = text.trim();
+    if (!activeRun || !value) return;
+    try {
+      await window.harness.request({ method: "run.steer", params: { runId: activeRun, text: value } });
+    } catch (error) { setHistoryError(`无法发送补充说明：${error instanceof Error ? error.message : String(error)}`); }
+  }
+
+  async function pollRun(runId: string, startSequence = -1, viewToken = viewVersion.current): Promise<RunStatus | undefined> {
     let sequence = startSequence;
     let finished = false;
+    let lastStatus: RunStatus | undefined;
     while (!finished && viewToken === viewVersion.current) {
       const batch = await window.harness.request<AgentEvent[]>({
         method: "run.events",
@@ -530,44 +615,35 @@ function App() {
             : run),
         } : current);
         sequence = Math.max(...batch.map((event) => event.sequence), sequence);
-        finished = batch.some((event) => event.type === "result");
-        const toolApproval = batch.find(
-          (event): event is Extract<AgentEvent, { type: "approval_required" }> =>
-            event.type === "approval_required",
-        );
-        const planApproval = batch.find(
-          (event): event is Extract<AgentEvent, { type: "plan_approval_required" }> =>
-            event.type === "plan_approval_required",
-        );
-        if (toolApproval) {
-          const nextApprovals = await window.harness.request<ApprovalRequest[]>({
-            method: "approvals.list",
-          });
+        lastSequence.current = sequence;
+        const lastResult = batch.findLast((event) => event.type === "result");
+        if (lastResult?.type === "result") lastStatus = lastResult.status;
+      }
+      // A run can already be parked on an approval when this loop starts — after 继续, or after a
+      // restart — so the pending decision is re-surfaced on every pass, not only when a new
+      // approval event happens to arrive. Otherwise the run waits forever on a dialog nobody sees.
+      const stored = await window.harness.request<{ spec: RunSpec; status: RunStatus } | undefined>({ method: "run.get", params: { runId } });
+      if (viewToken !== viewVersion.current) return;
+      if (stored) lastStatus = stored.status;
+      // The run's own status decides when following ends. A `result` event is not enough: an earlier
+      // attempt's result stays in the log, and treating it as terminal stopped the loop the moment a
+      // resumed run was followed, leaving the surface stuck on the pre-resume state.
+      if (!finished) finished = !stored || !isLiveRun(stored.status);
+      if (stored?.status === "waiting_approval") {
+        const pendingPlan = await window.harness.request<PlanSpec | undefined>({ method: "plan.get", params: { runId } });
+        if (viewToken !== viewVersion.current) return;
+        if (pendingPlan?.status === "awaiting_approval") setApprovalPrompt({ kind: "plan", plan: pendingPlan });
+        else {
+          const nextApprovals = await window.harness.request<ApprovalRequest[]>({ method: "approvals.list" });
           if (viewToken !== viewVersion.current) return;
           setApprovals(nextApprovals);
-          const pending = nextApprovals.find(
-            (approval) =>
-              approval.id === toolApproval.approvalId &&
-              approval.status === "pending",
-          );
+          const pending = nextApprovals.find((approval) => approval.runId === runId && approval.status === "pending");
           if (pending) setApprovalPrompt({ kind: "tool", approval: pending });
-        } else if (planApproval) {
-          const plan = await window.harness.request<PlanSpec | undefined>({
-            method: "plan.get",
-            params: { runId },
-          });
-          if (viewToken !== viewVersion.current) return;
-          if (plan?.status === "awaiting_approval")
-            setApprovalPrompt({ kind: "plan", plan });
         }
-      }
-      if (!batch.length) {
-        const stored = await window.harness.request<{ spec: RunSpec; status: RunStatus } | undefined>({ method: "run.get", params: { runId } });
-        if (viewToken !== viewVersion.current) return;
-        finished = !stored || !isLiveRun(stored.status);
       }
       if (!finished) await delay(500);
     }
+    return lastStatus;
   }
 
   async function decideApproval(approvalId: string, approved: boolean) {
@@ -606,20 +682,35 @@ function App() {
   }
 
   async function decideSkill(
-    skill: { manifest: SkillManifest },
+    skill: DesktopSkill,
     trusted: boolean,
   ) {
     if (trusted)
       await window.harness.request({
         method: "skills.trust",
-        params: { sourcePath: skill.manifest.sourcePath },
+        params: { sourcePath: skill.manifest.sourcePath, expectedHash: skill.hash },
       });
     else
       await window.harness.request({
         method: "skills.untrust",
-        params: { skillId: skill.manifest.id },
+        params: { skillId: skill.key },
       });
     await refresh();
+  }
+
+  const selectedSkills = sessionDetail?.session.skillSelection ?? (profile?.skillIds ?? []).map(id => {
+    const matches = skills.filter(skill => skill.manifest.id === id || skill.key === id);
+    return matches.length === 1 ? matches[0]!.key : id;
+  });
+  async function changeSkills(keys: string[]) {
+    if (!activeSessionId || skillSaving) return;
+    const sessionId = activeSessionId;
+    setSkillSaving(true); setSkillError("");
+    try {
+      const session = await window.harness.request<SessionRecord>({ method: "session.skills", params: { sessionId, skillSelection: keys } });
+      setSessionDetail(current => current?.session.id === sessionId ? { ...current, session: { ...current.session, skillSelection: session.skillSelection ?? [] } } : current);
+    } catch (error) { setSkillError(error instanceof Error ? error.message : String(error)); }
+    finally { setSkillSaving(false); }
   }
 
   async function startCapture() {
@@ -688,6 +779,18 @@ function App() {
     await refresh();
   }
 
+  useEffect(() => {
+    const onMenu = (event: Event) => {
+      if (!unlocked || busy) return;
+      const command = (event as CustomEvent<unknown>).detail;
+      if (command === "new-task") void newTask();
+      else if (command === "open-project") void chooseWorkspace();
+      else if (command === "settings") setTab("settings");
+    };
+    window.addEventListener("harness:workspace-menu", onMenu);
+    return () => window.removeEventListener("harness:workspace-menu", onMenu);
+  });
+
   if (!unlocked)
     return (
       <Unlock
@@ -702,7 +805,7 @@ function App() {
 
   return (
     <div
-      className={`app-shell workbench${sidebarCollapsed ? " sidebar-collapsed" : ""}`}
+      className={`app-shell workbench${sidebarCollapsed ? " sidebar-collapsed" : ""}${browserOpen ? " browser-open" : ""}`}
       style={{ "--sidebar-width": `${sidebarWidth}px` } as React.CSSProperties}
       onDragOver={(event) => event.preventDefault()}
       onDrop={(event) => {
@@ -803,7 +906,7 @@ function App() {
         </details>
         </div>
         <div className="sidebar-foot">
-          <BuiButton variant="ghost" onClick={() => setTab("settings")} className="sidebar-settings"><Settings size={17} /><span>设置</span><small>v1.4.2</small></BuiButton>
+          <BuiButton variant="ghost" onClick={() => setTab("settings")} className="sidebar-settings"><Settings size={17} /><span>设置</span><small>v1.4.3</small></BuiButton>
           <div className="sidebar-connection"><span className="status-dot" />本地运行时已解锁</div>
         </div>
       </aside>
@@ -819,6 +922,7 @@ function App() {
             <h1>{tab === "chat" ? "开发会话" : tabLabel(tab)}</h1>
           </div>
           <div className="top-actions">
+            <BuiButton variant="ghost" size="sm" aria-label={browserOpen ? "收起浏览器" : "打开内置浏览器"} title="内置浏览器" onClick={() => setBrowserOpen(value => !value)}><Monitor size={16} /></BuiButton>
             <select className="theme-quick-switch" aria-label="界面主题" value={theme} onChange={event => { if (isThemeId(event.target.value)) changeTheme(event.target.value); }}>
               {THEMES.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}
             </select>
@@ -840,6 +944,11 @@ function App() {
           {tab === "chat" && (
             <ChatView
               workspace={workspace}
+              skills={skills}
+              selectedSkills={selectedSkills}
+              onSkillsChange={changeSkills}
+              skillSaving={skillSaving}
+              skillError={skillError}
               {...(profile ? { profile } : {})}
               prompt={prompt}
               setPrompt={setPrompt}
@@ -851,6 +960,11 @@ function App() {
               turns={conversationTurns}
               hasSession={Boolean(activeSessionId)}
               busy={busy}
+              {...(activeRun ? { runId: activeRun } : {})}
+              paused={Boolean(pausedRun) || runParked}
+              canPause={canPauseRun}
+              onPause={pauseRun}
+              onResume={resumeRun}
               onSend={send}
               onChooseImages={chooseImages}
               onCapture={startCapture}
@@ -872,9 +986,7 @@ function App() {
           {tab === "memory" && (
             <MemoryManager memories={memories} decide={decideMemory} refresh={refresh} workspace={workspace} {...(profile ? { profile } : {})} />
           )}
-          {tab === "skills" && (
-            <SkillsView skills={skills} decide={decideSkill} />
-          )}
+          <div hidden={tab !== "skills"}><SkillsView skills={skills} profileId={profileId} refresh={refresh} decide={decideSkill} /></div>
           {tab === "plugins" && <PluginsView plugins={plugins} action={pluginAction} />}
           {tab === "profiles" && (
             <ProfilesView profiles={profiles} activeId={profileId} refresh={refresh} />
@@ -888,6 +1000,7 @@ function App() {
           {tab === "settings" && <SettingsView key={recycleVersion} refresh={refresh} refreshHistory={refreshHistory} theme={theme} onThemeChange={changeTheme} themeSaved={themeSaved} />}
         </section>
       </main>
+      <BrowserPanel sessionId={activeSessionId} open={browserOpen} onOpenChange={setBrowserOpen} />
       {capture && (
         <CropOverlay
           capture={capture}
@@ -976,6 +1089,11 @@ function Unlock(props: {
 }
 
 function ChatView(props: {
+  skills: DesktopSkill[];
+  selectedSkills: string[];
+  onSkillsChange: (keys: string[]) => void;
+  skillSaving: boolean;
+  skillError: string;
   workspace: string;
   profile?: Profile;
   prompt: string;
@@ -988,11 +1106,17 @@ function ChatView(props: {
   turns: SessionTurn[];
   hasSession: boolean;
   busy: boolean;
+  runId?: string;
+  paused: boolean;
+  canPause: boolean;
+  onPause: () => void;
+  onResume: () => void;
   onSend: () => void;
   onChooseImages: () => void;
   onCapture: () => void;
   onChooseWorkspace: () => void;
 }) {
+  const [skillPickerOpen, setSkillPickerOpen] = useState(false);
   const conversationRef = useRef<HTMLDivElement>(null);
   const followLatestRef = useRef(true);
   const eventCount = props.turns.reduce((total, turn) => total + turn.events.length, 0);
@@ -1054,6 +1178,8 @@ function ChatView(props: {
         </div>
         <BuiPromptBar
           value={props.prompt}
+          skillChips={<><div className="skill-chips">{props.selectedSkills.map(key => { const skill = props.skills.find(item => item.key === key); return <button key={key} type="button" disabled={props.skillSaving} title={skill?.manifest.enabled ? "移除此技能" : "技能不可用，请重新选择或确认信任"} aria-label={`移除技能 ${skill?.manifest.name ?? key}`} onClick={() => props.onSkillsChange(props.selectedSkills.filter(item => item !== key))}><BookOpen size={13} /><span>{skill?.manifest.name ?? "缺失的技能"}{skill && !skill.manifest.enabled ? " · 需确认" : ""}</span><X size={12} /></button>; })}</div>{props.skillError && <small role="alert">{props.skillError}</small>}</>}
+          skillPicker={skillPickerOpen ? <SkillPicker skills={props.skills} selected={props.selectedSkills} onChange={props.onSkillsChange} onClose={() => setSkillPickerOpen(false)} disabled={props.skillSaving} /> : null}
           taskMode={props.taskMode}
           onTaskModeChange={props.setTaskMode}
           onChange={props.setPrompt}
@@ -1061,8 +1187,11 @@ function ChatView(props: {
           placeholder={
             !props.workspace ? "先选择项目，再开始对话…" : props.hasSession ? "描述你的想法，或粘贴错误截图…" : "点击新建任务创建会话…"
           }
-          disabled={!props.workspace || !props.hasSession || props.busy}
+          disabled={!props.workspace || !props.hasSession}
           busy={props.busy}
+          {...(props.runId && !props.paused && props.canPause ? { onHold: props.onPause } : {})}
+          holding={props.paused}
+          {...(props.runId ? { onRelease: props.onResume, canRelease: true } : {})}
           {...(props.attachments.length > 0
             ? {
                 attachments: (
@@ -1102,6 +1231,7 @@ function ChatView(props: {
             : {})}
           actions={
             <>
+              <BuiButton variant="ghost" size="sm" onClick={() => setSkillPickerOpen(true)}><BookOpen size={17} /> 技能</BuiButton>
               <BuiButton
                 variant="ghost"
                 size="sm"
@@ -1176,8 +1306,10 @@ function SidebarResizeHandle({ value, onResize, onCommit }: {
 }
 
 function ConversationTurnView({ turn, busy }: { turn: SessionTurn; busy: boolean }) {
-  const { text: finalText, progress: progressMessages } = assistantMessages(turn.events);
+  const { text: finalText } = assistantMessages(turn.events);
+  const reviewSnapshots = changeSnapshots(turn.events);
   const result = turn.events.findLast((event) => event.type === "result");
+  const visibleStop = result?.stop && !/^运行已暂停[。．]?/.test(result.stop.message) ? result.stop : undefined;
   const route = turn.events.find((event) => event.type === "route") as Extract<AgentEvent, { type: "route" }> | undefined;
   return (
     <section className="conversation-turn" data-run-id={turn.runId}>
@@ -1192,41 +1324,97 @@ function ConversationTurnView({ turn, busy }: { turn: SessionTurn; busy: boolean
       <PromptCacheStats usages={turn.events.flatMap(event => event.type === "usage" ? [event.usage] : [])} />
       <WorkflowProgress events={turn.events} />
       <RunTiming events={turn.events} />
-      {result?.stop && <RunStopCard stop={result.stop} />}
+      {visibleStop && <RunStopCard stop={visibleStop} />}
       {busy && !finalText && <div className="mb-3"><BuiLoadingState label="Agent 正在思考与执行…" /></div>}
-      {finalText && (
-        <article className="assistant-message mb-3 flex items-start gap-3">
-          <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-accent-soft text-sm font-semibold text-accent-text">H</div>
-          <MarkdownMessage text={finalText} />
-        </article>
-      )}
-      {progressMessages.length > 0 && (
-        <details className="glass mb-3 px-4 py-3">
-          <summary className="cursor-pointer text-xs text-text-muted">查看过程记录（{progressMessages.length} 轮）</summary>
-          {progressMessages.map((text, index) => <div key={index} className="mt-3 border-t border-line pt-3"><MarkdownMessage text={text} compact /></div>)}
-        </details>
-      )}
-      <div className="flex flex-col gap-2">
-        {buildTimeline(turn.events).map((item) => item.kind === "tool_group"
-          ? <ToolEventGroup key={item.id} tools={item.tools} />
-          : <EventRow key={item.event.id} event={item.event} />)}
+      <div className="conversation-stream">
+        {buildConversationStream(turn.events).map((item) => item.kind === "text"
+          ? <article className={`assistant-message${item.process ? " assistant-process" : ""}`} key={item.id}>
+              <MarkdownMessage text={item.text} compact={item.process} />
+            </article>
+          : item.kind === "tool_group"
+            ? <ToolEventGroup key={item.id} tools={item.tools} />
+            : <EventRow key={item.event.id} event={item.event} />)}
       </div>
+      {defaultConversationLayout.inlineReview && reviewSnapshots.length > 0 && (
+        <section className="conversation-inline-review" aria-label="代码审核">
+          <CodeChanges events={turn.events} />
+        </section>
+      )}
     </section>
   );
+}
+
+type ConversationStreamItem =
+  | { kind: "text"; id: string; text: string; process: boolean }
+  | Extract<TimelineItem, { kind: "tool_group" }>
+  | Extract<TimelineItem, { kind: "event" }>;
+
+function buildConversationStream(events: AgentEvent[]): ConversationStreamItem[] {
+  const stream: ConversationStreamItem[] = [];
+  const tools = new Map<string, ToolTimelineItem>();
+  let text = "";
+  let textIndex = 0;
+  let activeGroup: Extract<TimelineItem, { kind: "tool_group" }> | undefined;
+  const flushText = (process: boolean) => {
+    if (!text.trim()) return;
+    stream.push({ kind: "text", id: `text-${textIndex++}`, text, process });
+    text = "";
+  };
+  for (const event of events) {
+    if (event.type === "text_delta") {
+      text += event.delta;
+    } else if (event.type === "assistant_turn_started") {
+      flushText(true);
+      // A model turn boundary does not necessarily produce visible text. Keep consecutive
+      // tool calls in one activity group until a real message or status event separates them.
+    } else if (event.type === "tool_started") {
+      flushText(true);
+      const item: ToolTimelineItem = { kind: "tool", started: event };
+      tools.set(event.call.id, item);
+      if (!activeGroup) {
+        activeGroup = { kind: "tool_group", id: `tool-group-${event.id}`, tools: [] };
+        stream.push(activeGroup);
+      }
+      activeGroup.tools.push(item);
+    } else if (event.type === "tool_finished") {
+      tools.get(event.callId)!.finished = event;
+    } else if (event.type === "result") {
+      flushText(false);
+      const lastText = stream.at(-1);
+      const streamedText = lastText?.kind === "text" ? lastText.text : "";
+      const finalText = dedupeFinalText(streamedText, event.text);
+      if (finalText && !isHiddenSystemMessage(finalText)) stream.push({ kind: "text", id: `result-${event.id}`, text: finalText, process: false });
+      activeGroup = undefined;
+    } else if (event.type === "approval_required" || event.type === "error" || event.type === "provider_retry" || event.type === "self_correction_started" || event.type === "repair_started") {
+      flushText(true);
+      // Self-correction and repair markers describe the same active tool phase. They should
+      // remain visible in the stream without fragmenting consecutive tools into one-item groups.
+      if (event.type !== "self_correction_started" && event.type !== "repair_started") {
+        activeGroup = undefined;
+        stream.push({ kind: "event", event });
+      }
+    }
+  }
+  flushText(!finalTextEvent(events));
+  return stream;
+}
+
+function isHiddenSystemMessage(text: string): boolean {
+  return /^运行已暂停[。．]?\s*可以继续，或补充说明后再继续。?$/.test(text.trim());
+}
+
+function finalTextEvent(events: AgentEvent[]): boolean {
+  return events.some((event) => event.type === "result" && Boolean(event.text.trim()));
 }
 
 
 function EventRow({ event }: { event: AgentEvent }) {
   if (event.type === "provider_retry")
     return (
-      <div className="glass flex items-center gap-3 border-warning/30 px-4 py-2.5">
-        <span className="text-[10px] font-semibold tracking-widest text-warning">
-          RETRY
-        </span>
-        <strong className="text-sm text-text">
-          Provider 重试 {event.attempt}/{event.maxAttempts}
-        </strong>
-        <small className="ml-auto text-xs text-text-muted">
+      <div className="activity-row activity-row-warning">
+        <RotateCcw size={15} aria-hidden="true" />
+        <strong>Provider 重试 {event.attempt}/{event.maxAttempts}</strong>
+        <small>
           {event.category === "tool_history_protocol"
             ? "已修复工具历史协议并重试"
             : `${event.delayMs} ms 后重试`}
@@ -1235,43 +1423,36 @@ function EventRow({ event }: { event: AgentEvent }) {
     );
   if (event.type === "self_correction_started")
     return (
-      <div className="glass flex items-center gap-3 border-warning/30 px-4 py-2.5">
-        <span className="text-[10px] font-semibold tracking-widest text-warning">
-          REFLECT
-        </span>
-        <strong className="text-sm text-text">
+      <div className="activity-row activity-row-warning">
+        <TriangleAlert size={15} aria-hidden="true" />
+        <strong>
           {event.maxAttempts == null ? `第 ${event.attempt} 次自我修正` : `自我修正 ${event.attempt}/${event.maxAttempts}`}
         </strong>
-        <small className="ml-auto max-w-[45%] truncate text-xs text-text-muted">
+        <small>
           {event.summary}
         </small>
       </div>
     );
   if (event.type === "repair_started")
     return (
-      <div className="glass flex items-center gap-3 border-warning/30 px-4 py-2.5">
-        <span className="text-[10px] font-semibold tracking-widest text-warning">REPAIR</span>
-        <strong className="text-sm text-text">第 {event.attempt} 次修复</strong>
+      <div className="activity-row activity-row-warning">
+        <Pencil size={15} aria-hidden="true" />
+        <strong>第 {event.attempt} 次修复</strong>
       </div>
     );
   if (event.type === "approval_required")
     return (
-      <div className="glass flex items-center gap-3 border-warning/30 px-4 py-2.5">
-        <span className="text-[10px] font-semibold tracking-widest text-warning">
-          APPROVAL
-        </span>
-        <strong className="truncate text-sm text-text">{event.summary}</strong>
+      <div className="activity-row activity-row-warning">
+        <TriangleAlert size={15} aria-hidden="true" />
+        <strong>{event.summary}</strong>
       </div>
     );
   if (event.type === "error")
     return (
-      <div className="glass flex items-center gap-3 border-danger/30 px-4 py-2.5">
-        <span className="text-[10px] font-semibold tracking-widest text-danger">
-          {event.code}
-        </span>
-        <strong className="min-w-0 flex-1 break-words text-sm text-danger">
-          {event.message}
-        </strong>
+      <div className="activity-row activity-row-error">
+        <TriangleAlert size={15} aria-hidden="true" />
+        <strong>{event.message}</strong>
+        <small>{event.code}</small>
       </div>
     );
   return null;
@@ -1333,23 +1514,17 @@ function ToolEventGroup({ tools }: { tools: ToolTimelineItem[] }) {
   const allCompleted = completed === tools.length;
   const failures = tools.filter((tool) => tool.finished?.isError === true || (tool.finished?.output && typeof tool.finished.output === "object" && "error" in tool.finished.output)).length;
   return (
-    <details className="glass px-4 py-3">
-      <summary className="flex cursor-pointer list-none items-center gap-3">
-        <span
-          className={`text-[10px] font-semibold tracking-widest ${
-            failures ? "text-danger" : allCompleted ? "text-success" : "text-accent-text"
-          }`}
-        >
-          {failures ? "ERRORS" : allCompleted ? "DONE" : "TOOLS"}
-        </span>
-        <strong className="text-sm text-text">工具调用（{tools.length}）</strong>
-        <small className="ml-auto text-xs text-text-muted">
+    <details className="tool-group-card">
+      <summary className="activity-row tool-group-summary">
+        <Terminal size={15} aria-hidden="true" />
+        <strong>已运行（{tools.length} 个工具）</strong>
+        <small>
           {allCompleted
-            ? `${formatDuration(totalDuration)}${failures ? ` · ${failures} 项失败` : ""} · 点击展开全部结果`
-            : `${completed}/${tools.length} 已完成 · 点击展开`}
+            ? `${formatDuration(totalDuration)}${failures ? ` · ${failures} 项失败` : ""}`
+            : `${completed}/${tools.length} 已完成`}
         </small>
       </summary>
-      <div className="mt-3 flex flex-col gap-2">
+      <div className="tool-group-body">
         {tools.map((tool) => (
           <ToolEventRow
             key={tool.started.id}
@@ -1369,23 +1544,31 @@ function ToolEventRow({
   started: ToolStartedEvent;
   finished?: ToolFinishedEvent;
 }) {
+  const summary = toolSummary(started.call.name, started.call.input);
+  const activity = toolActivity(started.call.name, started.call.input);
+  const displayDetail = summary.label === "git_diff" && finished
+    ? `${summary.detail} · ${countDiffFiles(finished.output)} 个文件`
+    : summary.detail;
   const failed = finished?.isError === true || (
     finished !== undefined &&
     typeof finished.output === "object" &&
     finished.output !== null &&
     "error" in (finished.output as Record<string, unknown>));
   return (
-    <details className="rounded-xl border border-line bg-white/5 px-3 py-2">
+    <details className="tool-call-card rounded-xl border border-line bg-white/5 px-3 py-2">
       <summary className="flex cursor-pointer list-none items-center gap-2.5">
         <BuiToolChip
           name={started.call.name}
           status={failed ? "failed" : finished ? "finished" : "running"}
         />
+        <span className="tool-call-detail min-w-0 flex-1 truncate">
+          <strong>{activity.verb}</strong>{displayDetail === "" ? null : <><span> </span><strong>{displayDetail}</strong></>}
+        </span>
         <small className="ml-auto font-mono text-[11px] text-text-muted">
           {finished ? `${finished.durationMs} ms` : "运行中"} · 展开上下文
         </small>
       </summary>
-      <div className="mt-2 flex flex-col gap-1.5">
+      <div className="tool-call-body mt-2 flex flex-col gap-1.5">
         <label className="text-[10px] tracking-widest text-text-muted">INPUT</label>
         <pre className="overflow-auto rounded-lg bg-black/30 p-2 font-mono text-xs text-text-muted">
           {formatToolContext(started.call.input)}
@@ -1412,6 +1595,20 @@ function formatToolContext(value: unknown): string {
     : `${text.slice(0, 20_000)}\n… UI 预览已截断`;
 }
 
+function countDiffFiles(output: unknown): number {
+  if (!output || typeof output !== "object") return 0;
+  const record = output as Record<string, unknown>;
+  const names = new Set<string>();
+  for (const key of ["diff", "stagedDiff"]) {
+    const diff = typeof record[key] === "string" ? record[key] as string : "";
+    for (const match of diff.matchAll(/^diff --git a\/(.+?) b\/.+$/gm)) names.add(match[1]!);
+  }
+  if (Array.isArray(record.newFiles)) for (const file of record.newFiles) {
+    if (file && typeof file === "object" && typeof (file as Record<string, unknown>).path === "string") names.add((file as Record<string, string>).path);
+  }
+  return names.size;
+}
+
 function formatDuration(durationMs: number): string {
   return durationMs < 1_000
     ? `${durationMs} ms`
@@ -1435,9 +1632,28 @@ function ApprovalPromptDialog({
 }) {
   const isTool = prompt.kind === "tool";
   const risk = isTool ? prompt.approval.risk : prompt.plan.scope.maxRisk;
-  return <DecisionDialog title={isTool ? "允许执行这项操作？" : "批准这个执行计划？"} status={risk === "destructive" ? "破坏性操作 · 请谨慎确认" : risk === "high" ? "高风险 · 需要审批" : "需要你的批准"} destructive={risk === "destructive" || risk === "high"} confirmLabel={isTool ? "批准一次" : "批准计划"} cancelLabel="拒绝" onDismiss={onClose} onCancel={() => isTool ? onDecideTool(prompt.approval.id,false) : onDecidePlan(prompt.plan,false)} onConfirm={() => isTool ? onDecideTool(prompt.approval.id,true) : onDecidePlan(prompt.plan,true)}>
-   {isTool ? <><p className="decision-description">{prompt.approval.reason}</p><span className="decision-subject">{prompt.approval.toolName}</span><ApprovalContent input={prompt.approval.normalizedInput}/></> : <><p className="decision-description">{prompt.plan.goal}</p><ol className="decision-plan">{prompt.plan.steps.map(step=><li key={step.id}><strong>{step.title}</strong><span>{step.acceptanceCriteria.join("；")}</span></li>)}</ol></>}
-  </DecisionDialog>;
+  const status = risk === "destructive"
+    ? "破坏性操作 · 请谨慎确认"
+    : isTool ? "未授予此工具的权限" : `计划含 ${prompt.plan.steps.length} 个步骤`;
+  return (
+    <ApprovalDialog
+      title={isTool ? "允许执行这项操作？" : "批准这个执行计划？"}
+      description={isTool ? prompt.approval.reason : prompt.plan.goal}
+      {...(isTool ? { subject: prompt.approval.toolName } : {})}
+      status={status}
+      destructive={risk === "destructive" || risk === "high"}
+      {...(isTool ? { alternativesLabel: "查看参数" } : { alternativesLabel: `查看步骤（${prompt.plan.steps.length}）` })}
+      confirmLabel={isTool ? "批准一次" : "批准计划"}
+      cancelLabel="拒绝"
+      onDismiss={onClose}
+      onCancel={() => isTool ? onDecideTool(prompt.approval.id, false) : onDecidePlan(prompt.plan, false)}
+      onConfirm={() => isTool ? onDecideTool(prompt.approval.id, true) : onDecidePlan(prompt.plan, true)}
+    >
+      {isTool
+        ? <ApprovalContent input={prompt.approval.normalizedInput} />
+        : <ol className="decision-plan">{prompt.plan.steps.map(step => <li key={step.id}><strong>{step.title}</strong><span>{step.acceptanceCriteria.join("；")}</span></li>)}</ol>}
+    </ApprovalDialog>
+  );
 }
 
 function riskTone(risk: string): "danger" | "warning" | "info" {
@@ -1655,85 +1871,6 @@ function ApprovalsView({
               </BuiButton>
             </footer>
           )}
-        </article>
-      ))}
-    </div>
-  );
-}
-
-function SkillsView({
-  skills,
-  decide,
-}: {
-  skills: Array<{
-    manifest: SkillManifest;
-    hash: string;
-    changedSinceTrust: boolean;
-  }>;
-  decide: (skill: { manifest: SkillManifest }, trusted: boolean) => void;
-}) {
-  return (
-    <div className="flex flex-col gap-3">
-      <div>
-        <h2 className="text-base font-semibold text-text">SKILL.md</h2>
-        <p className="text-sm text-text-muted">
-          技能只有在核对权限与内容哈希后才会启用；变更会撤销信任。
-        </p>
-      </div>
-      {skills.length === 0 && (
-        <Empty label="用户目录或项目中没有发现技能" />
-      )}
-      {skills.map((skill) => (
-        <article
-          className="glass flex items-start gap-3 p-4"
-          key={`${skill.manifest.id}:${skill.manifest.sourcePath}`}
-        >
-          <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-accent-soft text-sm font-semibold text-accent-text">
-            S
-          </div>
-          <div className="min-w-0 flex-1">
-            <h3 className="text-sm font-semibold text-text">
-              {skill.manifest.name}
-              <small className="ml-2 text-xs text-text-muted">
-                v{skill.manifest.version}
-              </small>
-            </h3>
-            <p className="mt-0.5 text-sm text-text-muted">
-              {skill.manifest.description}
-            </p>
-            <code className="mt-1 block truncate font-mono text-[11px] text-text-muted">
-              {skill.manifest.sourcePath}
-            </code>
-            <div className="mt-2 flex flex-wrap gap-1.5">
-              {skill.manifest.tools.map((tool) => (
-                <BuiToolChip key={tool} name={tool} />
-              ))}
-            </div>
-          </div>
-          <div className="flex shrink-0 flex-col items-end gap-2">
-            <BuiBadge
-              tone={
-                skill.changedSinceTrust
-                  ? "warning"
-                  : skill.manifest.enabled
-                    ? "success"
-                    : "neutral"
-              }
-            >
-              {skill.changedSinceTrust
-                ? "内容已变化"
-                : skill.manifest.enabled
-                  ? "已信任"
-                  : "待确认"}
-            </BuiBadge>
-            <BuiButton
-              variant="ghost"
-              size="sm"
-              onClick={() => void decide(skill, !skill.manifest.enabled)}
-            >
-              {skill.manifest.enabled ? "撤销信任" : "查看并信任"}
-            </BuiButton>
-          </div>
         </article>
       ))}
     </div>
@@ -2188,11 +2325,22 @@ function SettingsView({ refresh, refreshHistory, theme, onThemeChange, themeSave
   });
   const [providerMessage, setProviderMessage] = useState("");
   const [searchStatus, setSearchStatus] = useState<{ healthy: boolean; detail?: string }>();
-  useEffect(() => {
+  const [searchKey, setSearchKey] = useState("");
+  const [githubToken, setGithubToken] = useState("");
+  const [searchMessage, setSearchMessage] = useState("");
+  const [searchBusy, setSearchBusy] = useState(false);
+  const refreshSearch = useCallback(() => {
+    void window.harness
+      .request<{ healthy: boolean; detail?: string }>({ method: "search.status" })
+      .then(setSearchStatus)
+      .catch(() => setSearchStatus({ healthy: false, detail: "agentd unavailable" }));
     void window.harness
       .credentialStatus()
       .then(setCredentials)
       .catch(() => setCredentials({}));
+  }, []);
+  useEffect(() => {
+    refreshSearch();
     void window.harness
       .providerSettings()
       .then(setProviderSettings)
@@ -2201,8 +2349,7 @@ function SettingsView({ refresh, refreshHistory, theme, onThemeChange, themeSave
           error instanceof Error ? error.message : String(error),
         ),
       );
-    void window.harness.request<{ healthy: boolean; detail?: string }>({ method: "search.status" }).then(setSearchStatus).catch(() => setSearchStatus({ healthy: false, detail: "agentd unavailable" }));
-  }, []);
+  }, [refreshSearch]);
   async function createPairing(connector: "telegram" | "feishu") {
     try {
       const result = await window.harness.request<{ code: string }>({
@@ -2230,6 +2377,38 @@ function SettingsView({ refresh, refreshHistory, theme, onThemeChange, themeSave
         error instanceof Error ? error.message : String(error),
       );
     }
+  }
+  /** Save the search key from the card that reports search health, so the field is where the reader looks. */
+  async function saveSearchKey() {
+    if (!searchKey.trim()) return;
+    setSearchBusy(true);
+    setSearchMessage("");
+    try {
+      setCredentials(await window.harness.setCredential("PARALLEL_API_KEY", searchKey));
+      setSearchKey("");
+      // The daemon restarts to pick the key up; give it a moment before asking for health again.
+      setTimeout(refreshSearch, 3_000);
+      setSearchMessage("已保存，agentd 正在重新加载；稍后这里会显示就绪状态");
+    } catch (error) {
+      setSearchMessage(error instanceof Error ? error.message : String(error));
+    } finally { setSearchBusy(false); }
+  }
+  /**
+   * The token only raises the GitHub quota; it is not required for search to work. It restarts the
+   * daemon like every other credential, so the installer is rebuilt with it.
+   */
+  async function saveGithubToken() {
+    if (!githubToken.trim()) return;
+    setSearchBusy(true);
+    setSearchMessage("");
+    try {
+      setCredentials(await window.harness.setCredential("GITHUB_TOKEN", githubToken));
+      setGithubToken("");
+      setTimeout(refreshSearch, 3_000);
+      setSearchMessage("GitHub Token 已保存，agentd 正在重新加载");
+    } catch (error) {
+      setSearchMessage(error instanceof Error ? error.message : String(error));
+    } finally { setSearchBusy(false); }
   }
   async function removeCredential() {
     try {
@@ -2267,12 +2446,44 @@ function SettingsView({ refresh, refreshHistory, theme, onThemeChange, themeSave
         </small>
         <h3 className="text-sm font-semibold text-text">网页搜索</h3>
         <p className="text-xs text-text-muted">
-          密钥使用上方 PARALLEL_API_KEY 保存。搜索摘录标记为不可信；含仓库内容的查询会触发数据外发审批。
+          配置后，技能搜索会先走网页检索而不是直接访问 GitHub。搜索摘录标记为不可信；含仓库内容的查询会触发数据外发审批。
         </p>
+        <p className="text-xs text-text-muted">
+          GitHub Token 单独配置：未认证时 GitHub 只允许 60 次请求/小时，一次技能搜索就会耗尽并报 403 限流；填入 Token 后为 5000 次/小时。只需 <code>public_repo</code> 只读权限。
+        </p>
+        <input
+          type="password"
+          autoComplete="off"
+          aria-label="Parallel API Key"
+          className="rounded-xl border border-line bg-black/30 px-3 py-2 text-sm text-text outline-none placeholder:text-text-muted"
+          value={searchKey}
+          onChange={(event) => setSearchKey(event.target.value)}
+          onKeyDown={(event) => { if (event.key === "Enter") { event.preventDefault(); void saveSearchKey(); } }}
+          placeholder={credentials.PARALLEL_API_KEY ? "已保存 · 粘贴以替换" : "粘贴 Parallel API Key"}
+        />
+        <div className="flex items-center gap-2">
+          <BuiButton variant="primary" size="sm" disabled={searchBusy || !searchKey.trim()} onClick={() => void saveSearchKey()}>
+            {searchBusy ? "保存中…" : "保存"}
+          </BuiButton>
+          {credentials.PARALLEL_API_KEY && <BuiButton variant="ghost" size="sm" disabled={searchBusy} onClick={() => void window.harness.deleteCredential("PARALLEL_API_KEY").then((next) => { setCredentials(next); setTimeout(refreshSearch, 3_000); setSearchMessage("已删除"); }).catch((error) => setSearchMessage(String(error)))}>删除密钥</BuiButton>}
+        </div>
+        <input
+          type="password"
+          autoComplete="off"
+          aria-label="GitHub Token"
+          className="rounded-xl border border-line bg-black/30 px-3 py-2 text-sm text-text outline-none placeholder:text-text-muted"
+          value={githubToken}
+          onChange={(event) => setGithubToken(event.target.value)}
+          onKeyDown={(event) => { if (event.key === "Enter") { event.preventDefault(); void saveGithubToken(); } }}
+          placeholder={credentials.GITHUB_TOKEN ? "GitHub Token 已保存 · 粘贴以替换" : "GitHub Token（可选，提升额度）"}
+        />
+        {githubToken.trim() && <BuiButton variant="secondary" size="sm" disabled={searchBusy} onClick={() => void saveGithubToken()}>保存 GitHub Token</BuiButton>}
+        {searchMessage && <p className="text-xs text-text-muted" role="status">{searchMessage}</p>}
         <code className="mt-auto rounded-lg bg-black/30 p-2 font-mono text-[11px] text-text-muted">
           {searchStatus?.healthy
             ? "Parallel Search 已就绪"
             : (searchStatus?.detail ?? "正在检查")}
+          {credentials.GITHUB_TOKEN ? " · GitHub Token 已配置" : " · GitHub 未认证（60 次/小时）"}
         </code>
       </article>
       <article className="glass flex flex-col gap-2 p-4">
@@ -2578,6 +2789,6 @@ function fileBase64(file: File): Promise<string> {
 
 createRoot(document.getElementById("root")!).render(
   <React.StrictMode>
-    <App />
+    <DesktopChrome><App /></DesktopChrome>
   </React.StrictMode>,
 );

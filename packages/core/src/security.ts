@@ -12,6 +12,7 @@ export interface PermissionDecision {
 export class PermissionEngine {
   decide(toolName: string, input: Record<string, unknown>, risk: RiskLevel, grants: PermissionGrant[], workspacePath: string): PermissionDecision {
     if (risk === "read") return { allowed: true, reason: "Read-only workspace tools are allowed by default", risk };
+    if (toolName === "browser" && ["upload", "download", "click", "fill", "press_key"].includes(String(input.action))) return { allowed: false, reason: "Browser input and file transfers require approval for this specific action", risk };
     if (risk === "destructive") return { allowed: false, reason: "Destructive operations always require one-time approval", risk };
     const grant = grants.find((candidate) => this.matches(candidate, toolName, input, risk, workspacePath));
     return grant

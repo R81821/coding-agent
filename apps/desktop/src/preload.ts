@@ -1,8 +1,21 @@
 import { contextBridge, ipcRenderer } from "electron";
 import type { DaemonRequestInput } from "@harness/protocol";
 import type { ProviderSettings } from "./provider-settings.js";
+import type { DesktopCommand } from "./desktop-menu.js";
+import type { BrowserAction, BrowserState, BrowserLayout } from "@harness/protocol";
 
 const api = {
+  browserState: (sessionId: string) => ipcRenderer.invoke("harness:browser-state", sessionId) as Promise<BrowserState>,
+  browserCommand: (sessionId: string, input: BrowserAction) => ipcRenderer.invoke("harness:browser-command", sessionId, input) as Promise<unknown>,
+  browserLayout: (layout: BrowserLayout) => ipcRenderer.invoke("harness:browser-layout", layout) as Promise<void>,
+  onBrowserState: (callback: (state: BrowserState) => void) => {
+    const listener = (_event: Electron.IpcRendererEvent, state: BrowserState) => callback(state);
+    ipcRenderer.on("harness:browser-state", listener);
+    return () => { ipcRenderer.removeListener("harness:browser-state", listener); };
+  },
+  desktopPlatform: process.platform,
+  desktopCommand: (command: DesktopCommand) => ipcRenderer.invoke("harness:desktop-command", command) as Promise<void>,
+  setTitlebarTheme: (theme: "classic" | "kelo") => ipcRenderer.invoke("harness:titlebar-theme", theme) as Promise<void>,
   openExternal: (url: string) => ipcRenderer.invoke("harness:open-external", url) as Promise<void>,
   exportMemories: (memoryIds: string[]) => ipcRenderer.invoke("harness:memory-export", memoryIds) as Promise<{ canceled: boolean; path?: string }>,
   unlock: (passphrase: string, remember = false) =>

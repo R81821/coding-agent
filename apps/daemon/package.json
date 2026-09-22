@@ -1,6 +1,6 @@
 {
   "name": "@harness/daemon",
-  "version": "1.4.2",
+  "version": "1.4.3",
   "type": "module",
   "scripts": { "dev": "tsx src/main.ts", "build": "tsup && node scripts/copy-wasm.mjs" },
   "dependencies": { "@harness/core": "workspace:*", "@harness/extensions": "workspace:*", "@harness/protocol": "workspace:*" },

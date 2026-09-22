@@ -46,5 +46,5 @@
 .hljs-string, .hljs-attr, .hljs-addition { color: #a4ce9c; }
 .hljs-title, .hljs-function, .hljs-section { color: #9cc7ed; }
 .hljs-number, .hljs-symbol, .hljs-built_in { color: #e7bc8a; }
-.hljs-comment, .hljs-quote { color: #8c8297; font-style: italic; }
+.hljs-comment, .hljs-quote { color: var(--muted); font-style: italic; }
 .hljs-deletion, .hljs-tag { color: #e39ca9; }

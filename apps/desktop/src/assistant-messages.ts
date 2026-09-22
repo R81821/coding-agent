@@ -1,5 +1,14 @@
 import type { AgentEvent } from "@harness/protocol";
 
+export function dedupeFinalText(streamText: string, resultText: string): string {
+  const stream = streamText.trim();
+  const result = resultText.trim();
+  if (!result) return "";
+  if (!stream) return resultText;
+  if (stream === result || stream.includes(result) || result.includes(stream)) return "";
+  return resultText;
+}
+
 export function assistantMessages(events: AgentEvent[]): { text: string; progress: string[] } {
   let text = "";
   const progress: string[] = [];

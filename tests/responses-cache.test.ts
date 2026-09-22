@@ -98,4 +98,21 @@ describe("Responses cache and continuation", () => {
     expect(body.prompt_cache_key).toBe("1.3.1:repo");
     expect(events).toMatchObject([{ type: "usage", usage: { inputTokens: 100, cachedInputTokens: 80 } }]);
   });
+  it("continues an image conversation with only the new tail", async () => {
+    const bodies: Record<string, any>[] = [];
+    const attachment = { id: "att-1", sha256: "a".repeat(64), mimeType: "image/png", byteLength: 3, encryptedPath: "e", source: "file" as const, trust: "untrusted_attachment" as const, allowedProviders: [], createdAt: "2026-01-01T00:00:00.000Z" };
+    const provider = new OpenAIProvider({ id: "openai", apiKey: "fixture", baseUrl: "https://fixture.test", models: [model], resolveAttachment: async () => ({ mimeType: "image/png", base64: "AAAA" }), fetchImpl: async (_url, init) => { bodies.push(JSON.parse(String(init?.body))); return streamResponse("resp-" + bodies.length, "hi"); } });
+    const imageTurn: ModelRequest["messages"] = [
+      { role: "user", content: [{ type: "text", text: "look", trust: "user_request" }, { type: "image", attachment, detail: "auto" }] },
+    ];
+    const base = { ...request(), runId: "run-image" };
+    await collect(provider, { ...base, messages: [...imageTurn] });
+    expect(JSON.stringify(bodies[0]?.input)).toContain("input_image");
+    await collect(provider, { ...base, messages: [...imageTurn, assistant("hi"), user("continue")] });
+    // The chain already holds the image, so the follow-up carries only what is new. This is what
+    // makes it safe to put the attachment on every request: the image is not uploaded twice.
+    expect(bodies[1]?.previous_response_id).toBe("resp-1");
+    expect(bodies[1]?.input).toEqual([{ role: "user", content: [{ type: "input_text", text: "continue" }] }]);
+    expect(JSON.stringify(bodies[1]?.input)).not.toContain("input_image");
+  });
 });

@@ -34,6 +34,9 @@ import {
 import { appendBounded, daemonStartupError, DaemonStartupMonitor } from "./daemon-startup.js";
 import { sanitizeRendererRequest } from "./renderer-ipc.js";
 import { messageHttpUrl } from "./message-links.js";
+import { runDesktopCommand } from "./desktop-menu.js";
+import { DesktopBrowserHost } from "./browser-host.js";
+import { BrowserLayoutSchema, type RunSpec, type SessionDetail } from "@harness/protocol";
 
 ipcMain.handle("harness:open-external", async (_event, value: unknown) => {
   const url = messageHttpUrl(value);
@@ -53,10 +56,26 @@ let tray: Tray | undefined;
 let daemon: ChildProcess | undefined;
 let quitting = false;
 let currentPassphrase: string | undefined;
+let browserHost: DesktopBrowserHost | undefined;
 let daemonStarting: Promise<void> | undefined;
 const backgroundLaunch = process.argv.includes("--background");
 let showWindowWhenReady = !backgroundLaunch;
 const credentialStore = new WindowsCredentialStore();
+
+ipcMain.handle("harness:desktop-command", async (event, command: unknown) => {
+  if (!window || event.sender !== window.webContents || event.senderFrame !== window.webContents.mainFrame) throw new Error("无效的窗口来源");
+  if (command === "quit") { app.quit(); return; }
+  if (command === "about") {
+    await dialog.showMessageBox(window, { type: "info", title: "关于 Harness", message: "Harness Agent", detail: `版本 ${app.getVersion()}\n本地开发助手`, buttons: ["知道了"] });
+    return;
+  }
+  runDesktopCommand(window, command);
+});
+ipcMain.handle("harness:titlebar-theme", (event, theme: unknown) => {
+  if (!window || event.sender !== window.webContents || event.senderFrame !== window.webContents.mainFrame) throw new Error("无效的窗口来源");
+  if (theme !== "classic" && theme !== "kelo") throw new Error("无效的主题");
+  if (process.platform !== "darwin") window.setTitleBarOverlay({ color: theme === "kelo" ? "#ffffff" : "#211e27", symbolColor: theme === "kelo" ? "#303540" : "#f5f3f7", height: 42 });
+});
 
 process.stderr.write(
   `[Harness Agent] main-entry background=${String(backgroundLaunch)}\n`,
@@ -90,6 +109,7 @@ app.on("window-all-closed", () => {
 });
 app.on("before-quit", () => {
   quitting = true;
+  browserHost?.close();
   if (daemon) killDaemonTree(daemon);
 });
 
@@ -185,13 +205,29 @@ ipcMain.handle(
     if (!request || typeof request.method !== "string")
       throw new Error("无效的 daemon 请求");
     const sanitized = sanitizeRendererRequest(request.method, request.params);
-    return daemonRequest({
+    const result = await daemonRequest({
       id: newId("request"),
       method: sanitized.method,
       params: sanitized.params,
     } as DaemonRequest);
+    if (sanitized.method === "session.purge" && sanitized.params && typeof sanitized.params === "object" && "sessionId" in sanitized.params) await browserHost?.purge(String(sanitized.params.sessionId));
+    return result;
   },
 );
+
+function assertDesktopBrowserSender(event: Electron.IpcMainInvokeEvent): DesktopBrowserHost {
+  if (!window || !browserHost || event.sender !== window.webContents || event.senderFrame !== window.webContents.mainFrame) throw new Error("无效的浏览器界面来源");
+  return browserHost;
+}
+ipcMain.handle("harness:browser-state", (event, id: unknown) => {
+  if (typeof id !== "string" || !id || id.length > 120) throw new Error("无效的对话");
+  return assertDesktopBrowserSender(event).state(id);
+});
+ipcMain.handle("harness:browser-command", (event, id: unknown, input: unknown) => {
+  if (typeof id !== "string" || !id || id.length > 120) throw new Error("无效的对话");
+  return assertDesktopBrowserSender(event).manual(id, input);
+});
+ipcMain.handle("harness:browser-layout", (event, input: unknown) => assertDesktopBrowserSender(event).setLayout(BrowserLayoutSchema.parse(input)));
 
 ipcMain.handle("harness:choose-workspace", async () => {
   const result = await dialog.showOpenDialog(window!, {
@@ -260,6 +296,16 @@ async function initializeDesktop(): Promise<void> {
   const legacyRuntimePath = join(process.env.LOCALAPPDATA ?? userDataPath, "HarnessAgent");
   await ensureV2Storage(userDataPath, legacyRuntimePath === userDataPath ? [] : [legacyRuntimePath]);
   await logLifecycle("ready", { showWindowWhenReady });
+  browserHost = new DesktopBrowserHost(async (sessionId, runId) => {
+    const detail = await daemonRequest<SessionDetail>({ id: newId("request"), method: "session.get", params: { sessionId } });
+    if (!detail?.session || detail.session.deletedAt) throw new Error("浏览器对话不存在或已被删除");
+    if (runId) {
+      const run = await daemonRequest<{ spec: RunSpec; status: string }>({ id: newId("request"), method: "run.get", params: { runId } });
+      if (!run || run.spec.sessionId !== sessionId || !["running", "verifying", "planning"].includes(run.status)) throw new Error("浏览器调用与当前运行不匹配");
+    }
+    return { workspacePath: detail.session.workspacePath };
+  });
+  await browserHost.listen();
   createWindow(showWindowWhenReady);
   createTray();
   app.setLoginItemSettings({ openAtLogin: true, args: ["--background"] });
@@ -274,7 +320,8 @@ function createWindow(show: boolean): void {
     minWidth: 900,
     minHeight: 620,
     backgroundColor: "#211e27",
-    titleBarStyle: "hiddenInset",
+    titleBarStyle: process.platform === "darwin" ? "hiddenInset" : "hidden",
+    ...(process.platform !== "darwin" ? { titleBarOverlay: { color: "#211e27", symbolColor: "#f5f3f7", height: 42 } } : {}),
     webPreferences: {
       preload: existsSync(join(here, "preload.cjs"))
         ? join(here, "preload.cjs")
@@ -284,6 +331,8 @@ function createWindow(show: boolean): void {
       nodeIntegration: false,
     },
   });
+  Menu.setApplicationMenu(null);
+  browserHost?.attach(window);
   window.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
   window.webContents.on("will-navigate", (event) => event.preventDefault());
   const devUrl = process.env.VITE_DEV_SERVER_URL;
@@ -403,6 +452,7 @@ async function startDaemon(passphrase: string): Promise<void> {
     ...settingsEnvironment,
     HARNESS_APP_DATA_PATH: app.getPath("userData"),
     HARNESS_DAEMON_INSTANCE: daemonInstanceId,
+    ...(browserHost ? { HARNESS_BROWSER_BRIDGE: browserHost.endpoint, HARNESS_BROWSER_TOKEN: browserHost.token } : {}),
   };
   if (app.isPackaged)
     daemon = spawn(process.execPath, [packagedPath], {

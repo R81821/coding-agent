@@ -20,6 +20,7 @@
       "@harness/providers": ["./packages/providers/src/index.ts"],
       "@harness/persistence": ["./packages/persistence/src/index.ts"],
       "@harness/tools": ["./packages/tools/src/index.ts"],
+      "@harness/tools/paths": ["./packages/tools/src/paths.ts"],
       "@harness/extensions": ["./packages/extensions/src/index.ts"],
       "@harness/core": ["./packages/core/src/index.ts"],
       "@harness/evals": ["./packages/evals/src/index.ts"]

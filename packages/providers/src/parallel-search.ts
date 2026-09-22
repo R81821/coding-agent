@@ -9,6 +9,8 @@ export class ParallelSearchProvider implements SearchProvider {
   }
 
   async search(input: { queries: string[]; objective?: string; maxCharsTotal?: number; signal?: AbortSignal }): Promise<SearchResponse> {
+    const configurationError = this.configurationError();
+    if (configurationError) throw new Error(configurationError);
     if (input.queries.length === 0) throw new Error("Parallel search requires at least one query");
     const response = await this.request(`${this.baseUrl.replace(/\/$/, "")}/v1/search`, {
       method: "POST",
@@ -39,6 +41,13 @@ export class ParallelSearchProvider implements SearchProvider {
   }
 
   async health(): Promise<{ healthy: boolean; detail?: string }> {
-    return this.apiKey ? { healthy: true } : { healthy: false, detail: "PARALLEL_API_KEY is not configured" };
+    const detail = this.configurationError();
+    return detail ? { healthy: false, detail } : { healthy: true };
+  }
+
+  private configurationError(): string | undefined {
+    if (!this.apiKey.trim()) return "PARALLEL_API_KEY is not configured";
+    if (!/^[\x21-\x7e]+$/.test(this.apiKey)) return "PARALLEL_API_KEY must contain only visible ASCII characters without whitespace";
+    return undefined;
   }
 }

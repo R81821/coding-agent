@@ -1,7 +1,16 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { ParallelSearchProvider } from "@harness/providers";
 
 describe("Parallel Search provider", () => {
+  it("rejects non-ASCII credentials before sending a request without exposing the key", async () => {
+    const fetcher = vi.fn<typeof fetch>();
+    const key = "x".repeat(17) + "选填";
+    const provider = new ParallelSearchProvider(key, "https://parallel.test", fetcher);
+    expect(await provider.health()).toMatchObject({ healthy: false, detail: expect.stringContaining("PARALLEL_API_KEY") });
+    await expect(provider.search({ queries: ["中文技能"] })).rejects.toThrow(/PARALLEL_API_KEY.*ASCII/);
+    expect(fetcher).not.toHaveBeenCalled();
+    expect((await provider.health()).detail).not.toContain(key);
+  });
   it("uses the native search contract and marks results untrusted", async () => {
     let body: Record<string, unknown> | undefined;
     let apiKey = "";

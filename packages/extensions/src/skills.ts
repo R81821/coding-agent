@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
-import { mkdir, readFile, readdir, writeFile } from "node:fs/promises";
-import { dirname, join, resolve } from "node:path";
+import { lstat, mkdir, readFile, readdir, writeFile } from "node:fs/promises";
+import { dirname, join, resolve, relative, isAbsolute } from "node:path";
 import type { SkillManifest } from "@harness/protocol";
 import { SkillManifestSchema } from "@harness/protocol";
 import YAML from "yaml";
@@ -13,6 +13,10 @@ export interface SkillDocument {
   instructions: string;
   hash: string;
   changedSinceTrust: boolean;
+  key: string;
+  scope: "global" | "project";
+  files: string[];
+  content: string;
 }
 
 export interface SkillDraft {
@@ -23,7 +27,7 @@ export interface SkillDraft {
 }
 
 export class SkillService {
-  constructor(private readonly userSkillRoot: string) {}
+  constructor(readonly userSkillRoot: string) {}
 
   async discover(workspacePath?: string): Promise<SkillDocument[]> {
     const files = [
@@ -42,14 +46,22 @@ export class SkillService {
   }
 
   async load(path: string, trustedHash?: string): Promise<SkillDocument> {
-    const content = await readFile(path, "utf8");
+    const documentBytes = Buffer.from(await readFile(path));
+    const content = documentBytes.toString("utf8");
     const { frontmatter, body } = parseFrontmatter(content);
     const id = String(frontmatter.id ?? frontmatter.name ?? "").toLocaleLowerCase().replace(/[^a-z0-9_-]+/g, "-");
-    const hash = createHash("sha256").update(content).digest("hex");
+    const files = await skillResourceFiles(dirname(path));
+    const digest = createHash("sha256");
+    for (const file of files) {
+      const bytes = resolve(join(dirname(path), file)) === resolve(path) ? documentBytes : await readFile(join(dirname(path), file));
+      digest.update(JSON.stringify([file, bytes.length])).update(bytes);
+    }
+    const hash = digest.digest("hex");
+    const key = skillKey(path);
     const manifest = SkillManifestSchema.parse({
       id,
       name: frontmatter.name,
-      version: frontmatter.version,
+      version: String(frontmatter.version ?? "1.0.0"),
       description: frontmatter.description ?? "",
       triggers: frontmatter.triggers ?? [],
       tools: frontmatter.tools ?? [],
@@ -57,10 +69,13 @@ export class SkillService {
       networkDomains: frontmatter.networkDomains ?? [],
       compatibility: frontmatter.compatibility ?? ">=1.0.0-beta.1",
       sourcePath: path,
+      key,
       ...(trustedHash ? { trustedHash } : {}),
       enabled: Boolean(trustedHash && trustedHash === hash)
     });
-    return { manifest, instructions: body, hash, changedSinceTrust: Boolean(trustedHash && trustedHash !== hash) };
+    const relativePath = relative(resolve(this.userSkillRoot), resolve(path));
+    const scope = relativePath !== ".." && !relativePath.startsWith(`..${process.platform === "win32" ? "\\" : "/"}`) && !isAbsolute(relativePath) ? "global" : "project";
+    return { manifest, instructions: body, hash, key, scope, files, content, changedSinceTrust: Boolean(trustedHash && trustedHash !== hash) };
   }
 
   async draft(manifest: Omit<SkillManifest, "sourcePath" | "trustedHash" | "enabled">, instructions: string, projectRoot?: string): Promise<SkillDraft> {
@@ -92,9 +107,26 @@ export class SkillService {
     if (!SKILL_ID_PATTERN.test(draft.manifest.id)) throw new Error(`Invalid skill id: ${draft.manifest.id}`);
     await mkdir(dirname(draft.path), { recursive: true });
     await writeFile(draft.path, draft.content, { encoding: "utf8", mode: 0o600 });
-    const hash = createHash("sha256").update(draft.content).digest("hex");
+    const { hash } = await this.load(draft.path);
     return this.load(draft.path, hash);
   }
+}
+
+export function skillKey(path: string): string {
+  const normalized = resolve(path).replace(/\\/g, "/");
+  return `skill:${createHash("sha256").update(process.platform === "win32" ? normalized.toLowerCase() : normalized).digest("hex")}`;
+}
+
+export async function skillResourceFiles(root: string, prefix = ""): Promise<string[]> {
+  if ((await lstat(root)).isSymbolicLink()) throw new Error("技能目录不能包含符号链接");
+  const result: string[] = [];
+  for (const entry of await readdir(root, { withFileTypes: true })) {
+    const path = prefix ? `${prefix}/${entry.name}` : entry.name;
+    if (entry.isSymbolicLink()) throw new Error(`技能资源不能包含符号链接：${path}`);
+    if (entry.isDirectory()) result.push(...await skillResourceFiles(join(root, entry.name), path));
+    else if (entry.isFile()) result.push(path);
+  }
+  return result.sort();
 }
 
 async function findSkillFiles(root: string): Promise<string[]> {
@@ -118,4 +150,3 @@ function parseFrontmatter(content: string): { frontmatter: Record<string, any>; 
   if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error("SKILL.md frontmatter must be an object");
   return { frontmatter: parsed as Record<string, any>, body: match[2] ?? "" };
 }
-

@@ -71,6 +71,11 @@ export interface PiAgentBridgeOptions {
     retainRecentTurns: number;
   };
   getPinnedContext?(): string;
+  /**
+   * User messages typed while the run is active. Consulted at each turn boundary; returning an
+   * empty array means the run continues uninterrupted.
+   */
+  drainSteering?(): string[];
   beforeModelRequest?(): void;
   onModelRequestFinished?(timing: RequestTiming): void;
   beforeCompactionRequest?(): boolean;
@@ -121,7 +126,7 @@ export async function runWithPiAgent(
       tools: createPiTools(options),
     },
     sessionId: options.sessionId,
-    streamFn: createHarnessStream(options),
+    streamFn: createHarnessStream(options, contextTracker.estimateRequest),
     transformContext: contextTracker,
     toolExecution: options.parallelToolCalls ? "parallel" : "sequential",
     beforeToolCall: async ({ toolCall, args }, signal) =>
@@ -150,6 +155,18 @@ export async function runWithPiAgent(
     if (event.type === "turn_end") await options.onTranscript?.(toHarnessMessages({ systemPrompt: agent.state.systemPrompt, messages: contextTracker.current(agent.state.messages) }, []), "model_turn");
     if (event.type === "message_end" && event.message.role === "toolResult") await options.onTranscript?.(toHarnessMessages({ systemPrompt: agent.state.systemPrompt, messages: contextTracker.current(agent.state.messages) }, []), "tool_batch");
   });
+  // Steering reaches the loop through the agent's own queue: pi drains it at a turn boundary and
+  // injects each message as the next user turn. Polling is what moves text the engine queued
+  // mid-run into that queue — the agent exposes no hook to push directly.
+  const steeringPump = options.drainSteering
+    ? setInterval(() => {
+        try {
+          for (const text of options.drainSteering!()) agent.steer({ role: "user", content: text, timestamp: Date.now() });
+        } catch { /* a failed pump must not take the run down */ }
+      }, 250)
+    : undefined;
+  steeringPump?.unref?.();
+
   const abort = () => agent.abort();
   options.externalSignal.addEventListener("abort", abort, { once: true });
   if (options.externalSignal.aborted) abort();
@@ -182,6 +199,7 @@ export async function runWithPiAgent(
       ? { errorMessage: agent.state.errorMessage, transcript }
       : { transcript };
   } finally {
+    if (steeringPump) clearInterval(steeringPump);
     options.externalSignal.removeEventListener("abort", abort);
     unsubscribe();
   }
@@ -223,8 +241,7 @@ function createPiTools(options: PiAgentBridgeOptions): AgentTool[] {
   });
 }
 
-function createHarnessStream(options: PiAgentBridgeOptions) {
-  let includeAttachments = !options.resumeTranscript?.length;
+function createHarnessStream(options: PiAgentBridgeOptions, estimateInput: (request: ModelRequest) => number) {
   return (
     _model: PiModel<string>,
     context: PiContext,
@@ -232,8 +249,7 @@ function createHarnessStream(options: PiAgentBridgeOptions) {
   ) => {
     const stream = createAssistantMessageEventStream();
     const signal = streamOptions?.signal ?? options.externalSignal;
-    void streamProvider(options, context, signal, stream, includeAttachments);
-    includeAttachments = false;
+    void streamProvider(options, context, signal, stream, estimateInput);
     return stream;
   };
 }
@@ -243,7 +259,7 @@ async function streamProvider(
   context: PiContext,
   signal: AbortSignal,
   stream: AssistantMessageEventStream,
-  includeAttachments: boolean,
+  estimateInput: (request: ModelRequest) => number,
 ): Promise<void> {
   let message = createAssistantMessage(options.model, "pending");
   stream.push({ type: "start", partial: message });
@@ -256,11 +272,13 @@ async function streamProvider(
       purpose: "main",
       runId: options.runId,
       model: options.model,
+      // The image belongs to the conversation, not to the first request that happened to carry it.
+      // A provider using response-id continuation sends only the new tail, so the image is never
+      // re-uploaded there; every other provider rebuilds the request from the full history and needs
+      // it again. Dropping it after the first request left later turns reasoning about a picture they
+      // could no longer see.
       messages: normalizeToolMessageSequence(
-        toHarnessMessages(
-          context,
-          includeAttachments ? attachmentParts(options.initialMessages) : [],
-        ),
+        toHarnessMessages(context, attachmentParts(options.initialMessages)),
       ),
       tools: options.contracts.filter((contract) => context.tools?.some((tool) => tool.name === contract.name)),
       maxOutputTokens: options.maxOutputTokens,
@@ -271,6 +289,13 @@ async function streamProvider(
     const maxAttempts = Math.max(1, options.providerRetryPolicy?.maxAttempts ?? 3);
     for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
       options.beforeModelRequest?.();
+      // The configured output maximum is a ceiling. Recompute available space after
+      // tool results and history repair; large-context models retain that ceiling.
+      const inputEstimate = estimateInput(request);
+      const overhead = Math.min(1024, Math.floor(options.model.capabilities.maxContextTokens / 16));
+      const availableOutput = options.model.capabilities.maxContextTokens - inputEstimate - overhead;
+      if (availableOutput < 1) throw new Error("context_budget_exceeded: input and tool schemas exceed the model context budget");
+      request = { ...request, maxOutputTokens: Math.min(options.maxOutputTokens, availableOutput) };
       let receivedProviderOutput = false;
       try {
         for await (const event of timedProviderStream(options.provider, request, signal, options.onModelRequestFinished)) {
@@ -634,10 +659,37 @@ function createContextTransformer(options: PiAgentBridgeOptions) {
   let source: string[] = [];
   let delta = new RuntimeContextDelta();
   let calibration = 1, lastEstimate = 0;
+  let requestCalibration = 1, lastRequestEstimate = 0;
+  const estimatePayload = (request: Pick<ModelRequest, "messages" | "tools">): number => {
+    const payload = JSON.stringify({ messages: request.messages, tools: request.tools });
+    const rawEstimate = Math.max(1, Math.ceil(payload.length / 4));
+    // Use a cautious text estimate until this provider reports usage: two ASCII
+    // characters per token, and one token per UTF-8 byte for non-ASCII text.
+    // Image refs omit encoded image tokens; reserve separately, with more room for
+    // larger images. This is an estimate, not a provider-specific tokenizer.
+    const images = request.messages.flatMap(message => message.content).reduce((total, part) => {
+      if (part.type !== "image") return total;
+      const tiles = Math.ceil((part.attachment.width ?? 1024) / 512) * Math.ceil((part.attachment.height ?? 1024) / 512);
+      return total + Math.max(8192, tiles * 1024);
+    }, 0);
+    const asciiLength = payload.replace(/[^\x00-\x7f]/g, "").length;
+    const textEstimate = asciiLength / 2 + Buffer.byteLength(payload, "utf8") - asciiLength;
+    return Math.ceil(Math.max(textEstimate + images, rawEstimate * requestCalibration * 1.1));
+  };
+  const estimateRequest = (request: ModelRequest): number => {
+    // Only an actual request can become the denominator for its reported usage.
+    lastRequestEstimate = Math.max(1, Math.ceil(JSON.stringify({ messages: request.messages, tools: request.tools }).length / 4));
+    return estimatePayload(request);
+  };
   const runtimePrefix = "Trusted runtime context (approved plan and permission snapshot):\n";
   const runtimeMessage = (value: unknown): AgentMessage => ({ role: "user", content: runtimePrefix + canonicalJson(value), timestamp: Date.now() });
   const wireTokens = (messages: AgentMessage[]) => Math.max(1, Math.ceil(JSON.stringify({ messages: toHarnessMessages({ systemPrompt: extractSystemPrompt(options.initialMessages), messages }, []), tools: options.contracts }).length / 4));
-  const estimate = (messages: AgentMessage[]) => Math.ceil(wireTokens(messages) * calibration);
+  // Compaction and dispatch must agree on input feasibility. Otherwise a long task
+  // can pass the old compaction threshold and fail immediately at provider dispatch.
+  const estimate = (messages: AgentMessage[]) => Math.max(Math.ceil(wireTokens(messages) * calibration), estimatePayload({
+    messages: toHarnessMessages({ systemPrompt: extractSystemPrompt(options.initialMessages), messages }, attachmentParts(options.initialMessages)),
+    tools: options.contracts,
+  }));
   const current = (messages: AgentMessage[]) => history.length ? [...history, ...messages.slice(source.length)] : messages;
   const transform = async (messages: AgentMessage[], signal?: AbortSignal): Promise<AgentMessage[]> => {
     const fingerprints = messages.map(message => canonicalJson(message));
@@ -654,7 +706,9 @@ function createContextTransformer(options: PiAgentBridgeOptions) {
     const policy = options.contextPolicy;
     lastEstimate = wireTokens(history);
     if (!policy) return [...history];
-    const capacity = Math.min(policy.workingContextTokens ?? 128000, Math.max(1, options.model.capabilities.maxContextTokens - options.maxOutputTokens));
+    // Compaction budgets input; each provider request caps output against the space
+    // that remains. Reserving the entire output ceiling can leave no usable input.
+    const capacity = Math.min(policy.workingContextTokens ?? 128000, options.model.capabilities.maxContextTokens);
     const threshold = Math.floor(capacity * policy.compactAtRatio);
     const retainCount = Math.max(4, policy.retainRecentTurns * 3);
     if (estimate(history) < threshold) return [...history];
@@ -701,7 +755,16 @@ function createContextTransformer(options: PiAgentBridgeOptions) {
     await options.onCompaction?.({ before: toHarnessMessages({ messages: before }, []), after: toHarnessMessages({ messages: history }, []), summary, inputTokens: estimate(before), outputTokens: Math.ceil(summary.length / 4), deterministicFallback });
     return [...history];
   };
-  return Object.assign(transform, { current, calibrate(actual: number) { if (lastEstimate && actual > 0) calibration = Math.max(.5, Math.min(4, actual / lastEstimate)); } });
+  return Object.assign(transform, {
+    current,
+    estimateRequest,
+    calibrate(actual: number) {
+      if (lastEstimate && actual > 0) calibration = Math.max(.5, Math.min(4, actual / lastEstimate));
+      // Output allocation must not discard observed high token density. Keep the
+      // largest observed correction within this run, including after compaction.
+      if (lastRequestEstimate && actual > 0) requestCalibration = Math.max(requestCalibration, actual / lastRequestEstimate);
+    },
+  });
 }
 function validSummary(text: string): boolean {
   if (!text.trim() || /DSML|<\|.*?\|>|<invoke|tool_call/i.test(text)) return false;

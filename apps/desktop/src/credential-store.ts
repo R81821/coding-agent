@@ -6,6 +6,7 @@ export const credentialNames = [
   "GEMINI_API_KEY",
   "OPENAI_COMPATIBLE_API_KEY",
   "PARALLEL_API_KEY",
+  "GITHUB_TOKEN",
   "HARNESS_GATEWAY_TOKEN"
 ] as const;
 

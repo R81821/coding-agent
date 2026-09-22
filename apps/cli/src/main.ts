@@ -14,6 +14,8 @@ try {
     case "doctor": await doctor(); break;
     case "run": await startRun(args.join(" "), []); break;
     case "resume": await resume(args[0]); break;
+    case "pause": await pause(args[0]); break;
+    case "steer": await steer(args[0], args.slice(1).join(" ")); break;
     case "chat": await chat(); break;
     case "tasks":
     case "cron": console.log(JSON.stringify(await daemonRequest({ method: "tasks.list" }), null, 2)); break;
@@ -136,9 +138,40 @@ async function resume(runId?: string): Promise<void> {
   await follow(result.runId);
 }
 
+/** Ask an active run to stop at its next turn boundary, keeping everything needed to resume it. */
+async function pause(runId?: string): Promise<void> {
+  if (!runId) throw new Error("pause requires a run id");
+  const result = await daemonRequest<{ pausing: boolean }>({ method: "run.pause", params: { runId } });
+  console.log(result.pausing ? `pause requested for ${runId}; it stops at the next turn boundary` : `run ${runId} is not active`);
+}
+
+/**
+ * Hand an active run a correction it will read at its next turn boundary. The run keeps its
+ * transcript and budget, so this steers the work in progress instead of starting a new task.
+ */
+async function steer(runId: string | undefined, text: string): Promise<void> {
+  if (!runId || !text.trim()) throw new Error("steer requires a run id and a message: steer <run-id> <message>");
+  const result = await daemonRequest<{ queued: number }>({ method: "run.steer", params: { runId, text } });
+  console.log(`queued steering message ${result.queued} for ${runId}; it is delivered at the next turn boundary`);
+}
+
 async function follow(runId: string, existingRl?: ReturnType<typeof createInterface>): Promise<void> {
   let sequence = -1;
   let done = false;
+  // While this loop is running the prompt is busy, so pause/steer are consumed here rather than at
+  // the outer prompt. Approval questions keep their own line listener and are unaffected.
+  const onLine = (line: string) => {
+    const value = line.trim();
+    void (async () => {
+      try {
+        if (value === "/pause") await pause(runId);
+        else if (value === "/resume") await resume(runId);
+        else if (value.startsWith("/steer ")) await steer(runId, value.slice(7));
+      } catch (error) { console.error(error instanceof Error ? error.message : String(error)); }
+    })();
+  };
+  existingRl?.on("line", onLine);
+  try {
   while (!done) {
     const events = await daemonRequest<AgentEvent[]>({ method: "run.events", params: { runId, afterSequence: sequence } });
     for (const event of events) {
@@ -165,6 +198,7 @@ async function follow(runId: string, existingRl?: ReturnType<typeof createInterf
     }
     if (!done) await new Promise((resolveWait) => setTimeout(resolveWait, 400));
   }
+  } finally { existingRl?.off("line", onLine); }
 }
 
 async function uploadAttachment(pathInput: string): Promise<AttachmentRef> {
@@ -187,9 +221,12 @@ function mimeFromPath(path: string): string {
 }
 
 function printHelp(): void {
-  console.log("harness-agent <chat|run|resume|tasks|cron|profiles|skills|memory|plugins|search|eval|trace|gateway|doctor>");
+  console.log("harness-agent <chat|run|resume|pause|steer|tasks|cron|profiles|skills|memory|plugins|search|eval|trace|gateway|doctor>");
+  console.log("  pause <run-id>              stop an active run at its next turn boundary, keeping it resumable");
+  console.log("  steer <run-id> <message>    send a correction that the active run reads at its next turn boundary");
 }
 
 function printSlashHelp(): void {
   console.log("/attach PATH  /profile ID  /model  /delegate PROMPT  /cancel RUN_ID  /compact  /exit");
+  console.log("While a run is active: /pause  /resume  /steer MESSAGE");
 }

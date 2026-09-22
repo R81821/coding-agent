@@ -260,7 +260,7 @@ export class HarnessDatabase {
 
   touchSession(
     id: string,
-    patch: Partial<Pick<SessionRecord, "title" | "profileId" | "updatedAt">>,
+    patch: Partial<Pick<SessionRecord, "title" | "profileId" | "updatedAt" | "skillSelection">>,
   ): SessionRecord {
     const current = this.get<SessionRecord>("sessions", id);
     if (!current) throw new Error(`Unknown Session: ${id}`);
@@ -831,10 +831,14 @@ export class HarnessDatabase {
   }
 
   saveSkill(skill: SkillManifest): void {
-    this.upsert("skills", skill.id, skill);
+    this.upsert("skills", skill.key ?? skill.id, skill);
   }
   listSkills(): SkillManifest[] {
-    return this.list<SkillManifest>("skills");
+    const skills = this.list<SkillManifest>("skills");
+    // Prefer the source-qualified record after an older id-only record is re-trusted.
+    const byPath = new Map<string, SkillManifest>();
+    for (const skill of skills.sort((a, b) => Number(Boolean(a.key)) - Number(Boolean(b.key)))) byPath.set(skill.sourcePath, skill);
+    return [...byPath.values()];
   }
   saveTask(task: TaskSpec): void {
     this.upsert("tasks", task.id, task);

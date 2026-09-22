@@ -91,13 +91,18 @@ async function dispatchLine(line: string): Promise<DaemonResponse> {
 async function dispatch(request: DaemonRequest, target: HarnessRuntime): Promise<unknown> {
   switch (request.method) {
     case "health":
-      return { status: "ok", version: "1.4.2", activeRuns: "available", providerIds: target.providerIds, connectors: [...connectors.keys()] };
+      return { status: "ok", version: "1.4.3", activeRuns: "available", providerIds: target.providerIds, connectors: [...connectors.keys()] };
     case "sessions.create":
       return target.database.createSession(request.params);
     case "sessions.list":
       return target.database.listSessions(request.params);
     case "session.get":
       return target.database.getSessionDetail(request.params.sessionId);
+    case "session.skills": {
+      const session = target.database.getSessionDetail(request.params.sessionId)?.session;
+      if (!session || session.deletedAt) throw new Error("会话不存在");
+      return target.database.touchSession(session.id, { skillSelection: [...new Set(request.params.skillSelection)], updatedAt: nowIso() });
+    }
     case "session.delete":
       return target.database.deleteSession(request.params.sessionId);
     case "session.restore":
@@ -131,6 +136,10 @@ async function dispatch(request: DaemonRequest, target: HarnessRuntime): Promise
     }
     case "run.cancel":
       return { cancelled: target.engine.cancel(request.params.runId) };
+    case "run.pause":
+      return { pausing: target.engine.pause(request.params.runId) };
+    case "run.steer":
+      return target.engine.steer(request.params.runId, request.params.text);
     case "run.events":
       return target.database.listEvents(request.params.runId, request.params.afterSequence);
     case "plan.get":
@@ -178,14 +187,22 @@ async function dispatch(request: DaemonRequest, target: HarnessRuntime): Promise
         const registered = target.database.listSkills().find((item) => item.sourcePath === skill.manifest.sourcePath);
         return registered?.trustedHash ? target.skills.load(skill.manifest.sourcePath, registered.trustedHash) : skill;
       }));
+    case "skills.location": return { globalPath: target.skills.userSkillRoot };
+    case "skills.recommend": return target.skillJobs.recommend(request.params.query, profileFor(target, request.params.profileId));
+    case "skills.preview": return target.skillJobs.preview(request.params.command);
+    case "skills.install": return target.skillJobs.install(request.params.previewId, request.params.skillPath, request.params.replace);
+    case "skills.job": return target.skillJobs.get(request.params.jobId);
+    case "skills.cancel": return target.skillJobs.cancel(request.params.jobId);
     case "skills.trust": {
       const inspected = await target.skills.load(request.params.sourcePath);
+      if (request.params.expectedHash && request.params.expectedHash !== inspected.hash) throw new Error("技能在查看后发生变化，请重新查看并确认");
       const trusted = await target.skills.load(request.params.sourcePath, inspected.hash);
+      if (!trusted.manifest.enabled) throw new Error("技能资源正在变化，请重新确认");
       target.database.saveSkill(trusted.manifest);
       return trusted;
     }
     case "skills.untrust": {
-      const skill = target.database.listSkills().find((item) => item.id === request.params.skillId);
+      const skill = target.database.listSkills().find((item) => (item.key ?? item.id) === request.params.skillId);
       if (!skill) throw new Error(`Unknown skill: ${request.params.skillId}`);
       const { trustedHash: _trustedHash, ...rest } = skill;
       target.database.saveSkill({ ...rest, enabled: false });

@@ -1,0 +1,42 @@
+{
+  "version": "1.4.3",
+  "builtAt": "2026-09-21T10:05:43.4791840Z",
+  "artifact": "Harness-Agent-1.4.3-x64.exe",
+  "bytes": 119539350,
+  "sha256": "52d6ddb63fd8920b0b28daeadd632f2d318f9d85caaa33461e442ef4f52eba6c",
+  "authenticode": "NotSigned",
+  "validation": {
+    "typecheck": "passed",
+    "testFiles": 75,
+    "testsPassed": 443,
+    "build": "passed",
+    "package": "passed",
+    "desktopFilesMatched": 8,
+    "daemonFilesMatched": 21,
+    "rendererVersion": "1.4.3",
+    "daemonVersion": "1.4.3",
+    "packagedDaemonSmoke": "passed",
+    "skillRpcSmoke": "passed"
+  },
+  "changes": [
+    "Independent skill recommendation with verified GitHub sources",
+    "Pinned global skill preview and installation with full-resource trust",
+    "Persistent conversation skill selection and frozen run references",
+    "Desktop browser, composer, title bar and menu improvements"
+  ],
+  "sameVersionUpdate": {
+    "maxOutputTokens": 393216,
+    "typecheck": "passed",
+    "regressionTestsPassed": 6,
+    "build": "passed",
+    "package": "passed",
+    "packageValidation": {
+      "desktopFilesMatched": 8,
+      "daemonFilesMatched": 21,
+      "rendererVersion": "1.4.3",
+      "daemonVersion": "1.4.3",
+      "packagedDaemonSmoke": "passed",
+      "skillRpcSmoke": "passed"
+    }
+  }
+}
