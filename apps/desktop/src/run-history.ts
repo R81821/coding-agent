@@ -19,6 +19,18 @@ export interface SessionTurn {
   events: AgentEvent[];
 }
 
+type RunRecord = SessionDetail["runs"][number];
+
+function compareRunSpec(left: RunRecord, right: RunRecord): number {
+  return left.spec.createdAt.localeCompare(right.spec.createdAt) || left.spec.id.localeCompare(right.spec.id);
+}
+
+export function latestSessionRun(runs: SessionDetail["runs"]): SessionDetail["runs"][number] | undefined {
+  let latest: RunRecord | undefined;
+  for (const run of runs) if (!latest || compareRunSpec(latest, run) <= 0) latest = run;
+  return latest;
+}
+
 export function workspaceKey(path: string): string {
   return path.replace(/\\/g, "/").replace(/\/+$/, "").toLocaleLowerCase();
 }
@@ -72,25 +84,31 @@ export function groupSessionsByProject(
   return [...all.filter((group) => group.key === currentKey), ...all.filter((group) => group.key !== currentKey)];
 }
 
-export function mergeRunHistory(current: RunHistoryPage, incoming: RunHistoryPage, append: boolean): RunHistoryPage {
+function mergePages<T extends { id: string }>(
+  current: { items: T[]; hasMore: boolean },
+  incoming: { items: T[]; hasMore: boolean },
+  append: boolean,
+  compare: (left: T, right: T) => number,
+): { items: T[]; hasMore: boolean } {
   const records = new Map(current.items.map((item) => [item.id, item]));
   for (const item of incoming.items) records.set(item.id, item);
-  const items = [...records.values()].sort((a, b) => b.createdAt.localeCompare(a.createdAt) || b.id.localeCompare(a.id));
+  const items = [...records.values()].sort(compare);
   return { items, hasMore: append || current.items.length <= incoming.items.length ? incoming.hasMore : current.hasMore };
 }
 
+export function mergeRunHistory(current: RunHistoryPage, incoming: RunHistoryPage, append: boolean): RunHistoryPage {
+  return mergePages(current, incoming, append, (left, right) => right.createdAt.localeCompare(left.createdAt) || right.id.localeCompare(left.id));
+}
+
 export function mergeSessionPages(current: SessionPage, incoming: SessionPage, append: boolean): SessionPage {
-  const records = new Map(current.items.map((item) => [item.id, item]));
-  for (const item of incoming.items) records.set(item.id, item);
-  const items = [...records.values()].sort((left, right) => right.updatedAt.localeCompare(left.updatedAt) || right.id.localeCompare(left.id));
-  return { items, hasMore: append || current.items.length <= incoming.items.length ? incoming.hasMore : current.hasMore };
+  return mergePages(current, incoming, append, (left, right) => right.updatedAt.localeCompare(left.updatedAt) || right.id.localeCompare(left.id));
 }
 
 export function sessionTurns(detail: SessionDetail | undefined): SessionTurn[] {
   if (!detail) return [];
   return detail.runs
     .slice()
-    .sort((left, right) => left.spec.createdAt.localeCompare(right.spec.createdAt) || left.spec.id.localeCompare(right.spec.id))
+    .sort(compareRunSpec)
     .map((run) => ({ runId: run.spec.id, request: run.spec.request, status: run.status, events: run.events }));
 }
 

@@ -41,7 +41,7 @@ export function parseDiff(diff: string): DiffFile[] {
  if (raw.length > 12000 && file) file.lines.push({kind:"meta",text:"预览已截断：仅展示前 12000 行，统计仅含已展示内容。"});
  return files;
 }
-export function changeSnapshots(events: AgentEvent[]): ChangeSnapshot[] {
+export function changeSnapshots(events: AgentEvent[], includeGitDiff = true): ChangeSnapshot[] {
  const calls = new Map<string, Extract<AgentEvent,{type:"tool_started"}>["call"]>();
  const snapshots: ChangeSnapshot[] = [];
  for (const event of events) {
@@ -54,7 +54,7 @@ export function changeSnapshots(events: AgentEvent[]): ChangeSnapshot[] {
   if (["patch","apply_patch"].includes(call.name) && output.applied === true && typeof call.input.patch === "string") {
    snapshots.push({id:event.id,label:`${time} · 已应用补丁`,files:parseDiff(call.input.patch)});
   }
-  if (call.name === "git_diff") {
+  if (call.name === "git_diff" && includeGitDiff) {
    for (const [key,label] of [["diff","未暂存"],["stagedDiff","已暂存"]] as const) {
     if (typeof output[key] === "string" && output[key]) snapshots.push({id:`${event.id}:${key}`,label:`${time} · Git 快照 · ${label}`,files:parseDiff(output[key])});
    }

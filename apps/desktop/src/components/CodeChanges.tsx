@@ -1,6 +1,6 @@
 import React, { useMemo, useState } from "react";
 import type { AgentEvent } from "@harness/protocol";
-import { changeSnapshots, type DiffLine } from "../code-changes.js";
+import { changeSnapshots, type ChangeSnapshot, type DiffLine } from "../code-changes.js";
 function splitRows(lines: DiffLine[]): [DiffLine | undefined, DiffLine | undefined][] {
  const rows: [DiffLine | undefined, DiffLine | undefined][] = [];
  for (let i=0;i<lines.length;) {
@@ -14,8 +14,8 @@ function splitRows(lines: DiffLine[]): [DiffLine | undefined, DiffLine | undefin
  }
  return rows;
 }
-export function CodeChanges({ events }: { events: AgentEvent[] }) {
- const snapshots = useMemo(()=>changeSnapshots(events),[events]);
+export function CodeChanges({ events, includeGitDiff = true, snapshots: provided }: { events: AgentEvent[]; includeGitDiff?: boolean; snapshots?: ChangeSnapshot[] }) {
+ const snapshots = useMemo(()=>provided ?? changeSnapshots(events,includeGitDiff),[provided,events,includeGitDiff]);
  const [snapshotId,setSnapshotId]=useState("");
  const [path,setPath]=useState("");
  const [mode,setMode]=useState("unified");

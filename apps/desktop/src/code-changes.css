@@ -1,14 +1,12 @@
 .approval-readable { min-width:0; margin-top:8px; display:grid; gap:10px; }
 .approval-readable small { color:var(--color-text-muted); }
 .approval-readable pre { max-height:40vh; overflow:auto; white-space:pre-wrap; overflow-wrap:anywhere; background:#0004; border-radius:12px; padding:12px; font:12px/1.6 Consolas,monospace; margin:4px 0 0; color:var(--color-text); }
-.code-changes { display:flex; flex-direction:column; gap:16px; min-width:0; }
-.conversation-inline-review { margin-top: 12px; border-left: 3px solid var(--color-accent); padding-left: 12px; }
+.code-changes { display:flex; flex-direction:column; gap:14px; min-width:0; padding:14px; border:1px solid var(--color-line); border-radius:14px; background:rgba(255,255,255,.025); box-shadow:inset 0 1px 0 rgba(255,255,255,.05); }
 .conversation-inline-review .code-changes { gap: 10px; }
 .conversation-inline-review .code-changes header { padding: 2px 0; }
 .conversation-inline-review .code-changes header h2 { font-size: 14px; }
 .conversation-inline-review .changes-layout { max-height: 56vh; }
-.conversation-process { border-left: 3px solid var(--color-line); }
-.code-changes h2 { font-size:18px; font-weight:600; }
+.code-changes h2 { font-size:17px; font-weight:700; letter-spacing:-.02em; }
 .code-changes header p { color:var(--color-text-muted); font-size:12px; margin-top:6px; }
 .changes-toolbar { display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between; gap:12px; font-size:12px; }
 .changes-toolbar select { max-width:100%; padding:8px; margin-left:8px; }

@@ -35,14 +35,16 @@ import { BuiPromptBar } from "./ui/prompt-bar.js";
 import { BuiSidebarNav } from "./ui/sidebar-nav.js";
 import { BuiToolChip } from "./ui/tool-chip.js";
 import { MemoryManager } from "./memory-manager.js";
-import { assistantMessages, dedupeFinalText } from "./assistant-messages.js";
+import { assistantMessages } from "./assistant-messages.js";
 import { MarkdownMessage } from "./markdown-message.js";
-import { RunTiming } from "./components/RunTiming.js";
+import { ConversationProcessSummary, conversationDurationMs } from "./components/ConversationProcess.js";
+import { shouldShowHistoryLoading } from "./conversation-layout.js";
+import { buildConversationStream, type ConversationStreamItem, type TimelineItem, type ToolTimelineItem } from "./conversation-stream.js";
 import { WorkflowProgress } from "./components/WorkflowProgress.js";
 import { PromptCacheStats } from "./components/PromptCacheStats.js";
 import { RunStopCard } from "./components/RunStopCard.js";
 import { RecycleBin } from "./recycle-bin.js";
-import { groupSessionsByProject, isLiveRun, mergeRunEvents, mergeSessionPages, runStatusLabel, sessionTurns, workspaceKey, type SessionTurn } from "./run-history.js";
+import { groupSessionsByProject, isLiveRun, latestSessionRun, mergeRunEvents, mergeSessionPages, runStatusLabel, sessionTurns, workspaceKey, type SessionTurn } from "./run-history.js";
 import {
   Activity,
   Bug,
@@ -519,7 +521,7 @@ function App() {
       if (viewToken !== viewVersion.current) return;
       if (!stored) throw new Error("该历史任务已不存在");
       if (stored.session.deletedAt) throw new Error("该会话已在回收站中");
-      const latest = stored.runs.at(-1);
+      const latest = latestSessionRun(stored.runs);
       setTab("chat");
       setWorkspace(stored.session.workspacePath);
       setProfileId(stored.session.profileId);
@@ -1119,6 +1121,7 @@ function ChatView(props: {
   const [skillPickerOpen, setSkillPickerOpen] = useState(false);
   const conversationRef = useRef<HTMLDivElement>(null);
   const followLatestRef = useRef(true);
+  const showHistoryLoading = shouldShowHistoryLoading(props.hasSession, props.busy, props.turns.length);
   const eventCount = props.turns.reduce((total, turn) => total + turn.events.length, 0);
   const currentFinalText = assistantMessages(props.events).text;
 
@@ -1149,7 +1152,12 @@ function ChatView(props: {
           followLatestRef.current = remaining <= 96;
         }}
       >
-        {props.turns.length === 0 && (
+        {showHistoryLoading && (
+          <section className="conversation-history-loading" aria-live="polite">
+            <BuiLoadingState label="正在加载历史记录…" />
+          </section>
+        )}
+        {props.turns.length === 0 && !showHistoryLoading && (
           <section className="workspace-welcome">
             <Terminal className="welcome-symbol" size={54} strokeWidth={1.25} aria-hidden="true" />
             <h2>{props.workspace ? <>我们应该在 <span title={props.workspace}>{basename(props.workspace)}</span> 中构建什么？</> : "今天，我们一起构建什么？"}</h2>
@@ -1306,8 +1314,21 @@ function SidebarResizeHandle({ value, onResize, onCommit }: {
 }
 
 function ConversationTurnView({ turn, busy }: { turn: SessionTurn; busy: boolean }) {
-  const { text: finalText } = assistantMessages(turn.events);
-  const reviewSnapshots = changeSnapshots(turn.events);
+  const { text: finalText } = useMemo(() => assistantMessages(turn.events), [turn.events]);
+  const reviewSnapshots = useMemo(() => changeSnapshots(turn.events, false), [turn.events]);
+  const stream = useMemo(() => buildConversationStream(turn.events), [turn.events]);
+  const durationMs = useMemo(() => conversationDurationMs(turn.events), [turn.events]);
+  const finalIndex = stream.findLastIndex((item) => item.kind === "text" && !item.process);
+  const processItems = finalIndex >= 0 ? stream.slice(0, finalIndex) : stream;
+  const finalItems = finalIndex >= 0 ? stream.slice(finalIndex) : [];
+  const completed = !busy && Boolean(finalText.trim()) && finalIndex >= 0;
+  const renderStreamItem = (item: ConversationStreamItem) => item.kind === "text"
+    ? <article className={`assistant-message${item.process ? " assistant-process" : ""}`} key={item.id}>
+        <MarkdownMessage text={item.text} compact={item.process} />
+      </article>
+    : item.kind === "tool_group"
+      ? <ToolEventGroup key={item.id} tools={item.tools} />
+      : <EventRow key={item.event.id} event={item.event} />;
   const result = turn.events.findLast((event) => event.type === "result");
   const visibleStop = result?.stop && !/^运行已暂停[。．]?/.test(result.stop.message) ? result.stop : undefined;
   const route = turn.events.find((event) => event.type === "route") as Extract<AgentEvent, { type: "route" }> | undefined;
@@ -1323,90 +1344,24 @@ function ConversationTurnView({ turn, busy }: { turn: SessionTurn; busy: boolean
       )}
       <PromptCacheStats usages={turn.events.flatMap(event => event.type === "usage" ? [event.usage] : [])} />
       <WorkflowProgress events={turn.events} />
-      <RunTiming events={turn.events} />
       {visibleStop && <RunStopCard stop={visibleStop} />}
       {busy && !finalText && <div className="mb-3"><BuiLoadingState label="Agent 正在思考与执行…" /></div>}
-      <div className="conversation-stream">
-        {buildConversationStream(turn.events).map((item) => item.kind === "text"
-          ? <article className={`assistant-message${item.process ? " assistant-process" : ""}`} key={item.id}>
-              <MarkdownMessage text={item.text} compact={item.process} />
-            </article>
-          : item.kind === "tool_group"
-            ? <ToolEventGroup key={item.id} tools={item.tools} />
-            : <EventRow key={item.event.id} event={item.event} />)}
-      </div>
+      {processItems.length > 0 && <ConversationProcessSummary completed={completed} durationMs={durationMs}>
+        <div className="conversation-stream">
+          {processItems.map(renderStreamItem)}
+        </div>
+      </ConversationProcessSummary>}
+      {finalItems.length > 0 && <div className="conversation-stream conversation-final-stream">
+        {finalItems.map(renderStreamItem)}
+      </div>}
       {defaultConversationLayout.inlineReview && reviewSnapshots.length > 0 && (
         <section className="conversation-inline-review" aria-label="代码审核">
-          <CodeChanges events={turn.events} />
+          <CodeChanges events={turn.events} includeGitDiff={false} snapshots={reviewSnapshots} />
         </section>
       )}
     </section>
   );
 }
-
-type ConversationStreamItem =
-  | { kind: "text"; id: string; text: string; process: boolean }
-  | Extract<TimelineItem, { kind: "tool_group" }>
-  | Extract<TimelineItem, { kind: "event" }>;
-
-function buildConversationStream(events: AgentEvent[]): ConversationStreamItem[] {
-  const stream: ConversationStreamItem[] = [];
-  const tools = new Map<string, ToolTimelineItem>();
-  let text = "";
-  let textIndex = 0;
-  let activeGroup: Extract<TimelineItem, { kind: "tool_group" }> | undefined;
-  const flushText = (process: boolean) => {
-    if (!text.trim()) return;
-    stream.push({ kind: "text", id: `text-${textIndex++}`, text, process });
-    text = "";
-  };
-  for (const event of events) {
-    if (event.type === "text_delta") {
-      text += event.delta;
-    } else if (event.type === "assistant_turn_started") {
-      flushText(true);
-      // A model turn boundary does not necessarily produce visible text. Keep consecutive
-      // tool calls in one activity group until a real message or status event separates them.
-    } else if (event.type === "tool_started") {
-      flushText(true);
-      const item: ToolTimelineItem = { kind: "tool", started: event };
-      tools.set(event.call.id, item);
-      if (!activeGroup) {
-        activeGroup = { kind: "tool_group", id: `tool-group-${event.id}`, tools: [] };
-        stream.push(activeGroup);
-      }
-      activeGroup.tools.push(item);
-    } else if (event.type === "tool_finished") {
-      tools.get(event.callId)!.finished = event;
-    } else if (event.type === "result") {
-      flushText(false);
-      const lastText = stream.at(-1);
-      const streamedText = lastText?.kind === "text" ? lastText.text : "";
-      const finalText = dedupeFinalText(streamedText, event.text);
-      if (finalText && !isHiddenSystemMessage(finalText)) stream.push({ kind: "text", id: `result-${event.id}`, text: finalText, process: false });
-      activeGroup = undefined;
-    } else if (event.type === "approval_required" || event.type === "error" || event.type === "provider_retry" || event.type === "self_correction_started" || event.type === "repair_started") {
-      flushText(true);
-      // Self-correction and repair markers describe the same active tool phase. They should
-      // remain visible in the stream without fragmenting consecutive tools into one-item groups.
-      if (event.type !== "self_correction_started" && event.type !== "repair_started") {
-        activeGroup = undefined;
-        stream.push({ kind: "event", event });
-      }
-    }
-  }
-  flushText(!finalTextEvent(events));
-  return stream;
-}
-
-function isHiddenSystemMessage(text: string): boolean {
-  return /^运行已暂停[。．]?\s*可以继续，或补充说明后再继续。?$/.test(text.trim());
-}
-
-function finalTextEvent(events: AgentEvent[]): boolean {
-  return events.some((event) => event.type === "result" && Boolean(event.text.trim()));
-}
-
 
 function EventRow({ event }: { event: AgentEvent }) {
   if (event.type === "provider_retry")
@@ -1460,14 +1415,6 @@ function EventRow({ event }: { event: AgentEvent }) {
 
 type ToolStartedEvent = Extract<AgentEvent, { type: "tool_started" }>;
 type ToolFinishedEvent = Extract<AgentEvent, { type: "tool_finished" }>;
-type ToolTimelineItem = {
-  kind: "tool";
-  started: ToolStartedEvent;
-  finished?: ToolFinishedEvent;
-};
-type TimelineItem =
-  | { kind: "tool_group"; id: string; tools: ToolTimelineItem[] }
-  | { kind: "event"; event: AgentEvent };
 
 function buildTimeline(events: AgentEvent[]): TimelineItem[] {
   const timeline: TimelineItem[] = [];
@@ -1555,7 +1502,7 @@ function ToolEventRow({
     finished.output !== null &&
     "error" in (finished.output as Record<string, unknown>));
   return (
-    <details className="tool-call-card rounded-xl border border-line bg-white/5 px-3 py-2">
+    <details className="tool-call-card">
       <summary className="flex cursor-pointer list-none items-center gap-2.5">
         <BuiToolChip
           name={started.call.name}

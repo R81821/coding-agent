@@ -46,6 +46,11 @@ it("keeps staged, unstaged and untracked snapshots separate and marks omitted co
  expect(snapshots[0]?.files[1]?.lines[0]?.kind).toBe('meta');
  expect(new Set(snapshots.map(snapshot=>snapshot.id)).size).toBe(3);
 });
+it("can exclude read-only git snapshots from an inline review",()=>{
+ const base={runId:'r',at:'2026-09-13T00:00:00Z',sequence:0};
+ const events: AgentEvent[]=[{...base,id:'s',type:'tool_started',call:{id:'git',name:'git_diff',input:{}}},{...base,id:'f',sequence:1,type:'tool_finished',callId:'git',durationMs:1,output:{diff:patch}}];
+ expect(changeSnapshots(events,false)).toHaveLength(0);
+});
 it("preserves a metadata-only rename and reports bounded previews",()=>{
  expect(parseDiff('diff --git a/old.ts b/new.ts\nsimilarity index 100%\nrename from old.ts\nrename to new.ts')[0]?.path).toBe('new.ts');
  const file=parseDiff('--- a/a\n+++ b/a\n@@ -0,0 +1,13000 @@\n'+'+x\n'.repeat(13000))[0]!;

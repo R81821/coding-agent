@@ -408,7 +408,7 @@ select {
   max-width: 870px;
   margin: 0 auto 18px;
   padding: 12px 16px;
-  border-left: 2px solid var(--accent);
+  border-left: 0;
   border-top: 1px solid rgba(122, 210, 255, 0.14);
   border-bottom: 1px solid rgba(122, 210, 255, 0.1);
   background: linear-gradient(90deg, rgba(45, 161, 229, 0.18), rgba(12, 48, 78, 0.45));
@@ -433,9 +433,9 @@ select {
   max-width: 870px;
   margin: 0 auto 18px;
   padding: 12px 16px;
-  border-left: 3px solid var(--accent);
-  border-radius: 0 12px 12px 0;
-  background: rgba(255, 255, 255, 0.035);
+  border: 0;
+  border-radius: 0;
+  background: transparent;
 }
 .assistant-message .avatar {
   width: 32px;
@@ -449,8 +449,8 @@ select {
   font-weight: 900;
 }
 .assistant-process {
-  border-left-color: var(--line-strong);
   background: transparent;
+  color: var(--color-text-muted);
 }
 .conversation-stream,
 .conversation-stream > *,
@@ -472,8 +472,67 @@ select {
 .conversation-stream > .tool-call-card {
   margin: 2px 0;
 }
+.conversation-process {
+  width: min(870px, 100%);
+  margin: 0 auto 18px;
+  color: var(--muted);
+}
+.conversation-process-summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 38px;
+  padding: 0 24px 10px;
+  box-sizing: border-box;
+  border-bottom: 1px solid var(--line);
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 14px;
+  font-weight: 600;
+  list-style: none;
+  user-select: none;
+}
+.conversation-process-summary::-webkit-details-marker {
+  display: none;
+}
+.conversation-process-summary::marker {
+  content: "";
+}
+.conversation-process-summary::before {
+  content: "›";
+  display: inline-block;
+  flex: 0 0 16px;
+  width: 16px;
+  color: var(--text-muted);
+  font-size: 22px;
+  line-height: 1;
+  text-align: center;
+  transform: translateY(-1px);
+  transition: transform 140ms ease;
+}
+.conversation-process[open] > .conversation-process-summary::before {
+  transform: rotate(90deg) translateX(-1px);
+}
+.conversation-process-body {
+  padding: 14px 24px 0;
+  box-sizing: border-box;
+}
+.conversation-final-stream {
+  width: min(870px, 100%);
+  margin: 0 auto 18px;
+  padding: 0 24px;
+  box-sizing: border-box;
+}
+.conversation-process .assistant-message,
+.conversation-final-stream .assistant-message {
+  padding-left: 0;
+  padding-right: 0;
+}
+.conversation-process .tool-group-body {
+  padding-left: 0;
+}
 .conversation-inline-review {
-  margin-top: 22px;
+  margin-top: 12px;
   padding-top: 18px;
   border-top: 1px solid var(--line-strong);
 }
@@ -539,8 +598,8 @@ select {
   min-width: 0;
   max-width: calc(100% - 28px);
   overflow: hidden;
-  border-left: 1px solid var(--line-strong);
-  padding: 8px 0 8px 14px;
+  border-left: 0;
+  padding: 8px 0;
 }
 .tool-call-body pre {
   display: block;
@@ -1682,6 +1741,10 @@ button.primary.small {
 
 .conversation {
   padding-bottom: 38px;
+}
+.conversation-history-loading {
+  width: min(560px, 100%);
+  margin: 16vh auto 0;
 }
 .route-banner {
   border-left: 0;
