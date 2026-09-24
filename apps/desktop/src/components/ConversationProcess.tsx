@@ -4,13 +4,35 @@ import type { AgentEvent } from "@harness/protocol";
 export function conversationDurationMs(events: AgentEvent[]): number {
   let first = Number.POSITIVE_INFINITY;
   let last = Number.NEGATIVE_INFINITY;
+  const timed: Array<{ event: AgentEvent; timestamp: number }> = [];
   for (const event of events) {
     const timestamp = Date.parse(event.at);
     if (!Number.isFinite(timestamp)) continue;
     if (timestamp < first) first = timestamp;
     if (timestamp > last) last = timestamp;
+    timed.push({ event, timestamp });
   }
-  return Number.isFinite(first) && Number.isFinite(last) ? Math.max(0, last - first) : 0;
+  if (!Number.isFinite(first) || !Number.isFinite(last)) return 0;
+  timed.sort((a, b) => a.timestamp - b.timestamp);
+  let pausedAt: number | undefined;
+  let pausedMs = 0;
+  for (const { event, timestamp } of timed) {
+    if (
+      (event.type === "status" || event.type === "result") &&
+      event.status === "paused"
+    ) {
+      pausedAt ??= timestamp;
+    } else if (
+      event.type === "status" &&
+      pausedAt !== undefined &&
+      ["planning", "running", "verifying", "review"].includes(event.status)
+    ) {
+      pausedMs += Math.max(0, timestamp - pausedAt);
+      pausedAt = undefined;
+    }
+  }
+  if (pausedAt !== undefined) pausedMs += Math.max(0, last - pausedAt);
+  return Math.max(0, last - first - pausedMs);
 }
 
 export function formatConversationDuration(durationMs: number): string {
@@ -21,13 +43,25 @@ export function formatConversationDuration(durationMs: number): string {
   return `用时 ${seconds}秒`;
 }
 
+export function terminalConversationStatus(
+  events: AgentEvent[],
+): "completed" | "failed" | "cancelled" | undefined {
+  const result = events.findLast((event) => event.type === "result");
+  return result?.type === "result" &&
+    ["completed", "failed", "cancelled"].includes(result.status)
+    ? (result.status as "completed" | "failed" | "cancelled")
+    : undefined;
+}
+
 export function ConversationProcessSummary({
   completed,
   durationMs,
+  activeLabel = "运行中",
   children,
 }: {
   completed: boolean;
   durationMs: number;
+  activeLabel?: string;
   children: React.ReactNode;
 }) {
   const [open, setOpen] = useState(!completed);
@@ -43,7 +77,9 @@ export function ConversationProcessSummary({
       onToggle={(event) => setOpen(event.currentTarget.open)}
     >
       <summary className="conversation-process-summary">
-        <span>{completed ? formatConversationDuration(durationMs) : "运行中"}</span>
+        <span>
+          {completed ? formatConversationDuration(durationMs) : activeLabel}
+        </span>
       </summary>
       <div className="conversation-process-body">{children}</div>
     </details>

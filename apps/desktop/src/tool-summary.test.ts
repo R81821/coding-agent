@@ -18,6 +18,11 @@ describe("toolSummary", () => {
     });
   });
 
+  it("extracts names from a Git unified patch used by the tool runtime", () => {
+    const patch = "diff --git a/src/old.ts b/src/old.ts\n--- a/src/old.ts\n+++ b/src/old.ts\n@@ -1 +1 @@\n-old\n+new\ndiff --git a/src/new.ts b/src/new.ts\nnew file mode 100644\n--- /dev/null\n+++ b/src/new.ts\n@@ -0,0 +1 @@\n+new\n";
+    expect(toolActivity("apply_patch", { patch })).toEqual({ verb: "编辑了文件", detail: "src/old.ts, src/new.ts" });
+  });
+
   it("summarizes commands and search inputs", () => {
     expect(toolSummary("terminal", { command: "pnpm test" })).toMatchObject({ label: "terminal", detail: "pnpm test", kind: "command" });
     expect(toolSummary("search_text", { query: "ConversationTurnView", path: "apps/desktop/src" })).toMatchObject({ label: "search_text", detail: "ConversationTurnView · apps/desktop/src", kind: "search" });
@@ -30,5 +35,24 @@ describe("toolSummary", () => {
   it("uses activity language for timeline summaries", () => {
     expect(toolActivity("terminal", { command: "pnpm test" })).toEqual({ verb: "已运行", detail: "pnpm test" });
     expect(toolActivity("apply_patch", { patch: "*** Update File: src/app.ts" })).toEqual({ verb: "编辑了文件", detail: "src/app.ts" });
+    expect(toolActivity("write_file", { path: "src/app.ts" })).toEqual({ verb: "编辑了文件", detail: "src/app.ts" });
+  });
+
+  it("an MCP tool shows its service and original name instead of the namespaced name", () => {
+    const origin = { serverId: "mcp_1", serverName: "项目工具", toolName: "read_project_status", revision: 3 };
+    const summary = toolSummary("mcp_a1b2c3d4e5_read_project_status_f6g7h8i9j0", { value: 1 }, origin);
+    // The row renders `detail`, not `label` — see renderer.tsx ToolEventRow.
+    expect(summary.detail).toBe("项目工具 · read_project_status");
+    expect(summary.kind).toBe("generic");
+  });
+
+  it("a local tool is unaffected by the origin parameter", () => {
+    expect(toolSummary("read_file", { path: "a.ts" }).detail).toBe("a.ts");
+    expect(toolSummary("read_file", { path: "a.ts" }, undefined).detail).toBe("a.ts");
+  });
+
+  it("origin takes precedence over local tool branches", () => {
+    const origin = { serverId: "mcp_1", serverName: "远端", toolName: "terminal", revision: 1 };
+    expect(toolSummary("terminal", { command: "x" }, origin).detail).toBe("远端 · terminal");
   });
 });

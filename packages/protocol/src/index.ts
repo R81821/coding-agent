@@ -1,7 +1,9 @@
 import { z } from "zod";
 import { SkillReferenceSchema } from "./skills.js";
 import { WorkflowStateSchema } from "./workflow.js";
+import { McpRequestSchemas, McpToolSnapshotSchema } from "./mcp.js";
 export * from "./workflow.js";
+export * from "./mcp.js";
 
 export const TrustLevelSchema = z.enum([
   "app_policy",
@@ -115,6 +117,14 @@ export const ToolCallSchema = z.object({
   input: z.record(z.string(), z.unknown())
 });
 export type ToolCall = z.infer<typeof ToolCallSchema>;
+
+export const ToolCallOriginSchema = z.object({
+  serverId: z.string(),
+  serverName: z.string(),
+  toolName: z.string(),
+  revision: z.number().int().positive(),
+});
+export type ToolCallOrigin = z.infer<typeof ToolCallOriginSchema>;
 
 export const UsageSchema = z.object({
   reasoningTokens: z.number().int().nonnegative().optional(),
@@ -367,6 +377,13 @@ export const RunStopInfoSchema = z.object({
 export type RunStopInfo = z.infer<typeof RunStopInfoSchema>;
 
 export const AgentEventSchema = z.discriminatedUnion("type", [
+  z.object({
+    ...eventBase,
+    type: z.literal("capabilities_resolved"),
+    mcp: z.array(McpToolSnapshotSchema),
+    diagnostics: z.array(z.object({ serverId: z.string(), name: z.string(), error: z.string() })),
+    skills: z.array(z.object({ key: z.string(), name: z.string() })),
+  }),
   z.object({ ...eventBase, type: z.literal("workflow_updated"), workflow: WorkflowStateSchema, detail: z.string() }),
   z.object({ ...eventBase, type: z.literal("status"), status: RunStatusSchema }),
   z.object({ ...eventBase, type: z.literal("route"), providerId: z.string(), modelId: z.string(), reason: z.string(), estimatedUsd: z.number().nonnegative() }),
@@ -374,7 +391,7 @@ export const AgentEventSchema = z.discriminatedUnion("type", [
   z.object({ ...eventBase, type: z.literal("text_delta"), delta: z.string() }),
   z.object({ ...eventBase, type: z.literal("reasoning_summary"), summary: z.string() }),
   z.object({ ...eventBase, type: z.literal("tool_call"), call: ToolCallSchema }),
-  z.object({ ...eventBase, type: z.literal("tool_started"), call: ToolCallSchema }),
+  z.object({ ...eventBase, type: z.literal("tool_started"), call: ToolCallSchema, origin: ToolCallOriginSchema.optional() }),
   z.object({ ...eventBase, type: z.literal("tool_finished"), callId: z.string(), output: z.unknown(), durationMs: z.number().nonnegative(), isError: z.boolean().optional() }),
   z.object({ ...eventBase, type: z.literal("approval_required"), approvalId: z.string(), summary: z.string(), risk: RiskLevelSchema }),
   z.object({ ...eventBase, type: z.literal("plan_created"), plan: PlanSpecSchema }),
@@ -442,6 +459,10 @@ export const RunBudgetSchema = z.object({
 export type RunBudget = z.infer<typeof RunBudgetSchema>;
 
 export const RunSpecSchema = z.object({
+  mcpUncertainCalls: z.array(z.object({ name: z.string(), fingerprint: z.string() })).optional(),
+  mcpSnapshot: z.array(McpToolSnapshotSchema).max(16384).optional(),
+  mcpReadOnly: z.boolean().optional(),
+  mcpInherited: z.array(McpToolSnapshotSchema).max(16384).optional(),
   skillSelection: z.array(z.string()).max(100).optional(),
   skills: z.array(SkillReferenceSchema).max(100).optional(),
   taskMode: z.enum(["auto", "analysis", "change"]).default("auto").optional(),
@@ -461,6 +482,9 @@ export type RunSpec = z.infer<typeof RunSpecSchema>;
 
 export type RunHistoryItem = Pick<RunSpec, "id" | "sessionId" | "request" | "workspacePath" | "profileId" | "createdAt"> & { status: RunStatus };
 export interface RunHistoryPage { items: RunHistoryItem[]; hasMore: boolean }
+
+export interface RunReviewFile { path: string; added: number; deleted: number; diff: string; canUndo: boolean; undone: boolean }
+export interface RunReview { runId: string; status: "capturing" | "ready" | "unavailable"; files: RunReviewFile[]; reason?: string; scope?: "tracked-and-nonignored-untracked" }
 
 export const SessionRecordSchema = z.object({
   skillSelection: z.array(z.string()).max(100).optional(),
@@ -602,6 +626,7 @@ export const TaskSpecSchema = z.object({
 export type TaskSpec = z.infer<typeof TaskSpecSchema>;
 
 export const DaemonRequestSchema = z.discriminatedUnion("method", [
+  ...McpRequestSchemas,
   z.object({ id: z.string(), method: z.literal("session.skills"), params: z.object({ sessionId: z.string().min(1), skillSelection: z.array(z.string().min(1)).max(100) }) }),
   z.object({ id: z.string(), method: z.literal("skills.recommend"), params: z.object({ profileId: z.string().min(1), query: z.string().trim().min(1).max(4000) }) }),
   z.object({ id: z.string(), method: z.literal("skills.preview"), params: z.object({ command: z.string().trim().min(1).max(4000) }) }),
@@ -622,6 +647,8 @@ export const DaemonRequestSchema = z.discriminatedUnion("method", [
   z.object({ id: z.string(), method: z.literal("run.start"), params: RunSpecSchema }),
   z.object({ id: z.string(), method: z.literal("runs.list"), params: z.object({ limit: z.number().int().positive().max(200).default(50), offset: z.number().int().nonnegative().default(0) }).optional() }),
   z.object({ id: z.string(), method: z.literal("run.get"), params: z.object({ runId: z.string().min(1) }) }),
+  z.object({ id: z.string(), method: z.literal("run.review"), params: z.object({ runId: z.string().min(1) }) }),
+  z.object({ id: z.string(), method: z.literal("review.undo"), params: z.object({ runId: z.string().min(1), path: z.string().min(1) }) }),
   z.object({ id: z.string(), method: z.literal("run.resume"), params: z.object({ runId: z.string() }) }),
   z.object({ id: z.string(), method: z.literal("run.cancel"), params: z.object({ runId: z.string() }) }),
   z.object({ id: z.string(), method: z.literal("run.pause"), params: z.object({ runId: z.string() }) }),

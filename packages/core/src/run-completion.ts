@@ -1,17 +1,19 @@
 import type { AgentEvent } from "@harness/protocol";
 import type { EventEmitter } from "node:events";
 
-type RunEventSource = Pick<EventEmitter, "on" | "off"> & { cancel(runId: string): boolean };
+type RunEventSource = Pick<EventEmitter, "on" | "off"> & { cancel(runId: string): boolean; waitForSettlement?(runId: string): Promise<void> };
 
-/** Keep ownership of the child workspace until the child reports a terminal result. */
+/** Keep the child workspace until the result and all run cleanup have completed. */
 export function waitForRunResult(engine: RunEventSource, runId: string, signal: AbortSignal, start: () => void): Promise<Extract<AgentEvent, { type: "result" }>> {
   return new Promise((resolveResult, rejectResult) => {
     if (signal.aborted) { rejectResult(signal.reason); return; }
     const onEvent = (event: AgentEvent) => {
       if (event.runId !== runId || event.type !== "result") return;
       cleanup();
-      if (signal.aborted) rejectResult(signal.reason);
-      else resolveResult(event);
+      Promise.resolve(engine.waitForSettlement?.(runId)).then(() => {
+        if (signal.aborted) rejectResult(signal.reason);
+        else resolveResult(event);
+      }, rejectResult);
     };
     const onAbort = () => { engine.cancel(runId); };
     const cleanup = () => { engine.off("event", onEvent); signal.removeEventListener("abort", onAbort); };

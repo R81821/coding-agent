@@ -12,6 +12,7 @@ import type {
   MemoryScopeSelection,
   PlanSpec,
   PluginRecord,
+  McpServerConfig,
   Profile,
   RunCheckpoint,
   RunHistoryPage,
@@ -57,6 +58,8 @@ type GenericTable =
   | "compactions"
   | "verification_runs"
   | "plugins"
+  | "mcp_servers"
+  | "mcp_auth"
   | "eval_results"
   | "traces"
   | "sessions"
@@ -696,6 +699,13 @@ export class HarnessDatabase {
   listPlugins(): PluginRecord[] {
     return this.list<PluginRecord>("plugins");
   }
+  saveMcpServer(config: McpServerConfig): void { this.upsert("mcp_servers", config.id, config); }
+  getMcpServer(id: string): McpServerConfig | undefined { return this.get<McpServerConfig>("mcp_servers", id); }
+  listMcpServers(): McpServerConfig[] { return this.list<McpServerConfig>("mcp_servers"); }
+  deleteMcpServer(id: string): void { this.db.prepare("DELETE FROM mcp_servers WHERE id=?").run(id); }
+  saveMcpAuth(id: string, value: unknown): void { this.upsert("mcp_auth", id, value); }
+  getMcpAuth<T>(id: string): T | undefined { return this.get<T>("mcp_auth", id); }
+  deleteMcpAuth(id: string): void { this.db.prepare("DELETE FROM mcp_auth WHERE id=?").run(id); }
   saveEvalResult(result: EvalResult): void {
     this.upsert("eval_results", result.id, result);
   }
@@ -1032,6 +1042,8 @@ export class HarnessDatabase {
       CREATE TABLE IF NOT EXISTS compactions (id TEXT PRIMARY KEY, payload TEXT NOT NULL, updated_at TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS verification_runs (id TEXT PRIMARY KEY, payload TEXT NOT NULL, updated_at TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS plugins (id TEXT PRIMARY KEY, payload TEXT NOT NULL, updated_at TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS mcp_servers (id TEXT PRIMARY KEY, payload TEXT NOT NULL, updated_at TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS mcp_auth (id TEXT PRIMARY KEY, payload TEXT NOT NULL, updated_at TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS eval_results (id TEXT PRIMARY KEY, payload TEXT NOT NULL, updated_at TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS traces (id TEXT PRIMARY KEY, payload TEXT NOT NULL, updated_at TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS sessions (id TEXT PRIMARY KEY, payload TEXT NOT NULL, updated_at TEXT NOT NULL);

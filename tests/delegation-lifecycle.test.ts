@@ -70,3 +70,19 @@ it("waits for sibling cleanup even when another delegated operation fails", asyn
   await observed;
   expect(beforeCleanup).toBe(false);
 });
+
+it("retains the child workspace after its result until run cleanup has settled", async () => {
+  let release!: () => void;
+  const cleanup = new Promise<void>(resolve => { release = resolve; });
+  const engine = Object.assign(new EngineFixture(), { waitForSettlement: (_id: string) => cleanup });
+  let workspaceReleased = false;
+  const completion = waitForRunResult(engine, "child", new AbortController().signal, () => {});
+  const observed = completion.then(() => { workspaceReleased = true; });
+  engine.emit("event", { ...result, status: "completed" });
+  await new Promise<void>(resolve => setImmediate(resolve));
+  const releasedBeforeCleanup = workspaceReleased;
+  release();
+  await observed;
+  expect(releasedBeforeCleanup).toBe(false);
+  expect(workspaceReleased).toBe(true);
+});

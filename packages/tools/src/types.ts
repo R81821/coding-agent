@@ -9,6 +9,8 @@ export interface ToolContext {
 }
 
 export interface ToolResult {
+  /** Set only by the runtime's trusted-skill loader, never by external tool payloads. */
+  trustedInstruction?: boolean;
   output: unknown;
   isError?: boolean;
   truncated?: boolean;
@@ -16,6 +18,9 @@ export interface ToolResult {
 }
 
 export interface ToolDefinition {
+  /** External reads can transmit project data and must not use local-read defaults. */
+  requiresApproval?: boolean;
+  external?: { serverId: string; serverName: string; toolName: string; revision: number; contractHash: string };
   contract: ToolContract;
   execute(input: Record<string, unknown>, context: ToolContext): Promise<ToolResult>;
   /** Uses its own full input validation so errors can include state-specific recovery data. */

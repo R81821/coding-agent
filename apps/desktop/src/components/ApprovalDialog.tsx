@@ -1,6 +1,5 @@
 import React from "react";
 import { DecisionDialog } from "./DecisionDialog.js";
-import { ApprovalContent } from "./ApprovalContent.js";
 
 /**
  * The approval card. It follows the same shape as every other decision in the app — a title, what

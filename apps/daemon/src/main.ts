@@ -3,6 +3,7 @@ import { existsSync, unlinkSync } from "node:fs";
 import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
+import { dispatchMcp, isMcpRequest } from "./mcp-rpc.js";
 import { createRuntime, profileFor, validateSessionRunStart, type HarnessRuntime } from "@harness/core";
 import { FeishuConnector, PairingService, TelegramConnector, type MessageConnector, type RemoteMessage } from "@harness/extensions";
 import {
@@ -89,6 +90,7 @@ async function dispatchLine(line: string): Promise<DaemonResponse> {
 }
 
 async function dispatch(request: DaemonRequest, target: HarnessRuntime): Promise<unknown> {
+  if (isMcpRequest(request)) return dispatchMcp(request, target);
   switch (request.method) {
     case "health":
       return { status: "ok", version: "1.4.3", activeRuns: "available", providerIds: target.providerIds, connectors: [...connectors.keys()] };
@@ -103,12 +105,21 @@ async function dispatch(request: DaemonRequest, target: HarnessRuntime): Promise
       if (!session || session.deletedAt) throw new Error("会话不存在");
       return target.database.touchSession(session.id, { skillSelection: [...new Set(request.params.skillSelection)], updatedAt: nowIso() });
     }
-    case "session.delete":
-      return target.database.deleteSession(request.params.sessionId);
-    case "session.restore":
-      return target.database.restoreSession(request.params.sessionId);
-    case "session.purge":
-      return target.database.purgeSession(request.params.sessionId);
+    case "session.delete": {
+      const session = target.database.deleteSession(request.params.sessionId);
+      await target.review.deleteSession(request.params.sessionId);
+      return session;
+    }
+    case "session.restore": {
+      const session = target.database.restoreSession(request.params.sessionId);
+      target.review.restoreSession(request.params.sessionId);
+      return session;
+    }
+    case "session.purge": {
+      const result = target.database.purgeSession(request.params.sessionId);
+      await target.review.deleteSession(request.params.sessionId);
+      return result;
+    }
     case "projects.list":
       return target.database.listProjects(request.params.deleted);
     case "project.delete":
@@ -128,6 +139,10 @@ async function dispatch(request: DaemonRequest, target: HarnessRuntime): Promise
       return target.database.listRunHistory(request.params?.limit, request.params?.offset);
     case "run.get":
       return target.database.getRun(request.params.runId);
+    case "run.review":
+      return target.review.get(request.params.runId);
+    case "review.undo":
+      return target.review.undo(request.params.runId, request.params.path);
     case "run.resume": {
       const previous = target.database.getRun(request.params.runId);
       if (!previous) throw new Error(`Unknown run: ${request.params.runId}`);

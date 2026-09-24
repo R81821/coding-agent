@@ -3,5 +3,16 @@
   "version": "1.4.3",
   "type": "module",
   "exports": "./src/index.ts",
-  "dependencies": { "@harness/protocol": "workspace:*", "@harness/persistence": "workspace:*", "@harness/tools": "workspace:*", "@larksuiteoapi/node-sdk": "^1.55.0", "cron-parser": "^5.3.1", "yaml": "^2.8.1", "zod": "^4.1.5" }
+  "dependencies": {
+    "@harness/persistence": "workspace:*",
+    "@harness/protocol": "workspace:*",
+    "@harness/tools": "workspace:*",
+    "@larksuiteoapi/node-sdk": "^1.55.0",
+    "@modelcontextprotocol/sdk": "1.30.0",
+    "ajv": "8.20.0",
+    "ajv-formats": "3.0.1",
+    "cron-parser": "^5.3.1",
+    "yaml": "^2.8.1",
+    "zod": "^4.1.5"
+  }
 }

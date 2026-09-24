@@ -21,7 +21,6 @@ import type {
   SessionPage,
   SessionRecord,
   SessionSummary,
-  SkillManifest,
   TaskSpec,
 } from "@harness/protocol";
 import { newId, nowIso } from "@harness/protocol";
@@ -33,20 +32,21 @@ import { BuiGlassPanel } from "./ui/card.js";
 import { BuiLoadingState } from "./ui/loading-state.js";
 import { BuiPromptBar } from "./ui/prompt-bar.js";
 import { BuiSidebarNav } from "./ui/sidebar-nav.js";
-import { BuiToolChip } from "./ui/tool-chip.js";
 import { MemoryManager } from "./memory-manager.js";
 import { assistantMessages } from "./assistant-messages.js";
 import { MarkdownMessage } from "./markdown-message.js";
-import { ConversationProcessSummary, conversationDurationMs } from "./components/ConversationProcess.js";
-import { shouldShowHistoryLoading } from "./conversation-layout.js";
-import { buildConversationStream, type ConversationStreamItem, type TimelineItem, type ToolTimelineItem } from "./conversation-stream.js";
+import { ConversationProcessSummary, conversationDurationMs, terminalConversationStatus } from "./components/ConversationProcess.js";
+import { isAwayFromLatest, shouldExpandToolGroup, shouldPreviewProcessText, shouldShowHistoryLoading, summarizeActivityMessage } from "./conversation-layout.js";
+import { buildConversationStream, type ConversationStreamItem, type ToolTimelineItem } from "./conversation-stream.js";
 import { WorkflowProgress } from "./components/WorkflowProgress.js";
 import { PromptCacheStats } from "./components/PromptCacheStats.js";
 import { RunStopCard } from "./components/RunStopCard.js";
+import { McpView } from "./components/McpView.js";
 import { RecycleBin } from "./recycle-bin.js";
 import { groupSessionsByProject, isLiveRun, latestSessionRun, mergeRunEvents, mergeSessionPages, runStatusLabel, sessionTurns, workspaceKey, type SessionTurn } from "./run-history.js";
 import {
   Activity,
+  ArrowDown,
   Bug,
   Brain,
   BookOpen,
@@ -85,7 +85,9 @@ import "./workbench.css";
 import "./themes.css";
 import "./code-changes.css";
 import { CodeChanges } from "./components/CodeChanges.js";
-import { changeSnapshots } from "./code-changes.js";
+import { InlineReview, type RunReview } from "./components/InlineReview.js";
+import { ToolContext } from "./components/ToolContext.js";
+import { CapabilitiesRow } from "./components/CapabilitiesRow.js";
 import { defaultConversationLayout } from "./conversation-layout.js";
 import { toolActivity, toolSummary } from "./tool-summary.js";
 import { useConfirmation } from "./components/DecisionDialog.js";
@@ -945,6 +947,7 @@ function App() {
         <section className={`content${tab === "chat" ? " chat-content" : ""}`}>
           {tab === "chat" && (
             <ChatView
+              key={activeSessionId ?? "no-session"}
               workspace={workspace}
               skills={skills}
               selectedSkills={selectedSkills}
@@ -989,7 +992,7 @@ function App() {
             <MemoryManager memories={memories} decide={decideMemory} refresh={refresh} workspace={workspace} {...(profile ? { profile } : {})} />
           )}
           <div hidden={tab !== "skills"}><SkillsView skills={skills} profileId={profileId} refresh={refresh} decide={decideSkill} /></div>
-          {tab === "plugins" && <PluginsView plugins={plugins} action={pluginAction} />}
+          {tab === "plugins" && <PluginsView plugins={plugins} action={pluginAction} workspacePath={workspace} />}
           {tab === "profiles" && (
             <ProfilesView profiles={profiles} activeId={profileId} refresh={refresh} />
           )}
@@ -1119,11 +1122,20 @@ function ChatView(props: {
   onChooseWorkspace: () => void;
 }) {
   const [skillPickerOpen, setSkillPickerOpen] = useState(false);
+  const [showJumpToLatest, setShowJumpToLatest] = useState(false);
   const conversationRef = useRef<HTMLDivElement>(null);
   const followLatestRef = useRef(true);
   const showHistoryLoading = shouldShowHistoryLoading(props.hasSession, props.busy, props.turns.length);
   const eventCount = props.turns.reduce((total, turn) => total + turn.events.length, 0);
   const currentFinalText = assistantMessages(props.events).text;
+
+  const jumpToLatest = () => {
+    const conversation = conversationRef.current;
+    if (!conversation) return;
+    followLatestRef.current = true;
+    conversation.scrollTop = conversation.scrollHeight;
+    setShowJumpToLatest(false);
+  };
 
   useEffect(() => {
     const conversation = conversationRef.current;
@@ -1142,14 +1154,15 @@ function ChatView(props: {
 
   return (
     <div className="chat-layout">
+      <div className="conversation-stage">
       <div
         className={`conversation${props.turns.length === 0 ? " conversation-empty" : ""}`}
         ref={conversationRef}
         onScroll={(event) => {
           const element = event.currentTarget;
-          const remaining =
-            element.scrollHeight - element.scrollTop - element.clientHeight;
-          followLatestRef.current = remaining <= 96;
+          const away = isAwayFromLatest(element.scrollTop, element.scrollHeight, element.clientHeight);
+          followLatestRef.current = !away;
+          setShowJumpToLatest(away);
         }}
       >
         {showHistoryLoading && (
@@ -1177,6 +1190,8 @@ function ChatView(props: {
         {props.turns.map((turn, index) => (
           <ConversationTurnView key={turn.runId} turn={turn} busy={props.busy && index === props.turns.length - 1} />
         ))}
+      </div>
+      {showJumpToLatest && <button type="button" className="conversation-jump-latest" onClick={jumpToLatest} aria-label="回到最新消息"><ArrowDown size={16} aria-hidden="true" />回到最新消息</button>}
       </div>
       <div className="composer-wrap">
         <div className="composer-project-bar">
@@ -1315,17 +1330,43 @@ function SidebarResizeHandle({ value, onResize, onCommit }: {
 
 function ConversationTurnView({ turn, busy }: { turn: SessionTurn; busy: boolean }) {
   const { text: finalText } = useMemo(() => assistantMessages(turn.events), [turn.events]);
-  const reviewSnapshots = useMemo(() => changeSnapshots(turn.events, false), [turn.events]);
+  const terminalStatus = terminalConversationStatus(turn.events);
+  const [runReview, setRunReview] = useState<RunReview>();
+  useEffect(() => {
+    if (busy || !terminalStatus) return;
+    let cancelled = false;
+    let retry: ReturnType<typeof setTimeout> | undefined;
+    let delayMs = 800;
+    const load = async () => {
+      try {
+        const record = await window.harness.request<RunReview | undefined>({ method: "run.review", params: { runId: turn.runId } });
+        if (cancelled) return;
+        setRunReview(record);
+        if (record?.status === "capturing") {
+          retry = setTimeout(() => void load(), delayMs);
+          delayMs = Math.min(Math.round(delayMs * 1.5), 5_000);
+        }
+      } catch {
+        // Older history and non-Git workspaces can still show applied patch evidence.
+      }
+    };
+    void load();
+    return () => { cancelled = true; if (retry) clearTimeout(retry); };
+  }, [busy, terminalStatus, turn.runId]);
+  async function undoReviewFile(path: string) {
+    const updated = await window.harness.request<RunReview>({ method: "review.undo", params: { runId: turn.runId, path } });
+    setRunReview(updated);
+  }
   const stream = useMemo(() => buildConversationStream(turn.events), [turn.events]);
   const durationMs = useMemo(() => conversationDurationMs(turn.events), [turn.events]);
   const finalIndex = stream.findLastIndex((item) => item.kind === "text" && !item.process);
   const processItems = finalIndex >= 0 ? stream.slice(0, finalIndex) : stream;
   const finalItems = finalIndex >= 0 ? stream.slice(finalIndex) : [];
-  const completed = !busy && Boolean(finalText.trim()) && finalIndex >= 0;
+  const completed = !busy && terminalStatus !== undefined;
   const renderStreamItem = (item: ConversationStreamItem) => item.kind === "text"
-    ? <article className={`assistant-message${item.process ? " assistant-process" : ""}`} key={item.id}>
-        <MarkdownMessage text={item.text} compact={item.process} />
-      </article>
+    ? item.process
+      ? <ProcessNarration key={item.id} text={item.text} live={busy && stream.at(-1) === item} />
+      : <article className="assistant-message" key={item.id}><MarkdownMessage text={item.text} /></article>
     : item.kind === "tool_group"
       ? <ToolEventGroup key={item.id} tools={item.tools} />
       : <EventRow key={item.event.id} event={item.event} />;
@@ -1335,35 +1376,42 @@ function ConversationTurnView({ turn, busy }: { turn: SessionTurn; busy: boolean
   return (
     <section className="conversation-turn" data-run-id={turn.runId}>
       <article className="user-message" aria-label="你的任务">{turn.request}</article>
-      {route && (
-        <BuiGlassPanel className="mb-3 flex items-center gap-3 px-4 py-3">
-          <span className="text-[10px] font-semibold tracking-widest text-accent-text">AUTO ROUTE</span>
-          <strong className="text-sm text-text">{route.providerId} / {route.modelId}</strong>
-          <small className="ml-auto text-xs text-text-muted">{route.reason}</small>
-        </BuiGlassPanel>
-      )}
-      <PromptCacheStats usages={turn.events.flatMap(event => event.type === "usage" ? [event.usage] : [])} />
-      <WorkflowProgress events={turn.events} />
-      {visibleStop && <RunStopCard stop={visibleStop} />}
-      {busy && !finalText && <div className="mb-3"><BuiLoadingState label="Agent 正在思考与执行…" /></div>}
-      {processItems.length > 0 && <ConversationProcessSummary completed={completed} durationMs={durationMs}>
+      {(processItems.length > 0 || route || visibleStop) && <ConversationProcessSummary completed={completed} durationMs={durationMs} activeLabel={result?.status === "paused" ? "已暂停" : "运行中"}>
         <div className="conversation-stream">
+          {route && <div className="activity-row conversation-route"><Terminal size={14} aria-hidden="true" /><span>{route.providerId} / {route.modelId}</span><small>{route.reason}</small></div>}
           {processItems.map(renderStreamItem)}
+          {visibleStop && <RunStopCard stop={visibleStop} />}
+          <WorkflowProgress events={turn.events} />
+          <PromptCacheStats usages={turn.events.flatMap(event => event.type === "usage" ? [event.usage] : [])} />
+          {busy && !finalText && <BuiLoadingState label="Agent 正在思考与执行…" />}
         </div>
       </ConversationProcessSummary>}
       {finalItems.length > 0 && <div className="conversation-stream conversation-final-stream">
         {finalItems.map(renderStreamItem)}
       </div>}
-      {defaultConversationLayout.inlineReview && reviewSnapshots.length > 0 && (
-        <section className="conversation-inline-review" aria-label="代码审核">
-          <CodeChanges events={turn.events} includeGitDiff={false} snapshots={reviewSnapshots} />
-        </section>
-      )}
+      {completed && finalItems.length === 0 && <div className="conversation-stream conversation-final-stream">
+        <article className="assistant-message"><MarkdownMessage text={terminalStatus === "failed" ? "运行失败，未生成最终回答。" : terminalStatus === "cancelled" ? "运行已取消。" : "运行已完成，未生成最终回答。"} /></article>
+      </div>}
+      {defaultConversationLayout.inlineReview && <InlineReview runId={turn.runId} review={runReview} onUndo={undoReviewFile} />}
     </section>
   );
 }
 
+function ProcessNarration({ text, live }: { text: string; live: boolean }) {
+  const preview = shouldPreviewProcessText(text, live);
+  const [expanded, setExpanded] = useState(false);
+  return <article className="assistant-message assistant-process">
+    <div className={`process-narration-body${preview && !expanded ? " is-preview" : ""}`}>
+      <MarkdownMessage text={text} compact />
+    </div>
+    {preview && <button type="button" className="process-narration-toggle" aria-expanded={expanded} onClick={() => setExpanded(value => !value)}>
+      {expanded ? "收起过程文字" : "展开完整过程文字"}
+    </button>}
+  </article>;
+}
+
 function EventRow({ event }: { event: AgentEvent }) {
+  if (event.type === "capabilities_resolved") return <CapabilitiesRow event={event} />;
   if (event.type === "provider_retry")
     return (
       <div className="activity-row activity-row-warning">
@@ -1399,61 +1447,40 @@ function EventRow({ event }: { event: AgentEvent }) {
     return (
       <div className="activity-row activity-row-warning">
         <TriangleAlert size={15} aria-hidden="true" />
-        <strong>{event.summary}</strong>
+        <ActivityMessage message={event.summary} />
       </div>
     );
-  if (event.type === "error")
+  if (event.type === "error") {
     return (
       <div className="activity-row activity-row-error">
         <TriangleAlert size={15} aria-hidden="true" />
-        <strong>{event.message}</strong>
+        <ActivityMessage message={event.message} />
         <small>{event.code}</small>
       </div>
     );
+  }
   return null;
+}
+
+function ActivityMessage({ message }: { message: string }) {
+  const summary = summarizeActivityMessage(message);
+  return summary === message
+    ? <strong className="activity-message-text">{message}</strong>
+    : <details className="activity-detail">
+        <summary><strong className="activity-message-text">{summary}</strong></summary>
+        <pre>{message}</pre>
+      </details>;
 }
 
 type ToolStartedEvent = Extract<AgentEvent, { type: "tool_started" }>;
 type ToolFinishedEvent = Extract<AgentEvent, { type: "tool_finished" }>;
 
-function buildTimeline(events: AgentEvent[]): TimelineItem[] {
-  const timeline: TimelineItem[] = [];
-  const tools = new Map<string, ToolTimelineItem>();
-  let activeGroup: Extract<TimelineItem, { kind: "tool_group" }> | undefined;
-  for (const event of events) {
-    if (event.type === "tool_started") {
-      const item: ToolTimelineItem = {
-        kind: "tool",
-        started: event,
-      };
-      tools.set(event.call.id, item);
-      if (!activeGroup) {
-        activeGroup = {
-          kind: "tool_group",
-          id: `tool-group-${event.id}`,
-          tools: [],
-        };
-        timeline.push(activeGroup);
-      }
-      activeGroup.tools.push(item);
-    } else if (event.type === "tool_finished") {
-      const item = tools.get(event.callId);
-      if (item) item.finished = event;
-    } else if (
-      event.type === "approval_required" ||
-      event.type === "error" ||
-      event.type === "provider_retry" ||
-      event.type === "self_correction_started" ||
-      event.type === "repair_started"
-    ) {
-      timeline.push({ kind: "event", event });
-    }
-  }
-  return timeline;
-}
-
 function ToolEventGroup({ tools }: { tools: ToolTimelineItem[] }) {
   const completed = tools.filter((tool) => tool.finished).length;
+  const [groupOpen, setGroupOpen] = useState(() => shouldExpandToolGroup(completed, tools.length));
+  useEffect(() => {
+    setGroupOpen(shouldExpandToolGroup(completed, tools.length));
+  }, [completed, tools.length]);
   const totalDuration = tools.reduce(
     (total, tool) => total + (tool.finished?.durationMs ?? 0),
     0,
@@ -1461,10 +1488,10 @@ function ToolEventGroup({ tools }: { tools: ToolTimelineItem[] }) {
   const allCompleted = completed === tools.length;
   const failures = tools.filter((tool) => tool.finished?.isError === true || (tool.finished?.output && typeof tool.finished.output === "object" && "error" in tool.finished.output)).length;
   return (
-    <details className="tool-group-card">
+    <details className="tool-group-card" open={groupOpen} onToggle={event => setGroupOpen(event.currentTarget.open)}>
       <summary className="activity-row tool-group-summary">
         <Terminal size={15} aria-hidden="true" />
-        <strong>已运行（{tools.length} 个工具）</strong>
+        <strong>{allCompleted ? "已运行" : "运行中"}（{tools.length} 个工具）</strong>
         <small>
           {allCompleted
             ? `${formatDuration(totalDuration)}${failures ? ` · ${failures} 项失败` : ""}`
@@ -1491,9 +1518,9 @@ function ToolEventRow({
   started: ToolStartedEvent;
   finished?: ToolFinishedEvent;
 }) {
-  const summary = toolSummary(started.call.name, started.call.input);
+  const summary = toolSummary(started.call.name, started.call.input, started.origin);
   const activity = toolActivity(started.call.name, started.call.input);
-  const displayDetail = summary.label === "git_diff" && finished
+  const displayDetail = started.call.name === "git_diff" && finished
     ? `${summary.detail} · ${countDiffFiles(finished.output)} 个文件`
     : summary.detail;
   const failed = finished?.isError === true || (
@@ -1503,43 +1530,29 @@ function ToolEventRow({
     "error" in (finished.output as Record<string, unknown>));
   return (
     <details className="tool-call-card">
-      <summary className="flex cursor-pointer list-none items-center gap-2.5">
-        <BuiToolChip
-          name={started.call.name}
-          status={failed ? "failed" : finished ? "finished" : "running"}
-        />
+      <summary className="tool-call-summary" title={`${started.call.name}: ${displayDetail || activity.detail}`}>
+        {activity.verb === "编辑了文件" ? <Pencil size={14} aria-hidden="true" /> : <Terminal size={14} aria-hidden="true" />}
         <span className="tool-call-detail min-w-0 flex-1 truncate">
-          <strong>{activity.verb}</strong>{displayDetail === "" ? null : <><span> </span><strong>{displayDetail}</strong></>}
+          <span>{activity.verb}</span>{displayDetail === "" ? null : <><span> </span><strong>{displayDetail}</strong></>}
         </span>
-        <small className="ml-auto font-mono text-[11px] text-text-muted">
-          {finished ? `${finished.durationMs} ms` : "运行中"} · 展开上下文
+        <small className={failed ? "tool-call-failed" : ""}>
+          {failed ? "失败 · " : ""}{finished ? `${finished.durationMs} ms` : "运行中"}
         </small>
       </summary>
       <div className="tool-call-body mt-2 flex flex-col gap-1.5">
         <label className="text-[10px] tracking-widest text-text-muted">INPUT</label>
-        <pre className="overflow-auto rounded-lg bg-black/30 p-2 font-mono text-xs text-text-muted">
-          {formatToolContext(started.call.input)}
-        </pre>
+        <ToolContext value={started.call.input} />
         {finished && (
           <>
             <label className="text-[10px] tracking-widest text-text-muted">
               OUTPUT · 不可信工具数据
             </label>
-            <pre className="overflow-auto rounded-lg bg-black/30 p-2 font-mono text-xs text-text-muted">
-              {formatToolContext(finished.output)}
-            </pre>
+            <ToolContext value={finished.output} />
           </>
         )}
       </div>
     </details>
   );
-}
-
-function formatToolContext(value: unknown): string {
-  const text = JSON.stringify(value, null, 2) ?? String(value);
-  return text.length <= 20_000
-    ? text
-    : `${text.slice(0, 20_000)}\n… UI 预览已截断`;
 }
 
 function countDiffFiles(output: unknown): number {
@@ -1551,7 +1564,8 @@ function countDiffFiles(output: unknown): number {
     for (const match of diff.matchAll(/^diff --git a\/(.+?) b\/.+$/gm)) names.add(match[1]!);
   }
   if (Array.isArray(record.newFiles)) for (const file of record.newFiles) {
-    if (file && typeof file === "object" && typeof (file as Record<string, unknown>).path === "string") names.add((file as Record<string, string>).path);
+    const path = file && typeof file === "object" ? (file as Record<string, unknown>).path : undefined;
+    if (typeof path === "string") names.add(path);
   }
   return names.size;
 }
@@ -2105,12 +2119,15 @@ function PlanView({ runId, events, decide }: { runId?: string; events: AgentEven
   );
 }
 
-function PluginsView({ plugins, action }: { plugins: PluginRecord[]; action: (method: "plugins.install" | "plugins.trust" | "plugins.enable" | "plugins.disable", params: Record<string, unknown>) => Promise<void> }) {
+function PluginsView({ plugins, action, workspacePath }: { plugins: PluginRecord[]; action: (method: "plugins.install" | "plugins.trust" | "plugins.enable" | "plugins.disable", params: Record<string, unknown>) => Promise<void>; workspacePath: string }) {
   const [sourcePath, setSourcePath] = useState("");
+  const [section, setSection] = useState<"mcp" | "local">("mcp");
   return (
     <div className="flex flex-col gap-3">
+      <div className="flex gap-2" role="tablist" aria-label="插件类型"><BuiButton role="tab" aria-selected={section === "mcp"} variant={section === "mcp" ? "primary" : "secondary"} onClick={() => setSection("mcp")}>MCP 服务</BuiButton><BuiButton role="tab" aria-selected={section === "local"} variant={section === "local" ? "primary" : "secondary"} onClick={() => setSection("local")}>本地插件</BuiButton></div>
+      {section === "mcp" ? <McpView workspacePath={workspacePath} /> : <>
       <div>
-        <h2 className="text-base font-semibold text-text">插件中心</h2>
+        <h2 className="text-base font-semibold text-text">本地插件</h2>
         <p className="text-sm text-text-muted">
           可信 Node 模式仅隔离崩溃和误操作；恶意代码隔离必须使用 Docker。
         </p>
@@ -2201,6 +2218,7 @@ function PluginsView({ plugins, action }: { plugins: PluginRecord[]; action: (me
           </article>
         ))
       )}
+      </>}
     </div>
   );
 }

@@ -13,18 +13,23 @@ import { HarnessEvalRunner } from "@harness/evals";
 import { loadProfilesWithBudgetMigration } from "./budget-migration.js";
 import { SkillInstaller } from "@harness/extensions";
 import { SkillJobs } from "./skill-jobs.js";
+import { RunReviewService } from "./run-review.js";
+import { McpStore, McpService, McpOAuthManager } from "@harness/extensions";
 
 export interface HarnessRuntime {
   providerIds: string[];
   engine: HarnessEngine;
   database: HarnessDatabase;
   blobs: EncryptedBlobStore;
+  review: RunReviewService;
   scheduler: TaskScheduler;
   memory: MemoryService;
   skills: SkillService;
   skillJobs: SkillJobs;
   projectTrust: ProjectTrustService;
   plugins: PluginService;
+  mcp: McpService;
+  mcpAuth: McpOAuthManager;
   search?: ParallelSearchProvider;
   reloadPlugins(): void;
   evals: HarnessEvalRunner;
@@ -54,6 +59,9 @@ export async function createRuntime(options: { appDataPath?: string; passphrase:
   const skillJobs = new SkillJobs(new SkillInstaller(skills, fetch, env.GITHUB_TOKEN), providers, doc => database.saveSkill(doc.manifest), search);
   if (search) tools.register(createWebSearchTool(search));
   const plugins = new PluginService(database);
+  const mcpStore = new McpStore(database);
+  const mcpAuth: McpOAuthManager = new McpOAuthManager(database, mcpStore, id => mcp.invalidate(id));
+  const mcp: McpService = new McpService(mcpStore, mcpAuth);
   const evals = new HarnessEvalRunner(database, providers, env);
   const pluginToolNames = new Set<string>();
   const reloadPlugins = () => {
@@ -134,6 +142,8 @@ export async function createRuntime(options: { appDataPath?: string; passphrase:
           budget: childProfile.budget,
           grants: task.mode === "write" ? parentRun.grants : [],
           parentRunId: parentRun.id,
+          mcpReadOnly: task.mode === "read",
+          ...(parentRun.mcpSnapshot ? { mcpInherited: parentRun.mcpSnapshot } : {}),
           createdAt: nowIso()
         };
         const result = await waitForRunResult(engine, childId, context.signal, () => engine.start(child, childProfile));
@@ -151,7 +161,12 @@ export async function createRuntime(options: { appDataPath?: string; passphrase:
     }
   };
   tools.register(delegateTool);
-  const engine = new HarnessEngine({ database, providers, tools, memory, skills, projectTrust });
+  const review: RunReviewService = new RunReviewService(join(appData, "reviews"), crypto, {
+    getRun: runId => database.getRun(runId)?.spec,
+    activeRuns: () => engine.activeReviewRuns(),
+    activeWorkspaces: (): string[] => engine.activeWorkspacePaths(),
+  });
+  const engine: HarnessEngine = new HarnessEngine({ database, providers, tools, memory, skills, projectTrust, review, mcp, blobs });
   engine.recoverInterrupted();
   const scheduler = new TaskScheduler(database, async (task: TaskSpec) => {
     const profile = profiles.get(task.run.profileId);
@@ -173,27 +188,36 @@ export async function createRuntime(options: { appDataPath?: string; passphrase:
   });
   scheduler.recoverInterrupted();
   scheduler.start();
+  let closing: Promise<void> | undefined;
   return {
     providerIds: providers.map((provider) => provider.id),
     engine,
     database,
     blobs,
+    review,
     scheduler,
     memory,
     skills,
     skillJobs,
     projectTrust,
     plugins,
+    mcp,
+    mcpAuth,
     ...(search ? { search } : {}),
     reloadPlugins,
     evals,
     profiles,
-    async close() {
-      scheduler.stop();
-      await skillJobs.close();
-      await telemetry.shutdown();
-      database.close();
-      crypto.dispose();
+    close() {
+      return closing ??= (async () => {
+        scheduler.stop();
+        await engine.close();
+        await skillJobs.close();
+        await mcp.close();
+        await mcpAuth.close();
+        await telemetry.shutdown();
+        database.close();
+        crypto.dispose();
+      })();
     }
   };
 }
