@@ -15,3 +15,8 @@ coverage/
 .env
 .env.*
 !.env.example
+
+# Local document exports and temporary personal files
+/output/pdf/
+/tmp/pdfs/
+/tmp_resume_text.txt
