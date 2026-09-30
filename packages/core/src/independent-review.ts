@@ -13,7 +13,8 @@ export async function reviewChanges(input: {
 }): Promise<z.infer<typeof resultSchema>> {
   input.signal.throwIfAborted();
   const maxOutputTokens = input.maxOutputTokens ?? Math.min(8192, Math.max(1024, input.state.requirements.length * 200));
-  const data = JSON.stringify({ objective: input.state.objective, requirements: input.state.requirements.map((text, i) => ({ id: input.state.requirementIds[i], text })), evidence: input.state.requirementReceipts, checks: { local: input.state.localCheck, broader: input.state.broaderCheck }, risks: input.state.riskFlags, diff: input.diff, observations: input.observations, verificationRuns: input.verificationRuns });
+  const sequential = input.state.sequential;
+  const data = JSON.stringify({ objective: input.state.objective, requirements: input.state.requirements.map((text, i) => ({ id: input.state.requirementIds[i], text })), evidence: input.state.requirementReceipts, checks: { local: input.state.localCheck, broader: input.state.broaderCheck }, ...(sequential ? { implementationPlan: { architecture: sequential.architecture, steps: sequential.steps.map(step => ({ id: step.id, text: step.text, status: step.status, check: step.check })), verificationReview: "Check that the actual commands and outputs demonstrate each step and real cross-component integration, not merely a successful process exit." } } : {}), risks: input.state.riskFlags, diff: input.diff, observations: input.observations, verificationRuns: input.verificationRuns });
   const estimatedInputTokens = Math.ceil(data.length / 4) + 350;
   if (estimatedInputTokens + maxOutputTokens > input.model.capabilities.maxContextTokens * 0.8) throw new Error("独立评审上下文超出预算，完整 diff 尚未评审");
   if (input.provider.estimateCost(input.model, estimatedInputTokens, maxOutputTokens) > input.remainingUsd) throw new Error("独立评审费用预算不足");

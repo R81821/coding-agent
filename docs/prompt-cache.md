@@ -36,3 +36,21 @@
 - Hermes：`agent/system_prompt.py`、`agent/coding_context.py`、`agent/prompt_cache_scope.py`。
 - [OpenAI Prompt caching](https://developers.openai.com/api/docs/guides/prompt-caching)
 - [OpenAI Conversation state](https://developers.openai.com/api/docs/guides/conversation-state)
+
+## 2026-09-27 升级
+
+本次按[缓存诊断与优化方案](prompt-cache-optimization-report-2026-09-27.md)实现源码升级，覆盖摘要、旧配置迁移、上下文重建和统计。历史采样命中率不能当作升级后的效果。
+
+- 已确认的 DeepSeek 官方地址：Chat Completions 摘要发送 `thinking.type=disabled`，Responses 摘要发送 `reasoning.effort=none`。主任务沿用原配置。其他地址或 Provider 使用程序摘要，不推测兼容参数。
+- 模型摘要输出上限保留 2,048 tokens；输入包含原始任务、结构化运行状态和完整历史记录，按记录选择，不截断 JSON。正文必须满足字段、长度和条目类型校验。已知证据和待办独立保留，不因模型遗漏而丢失。
+- 摘要结果区分采用、截断、空正文、无效 JSON、供应商错误、预算不足、不支持、失败后停用和目标回退。失败一次后，该运行后续使用程序摘要；恢复同一运行时从压缩记录恢复停用状态。已发生的用量和耗时仍计入预算。
+- 保存的旧默认比例 `0.70/0.80` 在读取时迁移为 `0.80/0.45`，保留 `contextPolicyMigration.previous` 与原因。自定义有效配置不变；目标不低于触发线的旧配置会记录原值后规范化。新写入必须满足目标小于触发线。迁移生成新的配置对象，不修改活动运行已有对象。
+- 有证据读取能力时，普通工具结果首次发送采用有界预览并保留证据 ID。完整结果仍在原事件记录中。`read_evidence` 自身已限制分页范围，不进行二次截断；可信技能正文也不裁剪。独立 bridge 调用没有证据读取工具时不启用新增的首次限长。
+- 超阈值时批量裁剪或压缩到配置目标，记录调整前后估算、容量与目标。保留工具配对、错误、原始任务与用户补充要求；程序摘要继承上一轮摘要事实。必要要求无法放入目标容量时明确返回 `context_budget_exceeded`。
+- `context_adjusted` 记录首次限长、历史裁剪、完整压缩、恢复和配置迁移；`cache_diagnostic` 在适配完成后、发送前记录请求用途和前缀变化。诊断只持有有界数量的哈希与长度，不新增 prompt、代码或密钥正文日志。
+- 前缀统计比较适配后的完整消息项；字符数是相同消息项字符长度之和，不包含半个消息，也不等于缓存 tokens。Responses 尾部续接标记 `continuation`，过期续接重发完整输入标记 `continuation_fallback`，二者不虚报共同前缀长度。
+- 界面分别显示主调用和全部用途的加权命中率，以及摘要采用次数、裁剪与重写事件。无模型摘要记录显示“不适用”，旧事件无新增字段时不推断结果。裁剪和重写次数只覆盖有相应事件的请求。
+
+实际模型容量、主任务推理预算与估算误差仍需受控真实任务校准；本次没有擅自降低主任务输出上限，也未把 85% 主调用命中率或 20% 未命中输入降幅写成已达到的指标。程序摘要策略可能增加保留事实的体积，这是避免遗漏要求的取舍。
+
+本次回归、构建结果和交付边界见[升级验证记录](prompt-cache-upgrade-2026-09-27.md)。

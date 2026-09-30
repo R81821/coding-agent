@@ -9,6 +9,7 @@ import { HarnessDatabase, VaultCrypto } from "@harness/persistence";
 import { descriptor, type ModelProvider, type ProviderStreamEvent } from "@harness/providers";
 import { DEFAULT_PROFILE, newId, nowIso, type AgentEvent, type ModelRequest, type PlanSpec } from "@harness/protocol";
 import { createDefaultToolRegistry, ToolRegistry } from "@harness/tools";
+import { sequentialPrelude } from "./sequential-fixture.js";
 
 const temporary: string[] = [];
 afterEach(async () => {
@@ -169,6 +170,7 @@ describe("run control", { timeout: 20_000 }, () => {
     h.engine.resume(h.spec.id, h.profile);
     await new Promise((resolve) => setTimeout(resolve, 300));
     expect(seen.length).toBeGreaterThan(turnsBefore);
+    expect(h.database.listEvents(h.spec.id)).toContainEqual(expect.objectContaining({ type: "context_adjusted", adjustment: { kind: "resume_rebuild" } }));
     h.engine.cancel(h.spec.id);
     const resumed = await second;
     expect(resumed.status).toBe("cancelled");
@@ -207,11 +209,12 @@ describe("run control", { timeout: 20_000 }, () => {
       execute: async (input) => ({ output: { written: String((input as { text?: unknown }).text ?? "") } }),
     });
     const h = await harnessWith(async function* (_request: ModelRequest, callIndex: number) {
+      if (callIndex === 1) yield* sequentialPrelude("fixture-verify", "a.txt");
       yield { type: "tool_call", toolCall: { id: `call-${callIndex}`, name: "write_note", input: { text: "note" } } };
       yield { type: "usage", usage: { inputTokens: 10, outputTokens: 5, estimatedUsd: 0 } };
     }, registry);
     const spec = { ...h.spec, request: "write a note and keep going" };
-    const profile = { ...h.profile, toolNames: ["write_note"], verificationPolicy: { items: [], maxRepairAttempts: null, broaderPolicy: "optional" as const } };
+    const profile = { ...h.profile, toolNames: ["read_file", "write_note"], verificationPolicy: { items: [], maxRepairAttempts: null, broaderPolicy: "optional" as const } };
 
     const done = waitForResult(h.engine, spec.id);
     h.engine.start(spec, profile);
@@ -242,11 +245,12 @@ describe("run control", { timeout: 20_000 }, () => {
       execute: async () => ({ output: { written: true } }),
     });
     const h = await harnessWith(async function* (_request: ModelRequest, callIndex: number) {
+      if (callIndex === 1) yield* sequentialPrelude("fixture-verify", "a.txt");
       yield { type: "tool_call", toolCall: { id: `call-${callIndex}`, name: "write_note", input: { text: "note" } } };
       yield { type: "usage", usage: { inputTokens: 10, outputTokens: 5, estimatedUsd: 0 } };
     }, registry);
     const spec = { ...h.spec, request: "write a note" };
-    const profile = { ...h.profile, toolNames: ["write_note"], verificationPolicy: { items: [], maxRepairAttempts: null, broaderPolicy: "optional" as const } };
+    const profile = { ...h.profile, toolNames: ["read_file", "write_note"], verificationPolicy: { items: [], maxRepairAttempts: null, broaderPolicy: "optional" as const } };
 
     const done = waitForResult(h.engine, spec.id);
     h.engine.start(spec, profile);
@@ -269,11 +273,12 @@ describe("run control", { timeout: 20_000 }, () => {
       execute: async () => ({ output: { written: true } }),
     });
     const h = await harnessWith(async function* (_request: ModelRequest, callIndex: number) {
+      if (callIndex === 1) yield* sequentialPrelude("fixture-verify", "a.txt");
       yield { type: "tool_call", toolCall: { id: `call-${callIndex}`, name: "write_note", input: { text: "note" } } };
       yield { type: "usage", usage: { inputTokens: 10, outputTokens: 5, estimatedUsd: 0 } };
     }, registry);
     const spec = { ...h.spec, request: "write a note" };
-    const profile = { ...h.profile, toolNames: ["write_note"], verificationPolicy: { items: [], maxRepairAttempts: null, broaderPolicy: "optional" as const } };
+    const profile = { ...h.profile, toolNames: ["read_file", "write_note"], verificationPolicy: { items: [], maxRepairAttempts: null, broaderPolicy: "optional" as const } };
     const now = nowIso();
     h.database.savePlan({
       id: "plan-stale", runId: spec.id, goal: spec.request, version: 1, status: "awaiting_approval", steps: [],

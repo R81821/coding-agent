@@ -4,6 +4,7 @@ import type { ModelDescriptor, ModelMessage, ModelRequest } from "@harness/proto
 import { authHeaders, parseSse } from "./http.js";
 import type { AttachmentResolver, ModelProvider, ProviderStreamEvent } from "./types.js";
 import { normalizeToolMessageSequence } from "./tool-history.js";
+import { WireCacheDiagnostics } from "./cache-diagnostics.js";
 
 export class ProviderOutputTruncatedError extends Error {
   readonly code = "provider_output_truncated";
@@ -30,6 +31,7 @@ abstract class HttpProvider implements ModelProvider {
   protected readonly models: ModelDescriptor[];
   protected readonly resolveAttachment: AttachmentResolver;
   protected readonly request: typeof fetch;
+  protected readonly cacheDiagnostics = new WireCacheDiagnostics();
 
   constructor(config: AdapterConfig) {
     this.config = config;
@@ -89,6 +91,7 @@ abstract class HttpProvider implements ModelProvider {
 }
 
 export class OpenAIProvider extends HttpProvider {
+  supportsNonThinkingCompaction(): boolean { return isOfficialDeepSeek(this.baseUrl); }
   private chatAdapter?: OpenAICompatibleProvider;
   private readonly continuations = new Map<string, { scope: string; responseId: string; prefix: string[] }>();
   async *stream(request: ModelRequest, signal: AbortSignal): AsyncIterable<ProviderStreamEvent> {
@@ -131,14 +134,18 @@ export class OpenAIProvider extends HttpProvider {
       ...(reusable ? { previous_response_id: previous.responseId } : {}),
       ...(request.promptCacheKey ? { prompt_cache_key: request.promptCacheKey } : {}), stream: true, store: request.store,
       max_output_tokens: request.maxOutputTokens, parallel_tool_calls: request.parallelToolCalls,
+      ...(deepSeek && request.disableThinking ? { reasoning: { effort: "none" } } : {}),
       tools: request.tools.map(tool => ({ type: "function", name: tool.name, description: tool.description, parameters: tool.inputSchema, strict: true })) };
     const send = (value: unknown) => this.request(this.baseUrl + "/responses", { method: "POST", headers: authHeaders(this.apiKey), signal, body: canonicalJson(value) });
+    if (request.cacheDiagnostics) yield { type: "cache_diagnostic", diagnostic: this.cacheDiagnostics.observe(request, "responses", body, fullInput) };
     let response = await send(body);
     if (reusable && [400, 404].includes(response.status)) {
       const reason = await response.clone().text();
       if (/previous[_ ]response/i.test(reason) && /not[_ ]found|expired|invalid/i.test(reason)) {
         this.continuations.delete(request.runId);
-        response = await send({ ...body, previous_response_id: undefined, input: fullInput });
+        const fallbackBody = { ...body, previous_response_id: undefined, input: fullInput };
+        if (request.cacheDiagnostics) yield { type: "cache_diagnostic", diagnostic: this.cacheDiagnostics.observe(request, "responses", fallbackBody, undefined, true) };
+        response = await send(fallbackBody);
       }
     }
     let text = "";
@@ -210,18 +217,17 @@ export class AnthropicProvider extends HttpProvider {
       if (message.role === "system" || message.role === "developer") system.push(content.map((part) => String(part.text ?? "")).join("\n"));
       else messages.push({ role: message.role === "assistant" ? "assistant" : "user", content });
     }
-    const response = await this.request(`${this.baseUrl}/messages`, {
-      method: "POST",
-      headers: { "content-type": "application/json", "x-api-key": this.apiKey, "anthropic-version": "2023-06-01" },
-      signal,
-      body: canonicalJson({
+    const body = {
         model: request.model.modelId,
         system: system.join("\n\n"),
         messages,
         max_tokens: request.maxOutputTokens,
         stream: true,
         tools: request.tools.map((tool) => ({ name: tool.name, description: tool.description, input_schema: tool.inputSchema }))
-      })
+    };
+    if (request.cacheDiagnostics) yield { type: "cache_diagnostic", diagnostic: this.cacheDiagnostics.observe(request, "anthropic", body) };
+    const response = await this.request(`${this.baseUrl}/messages`, {
+      method: "POST", headers: { "content-type": "application/json", "x-api-key": this.apiKey, "anthropic-version": "2023-06-01" }, signal, body: canonicalJson(body)
     });
     let inputUsage: Record<string, any> = {};
     const toolNames = new Map<number, { id: string; name: string; json: string }>();
@@ -275,18 +281,19 @@ export class GeminiProvider extends HttpProvider {
       if (message.role === "system" || message.role === "developer") systemInstruction += `${parts.map((part) => String(part.text ?? "")).join("\n")}\n`;
       else contents.push({ role: message.role === "assistant" ? "model" : "user", parts });
     }
+    const body = {
+      systemInstruction: { parts: [{ text: systemInstruction }] }, contents,
+      generationConfig: { maxOutputTokens: request.maxOutputTokens },
+      tools: [{ functionDeclarations: request.tools.map(tool => ({ name: tool.name, description: tool.description, parametersJsonSchema: tool.inputSchema })) }]
+    };
+    if (request.cacheDiagnostics) yield { type: "cache_diagnostic", diagnostic: this.cacheDiagnostics.observe(request, "gemini", body) };
     const response = await this.request(
       `${this.baseUrl}/models/${encodeURIComponent(request.model.modelId)}:streamGenerateContent?alt=sse`,
       {
         method: "POST",
         headers: { "content-type": "application/json", "x-goog-api-key": this.apiKey },
         signal,
-        body: canonicalJson({
-          systemInstruction: { parts: [{ text: systemInstruction }] },
-          contents,
-          generationConfig: { maxOutputTokens: request.maxOutputTokens },
-          tools: [{ functionDeclarations: request.tools.map((tool) => ({ name: tool.name, description: tool.description, parametersJsonSchema: tool.inputSchema })) }]
-        })
+        body: canonicalJson(body)
       }
     );
     // Gemini SSE chunks carry cumulative content, not deltas: emit only the
@@ -326,6 +333,7 @@ export class GeminiProvider extends HttpProvider {
 }
 
 export class OpenAICompatibleProvider extends HttpProvider {
+  supportsNonThinkingCompaction(): boolean { return isOfficialDeepSeek(this.baseUrl); }
   private responsesAdapter?: OpenAIProvider;
   async *stream(request: ModelRequest, signal: AbortSignal): AsyncIterable<ProviderStreamEvent> {
     const protocol = this.config.apiProtocol ?? (isOfficialDeepSeek(this.baseUrl) ? "responses" : "chat_completions");
@@ -347,11 +355,7 @@ export class OpenAICompatibleProvider extends HttpProvider {
       }
       if (content.length > 0 || toolCalls.length > 0) messages.push({ role: message.role === "developer" ? "system" : message.role, content, ...(message.role === "assistant" && message.reasoningContent !== undefined ? { reasoning_content: message.reasoningContent } : {}), ...(toolCalls.length > 0 ? { tool_calls: toolCalls } : {}) });
     }
-    const response = await this.request(`${this.baseUrl}/chat/completions`, {
-      method: "POST",
-      headers: authHeaders(this.apiKey),
-      signal,
-      body: canonicalJson({
+    const body = {
         model: request.model.modelId,
         messages,
         max_tokens: request.maxOutputTokens,
@@ -359,8 +363,12 @@ export class OpenAICompatibleProvider extends HttpProvider {
         stream_options: { include_usage: true },
         ...(request.promptCacheKey ? { prompt_cache_key: request.promptCacheKey } : {}),
         parallel_tool_calls: request.parallelToolCalls,
+        ...(isOfficialDeepSeek(this.baseUrl) && request.disableThinking ? { thinking: { type: "disabled" } } : {}),
         tools: request.tools.map((tool) => ({ type: "function", function: { name: tool.name, description: tool.description, parameters: tool.inputSchema, strict: true } }))
-      })
+    };
+    if (request.cacheDiagnostics) yield { type: "cache_diagnostic", diagnostic: this.cacheDiagnostics.observe(request, "chat_completions", body) };
+    const response = await this.request(`${this.baseUrl}/chat/completions`, {
+      method: "POST", headers: authHeaders(this.apiKey), signal, body: canonicalJson(body)
     });
     const pending = new Map<number, { id: string; name: string; json: string }>();
     let fallbackIndex = 0;

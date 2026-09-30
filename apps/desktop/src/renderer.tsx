@@ -25,7 +25,6 @@ import type {
 } from "@harness/protocol";
 import { newId, nowIso } from "@harness/protocol";
 import type { DesktopAttachment } from "./preload.js";
-import type { ProviderSettings } from "./provider-settings.js";
 import { BuiBadge } from "./ui/badge.js";
 import { BuiButton } from "./ui/button.js";
 import { BuiGlassPanel } from "./ui/card.js";
@@ -42,7 +41,6 @@ import { WorkflowProgress } from "./components/WorkflowProgress.js";
 import { PromptCacheStats } from "./components/PromptCacheStats.js";
 import { RunStopCard } from "./components/RunStopCard.js";
 import { McpView } from "./components/McpView.js";
-import { RecycleBin } from "./recycle-bin.js";
 import { groupSessionsByProject, isLiveRun, latestSessionRun, mergeRunEvents, mergeSessionPages, runStatusLabel, sessionTurns, workspaceKey, type SessionTurn } from "./run-history.js";
 import {
   Activity,
@@ -52,11 +50,19 @@ import {
   BookOpen,
   Camera,
   ChevronDown,
-  ChevronRight,
+  Circle,
+  CircleCheck,
+  CircleHelp,
+  CircleMinus,
+  CirclePause,
+  CircleX,
   ClipboardList,
+  Clock3,
   FolderOpen,
   Hammer,
   Image as ImageIcon,
+  LoaderCircle,
+  type LucideIcon,
   MessageSquare,
   Monitor,
   PanelLeft,
@@ -76,14 +82,17 @@ import {
   UserCog,
   X,
 } from "lucide-react";
-import { ThemePicker } from "./components/ThemePicker.js";
-import { THEMES, applyTheme, isThemeId, readTheme, saveTheme, type ThemeId } from "./theme.js";
+import { SettingsView } from "./components/settings/SettingsView.js";
+import { useAppearance } from "./use-appearance.js";
+import { THEMES, applyTheme, isThemeId, readTheme, saveTheme, watchTheme, type ThemeId } from "./theme.js";
 import { SIDEBAR_MAX, SIDEBAR_MIN, clampSidebarWidth, readSidebarWidth, saveSidebarWidth } from "./layout-preferences.js";
 import "./styles.css";
 import "./tailwind.css";
 import "./workbench.css";
 import "./themes.css";
 import "./code-changes.css";
+import "./components/settings/settings.css";
+import "./appearance.css";
 import { CodeChanges } from "./components/CodeChanges.js";
 import { InlineReview, type RunReview } from "./components/InlineReview.js";
 import { ToolContext } from "./components/ToolContext.js";
@@ -114,6 +123,27 @@ type ApprovalPrompt =
   | { kind: "tool"; approval: ApprovalRequest }
   | { kind: "plan"; plan: PlanSpec };
 
+const sessionStatusIcons: Record<RunStatus | "new", LucideIcon> = {
+  queued: Clock3,
+  planning: LoaderCircle,
+  running: LoaderCircle,
+  waiting_approval: CircleHelp,
+  paused: CirclePause,
+  verifying: LoaderCircle,
+  review: CircleHelp,
+  completed: CircleCheck,
+  failed: CircleX,
+  cancelled: CircleMinus,
+  new: Circle,
+};
+
+function SessionStatusMarker({ status }: { status: RunStatus | undefined }) {
+  const key = status ?? "new";
+  const Icon = sessionStatusIcons[key];
+  const label = status ? runStatusLabel[status] : "新会话";
+  return <span className={`session-status session-status-${key}`} title={label} aria-hidden="true"><Icon size={16} /></span>;
+}
+
 const initialTheme = readTheme();
 applyTheme(initialTheme);
 
@@ -121,6 +151,8 @@ function App() {
   const { confirm, confirmationDialog } = useConfirmation();
   const [theme, setTheme] = useState<ThemeId>(initialTheme);
   const [themeSaved, setThemeSaved] = useState(true);
+  useEffect(() => watchTheme(theme), [theme]);
+  const appearance = useAppearance(theme);
   function changeTheme(next: ThemeId) {
     setTheme(next);
     setThemeSaved(saveTheme(next));
@@ -130,6 +162,10 @@ function App() {
   const [rememberDevice, setRememberDevice] = useState(false);
   const [unlockError, setUnlockError] = useState("");
   const [tab, setTab] = useState<Tab>("chat");
+  const previousWorkbenchTab = useRef<Tab>("chat");
+  useEffect(() => {
+    if (tab !== "settings") previousWorkbenchTab.current = tab;
+  }, [tab]);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [browserOpen, setBrowserOpen] = useState(false);
   const [sidebarWidth, setSidebarWidth] = useState(readSidebarWidth);
@@ -222,7 +258,7 @@ function App() {
       const key = workspaceKey(first.workspacePath);
       setExpandedProjects((current) => (current.has(key) ? current : new Set(current).add(key)));
     }
-  }, [sessionPage.items, workspace]);
+  }, [sessionPage.items]);
 
   useEffect(() => {
     if (!unlocked || busy || activeSessionId || sessionPage.items.length === 0) return;
@@ -809,7 +845,7 @@ function App() {
 
   return (
     <div
-      className={`app-shell workbench${sidebarCollapsed ? " sidebar-collapsed" : ""}${browserOpen ? " browser-open" : ""}`}
+      className={`app-shell workbench${sidebarCollapsed ? " sidebar-collapsed" : ""}${browserOpen && tab !== "settings" ? " browser-open" : ""}${tab === "settings" ? " settings-open" : ""}`}
       style={{ "--sidebar-width": `${sidebarWidth}px` } as React.CSSProperties}
       onDragOver={(event) => event.preventDefault()}
       onDrop={(event) => {
@@ -822,11 +858,7 @@ function App() {
     >
       <aside className="sidebar" aria-label="工作区侧栏" id="workspace-sidebar">
         <div className="brand">
-          <span className="brand-mark">H</span>
-          <div>
-            <strong>Harness</strong>
-            <small>本地开发助手</small>
-          </div>
+          <strong>Harness</strong>
         </div>
         <BuiButton className="new-task-button" variant="ghost" disabled={busy}
           onClick={() => void newTask()}>
@@ -868,34 +900,31 @@ function App() {
             return (
               <div key={group.key} className="project-group">
                 <div className="project-folder-row">
-                  <button type="button" className={`project-folder${expanded ? " expanded" : ""}`} aria-expanded={expanded} title={group.project.workspacePath} onClick={() => setExpandedProjects((current) => {
+                  <button type="button" className="project-folder" aria-expanded={expanded} title={group.project.workspacePath} onClick={() => setExpandedProjects((current) => {
                     const next = new Set(current);
                     if (next.has(group.key)) next.delete(group.key); else next.add(group.key);
                     return next;
                   })}>
-                    <ChevronRight size={14} className="folder-chevron" />
                     <FolderOpen size={15} className="folder-icon" />
                     <span className="project-folder-name">{group.project.workspacePath ? basename(group.project.workspacePath) : "未归组会话"}</span>
                     {isCurrent && <span className="project-folder-tag">当前</span>}
-                    {group.items.length > 0 && <span className="project-folder-count">{group.items.length}</span>}
                   </button>
                   <button type="button" className="row-icon-action project-new-session" aria-label={`在 ${basename(group.project.workspacePath)} 中新建会话`} title="新建会话" disabled={busy} onClick={(event) => { event.stopPropagation(); void createSessionForWorkspace(group.project.workspacePath); }}><Plus size={13} /></button>
                   <button type="button" className="row-icon-action project-delete" aria-label={`删除项目 ${basename(group.project.workspacePath)}`} title="从 Harness 删除项目" disabled={busy} onClick={(event) => { event.stopPropagation(); void deleteProject(group.project); }}><Trash2 size={13} /></button>
                 </div>
-                {expanded && (
-                  <div className="project-group-items">
-                    {group.items.map((item) => (
-                      <div className="project-session-row" key={item.id}>
-                        <button className={`project-session history-session${activeSessionId === item.id ? " active" : ""}`} aria-current={activeSessionId === item.id ? "page" : undefined} disabled={busy} onClick={() => void openSession(item)} title={`${item.title}\n${item.workspacePath}`}>
-                          <MessageSquare size={14} />
-                          <span className="history-session-content"><span>{item.title}</span><small>{item.latestStatus ? runStatusLabel[item.latestStatus] : "新会话"} · {item.runCount} 轮</small></span>
-                        </button>
-                        <button type="button" className="row-icon-action session-delete" aria-label={`删除会话 ${item.title}`} title="移到已删除会话" disabled={busy} onClick={(event) => { event.stopPropagation(); void deleteSession(item); }}><Trash2 size={13} /></button>
-                      </div>
-                    ))}
-                    {!group.items.length && <p className="sidebar-hint">点击项目旁的 + 新建会话</p>}
-                  </div>
-                )}
+                {expanded && <div className="project-group-items">
+                  {group.items.map((item) => (
+                    <div className="project-session-row" key={item.id}>
+                      <button className={`project-session history-session${activeSessionId === item.id ? " active" : ""}`} aria-current={activeSessionId === item.id ? "page" : undefined} aria-label={`${item.title}，${item.latestStatus ? runStatusLabel[item.latestStatus] : "新会话"}`} disabled={busy} onClick={() => void openSession(item)} title={`${item.title}\n${item.workspacePath}`}>
+                        <MessageSquare size={14} />
+                        <span className="history-session-content">{item.title}</span>
+                        <SessionStatusMarker status={item.latestStatus} />
+                      </button>
+                      <button type="button" className="row-icon-action session-delete" aria-label={`删除会话 ${item.title}`} title="移到已删除会话" disabled={busy} onClick={(event) => { event.stopPropagation(); void deleteSession(item); }}><Trash2 size={13} /></button>
+                    </div>
+                  ))}
+                  {!group.items.length && <p className="sidebar-hint">点击项目旁的 + 新建会话</p>}
+                </div>}
               </div>
             );
           })}
@@ -944,7 +973,7 @@ function App() {
             <span className="secure"><ShieldCheck size={14} /> 本地加密</span>
           </div>
         </header>
-        <section className={`content${tab === "chat" ? " chat-content" : ""}`}>
+        <section className={`content${tab === "chat" ? " chat-content" : tab === "settings" ? " settings-content" : ""}`}>
           {tab === "chat" && (
             <ChatView
               key={activeSessionId ?? "no-session"}
@@ -1002,10 +1031,10 @@ function App() {
               {...(activeRun ? { runId: activeRun } : {})}
             />
           )}
-          {tab === "settings" && <SettingsView key={recycleVersion} refresh={refresh} refreshHistory={refreshHistory} theme={theme} onThemeChange={changeTheme} themeSaved={themeSaved} />}
+          {tab === "settings" && <SettingsView key={recycleVersion} refresh={refresh} refreshHistory={refreshHistory} theme={theme} onThemeChange={changeTheme} themeSaved={themeSaved} appearance={appearance} onClose={() => setTab(previousWorkbenchTab.current)} />}
         </section>
       </main>
-      <BrowserPanel sessionId={activeSessionId} open={browserOpen} onOpenChange={setBrowserOpen} />
+      <BrowserPanel sessionId={activeSessionId} open={browserOpen && tab !== "settings"} onOpenChange={setBrowserOpen} />
       {capture && (
         <CropOverlay
           capture={capture}
@@ -1329,7 +1358,6 @@ function SidebarResizeHandle({ value, onResize, onCommit }: {
 }
 
 function ConversationTurnView({ turn, busy }: { turn: SessionTurn; busy: boolean }) {
-  const { text: finalText } = useMemo(() => assistantMessages(turn.events), [turn.events]);
   const terminalStatus = terminalConversationStatus(turn.events);
   const [runReview, setRunReview] = useState<RunReview>();
   useEffect(() => {
@@ -1382,8 +1410,7 @@ function ConversationTurnView({ turn, busy }: { turn: SessionTurn; busy: boolean
           {processItems.map(renderStreamItem)}
           {visibleStop && <RunStopCard stop={visibleStop} />}
           <WorkflowProgress events={turn.events} />
-          <PromptCacheStats usages={turn.events.flatMap(event => event.type === "usage" ? [event.usage] : [])} />
-          {busy && !finalText && <BuiLoadingState label="Agent 正在思考与执行…" />}
+          <PromptCacheStats usages={turn.events.flatMap(event => event.type === "usage" ? [event.usage] : [])} events={turn.events} />
         </div>
       </ConversationProcessSummary>}
       {finalItems.length > 0 && <div className="conversation-stream conversation-final-stream">
@@ -1393,6 +1420,7 @@ function ConversationTurnView({ turn, busy }: { turn: SessionTurn; busy: boolean
         <article className="assistant-message"><MarkdownMessage text={terminalStatus === "failed" ? "运行失败，未生成最终回答。" : terminalStatus === "cancelled" ? "运行已取消。" : "运行已完成，未生成最终回答。"} /></article>
       </div>}
       {defaultConversationLayout.inlineReview && <InlineReview runId={turn.runId} review={runReview} onUndo={undoReviewFile} />}
+      {busy && <BuiLoadingState label="Agent 正在思考与执行…" />}
     </section>
   );
 }
@@ -2278,342 +2306,6 @@ function TraceView({
   );
 }
 
-function SettingsView({ refresh, refreshHistory, theme, onThemeChange, themeSaved }: { refresh: () => Promise<void>; refreshHistory: () => Promise<void>; theme: ThemeId; onThemeChange: (theme: ThemeId) => void; themeSaved: boolean }) {
-  const [pairing, setPairing] = useState<string>();
-  const [credentials, setCredentials] = useState<Record<string, boolean>>({});
-  const [credentialValue, setCredentialValue] = useState("");
-  const [credentialName, setCredentialName] = useState("OPENAI_API_KEY");
-  const [credentialMessage, setCredentialMessage] = useState("");
-  const [providerSettings, setProviderSettings] = useState<ProviderSettings>({
-    openaiCompatibleBaseUrl: "",
-    openaiCompatibleModel: "",
-  });
-  const [providerMessage, setProviderMessage] = useState("");
-  const [searchStatus, setSearchStatus] = useState<{ healthy: boolean; detail?: string }>();
-  const [searchKey, setSearchKey] = useState("");
-  const [githubToken, setGithubToken] = useState("");
-  const [searchMessage, setSearchMessage] = useState("");
-  const [searchBusy, setSearchBusy] = useState(false);
-  const refreshSearch = useCallback(() => {
-    void window.harness
-      .request<{ healthy: boolean; detail?: string }>({ method: "search.status" })
-      .then(setSearchStatus)
-      .catch(() => setSearchStatus({ healthy: false, detail: "agentd unavailable" }));
-    void window.harness
-      .credentialStatus()
-      .then(setCredentials)
-      .catch(() => setCredentials({}));
-  }, []);
-  useEffect(() => {
-    refreshSearch();
-    void window.harness
-      .providerSettings()
-      .then(setProviderSettings)
-      .catch((error) =>
-        setProviderMessage(
-          error instanceof Error ? error.message : String(error),
-        ),
-      );
-  }, [refreshSearch]);
-  async function createPairing(connector: "telegram" | "feishu") {
-    try {
-      const result = await window.harness.request<{ code: string }>({
-        method: "connectors.pairing",
-        params: { connector },
-      });
-      setPairing(`${connector}: ${result.code}`);
-    } catch (error) {
-      setPairing(error instanceof Error ? error.message : String(error));
-    }
-  }
-  async function saveCredential() {
-    try {
-      const next = await window.harness.setCredential(
-        credentialName,
-        credentialValue,
-      );
-      setCredentials(next);
-      setCredentialValue("");
-      setCredentialMessage(
-        "已写入 Windows Credential Locker，agentd 已重新加载",
-      );
-    } catch (error) {
-      setCredentialMessage(
-        error instanceof Error ? error.message : String(error),
-      );
-    }
-  }
-  /** Save the search key from the card that reports search health, so the field is where the reader looks. */
-  async function saveSearchKey() {
-    if (!searchKey.trim()) return;
-    setSearchBusy(true);
-    setSearchMessage("");
-    try {
-      setCredentials(await window.harness.setCredential("PARALLEL_API_KEY", searchKey));
-      setSearchKey("");
-      // The daemon restarts to pick the key up; give it a moment before asking for health again.
-      setTimeout(refreshSearch, 3_000);
-      setSearchMessage("已保存，agentd 正在重新加载；稍后这里会显示就绪状态");
-    } catch (error) {
-      setSearchMessage(error instanceof Error ? error.message : String(error));
-    } finally { setSearchBusy(false); }
-  }
-  /**
-   * The token only raises the GitHub quota; it is not required for search to work. It restarts the
-   * daemon like every other credential, so the installer is rebuilt with it.
-   */
-  async function saveGithubToken() {
-    if (!githubToken.trim()) return;
-    setSearchBusy(true);
-    setSearchMessage("");
-    try {
-      setCredentials(await window.harness.setCredential("GITHUB_TOKEN", githubToken));
-      setGithubToken("");
-      setTimeout(refreshSearch, 3_000);
-      setSearchMessage("GitHub Token 已保存，agentd 正在重新加载");
-    } catch (error) {
-      setSearchMessage(error instanceof Error ? error.message : String(error));
-    } finally { setSearchBusy(false); }
-  }
-  async function removeCredential() {
-    try {
-      setCredentials(await window.harness.deleteCredential(credentialName));
-      setCredentialMessage("凭据已删除");
-    } catch (error) {
-      setCredentialMessage(
-        error instanceof Error ? error.message : String(error),
-      );
-    }
-  }
-  async function saveCompatibleProvider() {
-    setProviderMessage("");
-    try {
-      const saved = await window.harness.setProviderSettings(providerSettings);
-      setProviderSettings(saved);
-      setProviderMessage(
-        saved.openaiCompatibleBaseUrl
-          ? "已保存并重新加载 agentd"
-          : "OpenAI-compatible 已禁用",
-      );
-    } catch (error) {
-      setProviderMessage(
-        error instanceof Error ? error.message : String(error),
-      );
-    }
-  }
-  return (
-    <div className="grid grid-cols-2 gap-3">
-      <ThemePicker value={theme} onChange={onThemeChange} saved={themeSaved} />
-      <RecycleBin onChanged={refreshHistory} />
-      <article className="glass flex flex-col gap-2 p-4">
-        <small className="text-[10px] font-semibold tracking-widest text-accent-text">
-          PARALLEL SEARCH
-        </small>
-        <h3 className="text-sm font-semibold text-text">网页搜索</h3>
-        <p className="text-xs text-text-muted">
-          配置后，技能搜索会先走网页检索而不是直接访问 GitHub。搜索摘录标记为不可信；含仓库内容的查询会触发数据外发审批。
-        </p>
-        <p className="text-xs text-text-muted">
-          GitHub Token 单独配置：未认证时 GitHub 只允许 60 次请求/小时，一次技能搜索就会耗尽并报 403 限流；填入 Token 后为 5000 次/小时。只需 <code>public_repo</code> 只读权限。
-        </p>
-        <input
-          type="password"
-          autoComplete="off"
-          aria-label="Parallel API Key"
-          className="rounded-xl border border-line bg-black/30 px-3 py-2 text-sm text-text outline-none placeholder:text-text-muted"
-          value={searchKey}
-          onChange={(event) => setSearchKey(event.target.value)}
-          onKeyDown={(event) => { if (event.key === "Enter") { event.preventDefault(); void saveSearchKey(); } }}
-          placeholder={credentials.PARALLEL_API_KEY ? "已保存 · 粘贴以替换" : "粘贴 Parallel API Key"}
-        />
-        <div className="flex items-center gap-2">
-          <BuiButton variant="primary" size="sm" disabled={searchBusy || !searchKey.trim()} onClick={() => void saveSearchKey()}>
-            {searchBusy ? "保存中…" : "保存"}
-          </BuiButton>
-          {credentials.PARALLEL_API_KEY && <BuiButton variant="ghost" size="sm" disabled={searchBusy} onClick={() => void window.harness.deleteCredential("PARALLEL_API_KEY").then((next) => { setCredentials(next); setTimeout(refreshSearch, 3_000); setSearchMessage("已删除"); }).catch((error) => setSearchMessage(String(error)))}>删除密钥</BuiButton>}
-        </div>
-        <input
-          type="password"
-          autoComplete="off"
-          aria-label="GitHub Token"
-          className="rounded-xl border border-line bg-black/30 px-3 py-2 text-sm text-text outline-none placeholder:text-text-muted"
-          value={githubToken}
-          onChange={(event) => setGithubToken(event.target.value)}
-          onKeyDown={(event) => { if (event.key === "Enter") { event.preventDefault(); void saveGithubToken(); } }}
-          placeholder={credentials.GITHUB_TOKEN ? "GitHub Token 已保存 · 粘贴以替换" : "GitHub Token（可选，提升额度）"}
-        />
-        {githubToken.trim() && <BuiButton variant="secondary" size="sm" disabled={searchBusy} onClick={() => void saveGithubToken()}>保存 GitHub Token</BuiButton>}
-        {searchMessage && <p className="text-xs text-text-muted" role="status">{searchMessage}</p>}
-        <code className="mt-auto rounded-lg bg-black/30 p-2 font-mono text-[11px] text-text-muted">
-          {searchStatus?.healthy
-            ? "Parallel Search 已就绪"
-            : (searchStatus?.detail ?? "正在检查")}
-          {credentials.GITHUB_TOKEN ? " · GitHub Token 已配置" : " · GitHub 未认证（60 次/小时）"}
-        </code>
-      </article>
-      <article className="glass flex flex-col gap-2 p-4">
-        <small className="text-[10px] font-semibold tracking-widest text-accent-text">
-          MODEL KEYS
-        </small>
-        <h3 className="text-sm font-semibold text-text">Windows 凭据</h3>
-        <p className="text-xs text-text-muted">
-          BYOK 密钥只保存在当前 Windows 用户的 Credential Locker 中。
-        </p>
-        <select
-          className="rounded-xl border border-line bg-black/30 px-3 py-2 text-sm text-text outline-none"
-          value={credentialName}
-          onChange={(event) => setCredentialName(event.target.value)}
-        >
-          {[
-            "OPENAI_API_KEY",
-            "ANTHROPIC_API_KEY",
-            "GEMINI_API_KEY",
-            "OPENAI_COMPATIBLE_API_KEY",
-            "PARALLEL_API_KEY",
-            "HARNESS_GATEWAY_TOKEN",
-          ].map((name) => (
-            <option key={name} value={name}>
-              {name} {credentials[name] ? "✓" : ""}
-            </option>
-          ))}
-        </select>
-        <input
-          type="password"
-          autoComplete="off"
-          className="rounded-xl border border-line bg-black/30 px-3 py-2 text-sm text-text outline-none placeholder:text-text-muted"
-          value={credentialValue}
-          onChange={(event) => setCredentialValue(event.target.value)}
-          placeholder="粘贴密钥（不会回显）"
-        />
-        <div className="flex gap-2">
-          <BuiButton
-            variant="primary"
-            size="sm"
-            disabled={!credentialValue.trim()}
-            onClick={() => void saveCredential()}
-          >
-            安全保存
-          </BuiButton>
-          <BuiButton
-            variant="danger"
-            size="sm"
-            onClick={() => void removeCredential()}
-          >
-            删除
-          </BuiButton>
-        </div>
-        {credentialMessage && (
-          <small className="text-[11px] text-text-muted">{credentialMessage}</small>
-        )}
-      </article>
-      <article className="glass flex flex-col gap-2 p-4">
-        <small className="text-[10px] font-semibold tracking-widest text-accent-text">
-          OPENAI-COMPATIBLE
-        </small>
-        <h3 className="text-sm font-semibold text-text">兼容 API</h3>
-        <p className="text-xs text-text-muted">
-          填写服务的 API 根地址（通常以 /v1 结尾）和实际模型 ID。两项留空可禁用。
-        </p>
-        <input
-          type="url"
-          className="rounded-xl border border-line bg-black/30 px-3 py-2 text-sm text-text outline-none placeholder:text-text-muted"
-          value={providerSettings.openaiCompatibleBaseUrl}
-          onChange={(event) =>
-            setProviderSettings((current) => ({
-              ...current,
-              openaiCompatibleBaseUrl: event.target.value,
-            }))
-          }
-          placeholder="http://127.0.0.1:11434/v1"
-        />
-        <input
-          className="rounded-xl border border-line bg-black/30 px-3 py-2 text-sm text-text outline-none placeholder:text-text-muted"
-          value={providerSettings.openaiCompatibleModel}
-          onChange={(event) =>
-            setProviderSettings((current) => ({
-              ...current,
-              openaiCompatibleModel: event.target.value,
-            }))
-          }
-          placeholder="模型 ID，例如 qwen3-coder"
-        />
-        <label className="text-xs text-text-muted">API 协议
-          <select aria-label="API 协议" className="mt-1 w-full rounded-xl border border-line bg-black/30 px-3 py-2 text-sm text-text" value={providerSettings.apiProtocol ?? "auto"} onChange={event => setProviderSettings(current => ({ ...current, apiProtocol: event.target.value as "auto" | "responses" | "chat_completions" }))}>
-            <option value="auto">自动选择</option><option value="responses">Responses</option><option value="chat_completions">Chat Completions</option>
-          </select>
-        </label>
-        <label className="text-xs text-text-muted">模型上下文容量（tokens，可选）
-          <input aria-label="模型上下文容量" type="number" min={1} step={1} className="mt-1 w-full rounded-xl border border-line bg-black/30 px-3 py-2 text-sm text-text" value={providerSettings.maxContextTokens ?? ""} placeholder="留空沿用兼容默认 128000" onChange={event => setProviderSettings(current => { const { maxContextTokens: _previous, ...rest } = current; return event.target.value === "" ? rest : { ...rest, maxContextTokens: Number(event.target.value) }; })} />
-        </label>
-        <p className="text-xs text-text-muted">容量请以服务商公布的模型规格为准；默认值不代表已验证的模型上限。</p>
-        <BuiButton
-          variant="primary"
-          size="sm"
-          onClick={() => void saveCompatibleProvider()}
-        >
-          保存并重载
-        </BuiButton>
-        {providerMessage && (
-          <small className="text-[11px] text-text-muted">{providerMessage}</small>
-        )}
-      </article>
-      <article className="glass flex flex-col gap-2 p-4">
-        <small className="text-[10px] font-semibold tracking-widest text-accent-text">
-          MESSAGING
-        </small>
-        <h3 className="text-sm font-semibold text-text">远程入口</h3>
-        <p className="text-xs text-text-muted">
-          配对后的 Telegram/飞书用户可以创建任务、查看状态和处理审批。
-        </p>
-        <div className="flex gap-2">
-          <BuiButton
-            variant="secondary"
-            size="sm"
-            onClick={() => void createPairing("telegram")}
-          >
-            Telegram 配对码
-          </BuiButton>
-          <BuiButton
-            variant="secondary"
-            size="sm"
-            onClick={() => void createPairing("feishu")}
-          >
-            飞书配对码
-          </BuiButton>
-        </div>
-        {pairing && (
-          <code className="mt-auto rounded-lg bg-black/30 p-2 font-mono text-[11px] text-text-muted">
-            {pairing}
-          </code>
-        )}
-      </article>
-      <article className="glass flex flex-col gap-2 p-4">
-        <small className="text-[10px] font-semibold tracking-widest text-accent-text">
-          TEAM GATEWAY
-        </small>
-        <h3 className="text-sm font-semibold text-text">自托管模型网关</h3>
-        <p className="text-xs text-text-muted">
-          在 Profile 中配置 Gateway URL 与设备令牌。网关默认只保存用量审计。
-        </p>
-        <code className="mt-auto rounded-lg bg-black/30 p-2 font-mono text-[11px] text-text-muted">
-          docker compose up --build
-        </code>
-      </article>
-      <article className="glass flex flex-col gap-2 p-4">
-        <small className="text-[10px] font-semibold tracking-widest text-accent-text">
-          DIAGNOSTICS
-        </small>
-        <h3 className="text-sm font-semibold text-text">运行时状态</h3>
-        <p className="text-xs text-text-muted">
-          刷新 Profile、任务、记忆、技能和审批缓存。
-        </p>
-        <BuiButton variant="primary" size="sm" onClick={() => void refresh()}>
-          刷新数据
-        </BuiButton>
-      </article>
-    </div>
-  );
-}
 
 function CropOverlay({
   capture,

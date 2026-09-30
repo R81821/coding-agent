@@ -1,4 +1,4 @@
-import type { AgentEvent, AttachmentRef, ModelDescriptor, ModelRequest, Profile, ToolCall, Usage } from "@harness/protocol";
+import type { AgentEvent, AttachmentRef, CacheDiagnostic, ModelDescriptor, ModelRequest, Profile, ToolCall, Usage } from "@harness/protocol";
 
 export interface ResolvedAttachment {
   mimeType: string;
@@ -8,7 +8,8 @@ export interface ResolvedAttachment {
 export type AttachmentResolver = (attachment: AttachmentRef) => Promise<ResolvedAttachment>;
 
 export interface ProviderStreamEvent {
-  type: "text_delta" | "tool_call" | "usage" | "reasoning_summary" | "reasoning_delta";
+  type: "text_delta" | "tool_call" | "usage" | "reasoning_summary" | "reasoning_delta" | "cache_diagnostic";
+  diagnostic?: CacheDiagnostic;
   delta?: string;
   toolCall?: ToolCall;
   usage?: Usage;
@@ -16,6 +17,7 @@ export interface ProviderStreamEvent {
 }
 
 export interface ModelProvider {
+  supportsNonThinkingCompaction?(): boolean;
   readonly id: string;
   listModels(): Promise<ModelDescriptor[]>;
   stream(request: ModelRequest, signal: AbortSignal): AsyncIterable<ProviderStreamEvent>;
@@ -50,6 +52,9 @@ export function providerEventToAgentEvent(
   base: Pick<AgentEvent, "id" | "runId" | "at" | "sequence">
 ): AgentEvent {
   switch (event.type) {
+    case "cache_diagnostic":
+      if (!event.diagnostic) throw new Error("Missing cache diagnostic");
+      return { ...base, type: "cache_diagnostic", diagnostic: event.diagnostic };
     case "reasoning_delta":
       throw new Error("Private reasoning must be retained in model history, never converted to a UI event");
     case "text_delta":

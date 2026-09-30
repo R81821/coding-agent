@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { SummaryOutcomeSchema, ContextAdjustmentSchema, CacheDiagnosticSchema } from "./cache-diagnostics.js";
 import { SkillReferenceSchema } from "./skills.js";
 import { WorkflowStateSchema } from "./workflow.js";
 import { McpRequestSchemas, McpToolSnapshotSchema } from "./mcp.js";
@@ -268,6 +269,7 @@ export const CompactionRecordSchema = z.object({
   inputTokens: z.number().int().nonnegative(),
   outputTokens: z.number().int().nonnegative(),
   deterministicFallback: z.boolean(),
+  summaryOutcome: SummaryOutcomeSchema.optional(),
   trust: z.literal("untrusted_tool").default("untrusted_tool"),
   createdAt: z.string().datetime()
 });
@@ -348,6 +350,8 @@ export const EvalResultSchema = z.object({
 export type EvalResult = z.infer<typeof EvalResultSchema>;
 
 export const ModelRequestSchema = z.object({
+  disableThinking: z.boolean().optional(),
+  cacheDiagnostics: z.boolean().optional(),
   purpose: z.enum(["main", "compaction", "review"]).optional(),
   promptCacheKey: z.string().max(64).optional(),
   runId: z.string(),
@@ -399,6 +403,8 @@ export const AgentEventSchema = z.discriminatedUnion("type", [
   z.object({ ...eventBase, type: z.literal("plan_approval_required"), planId: z.string(), version: z.number().int().positive(), summary: z.string() }),
   z.object({ ...eventBase, type: z.literal("checkpoint_saved"), checkpointId: z.string(), reason: RunCheckpointSchema.shape.reason }),
   z.object({ ...eventBase, type: z.literal("context_compacted"), record: CompactionRecordSchema }),
+  z.object({ ...eventBase, type: z.literal("context_adjusted"), adjustment: ContextAdjustmentSchema }),
+  z.object({ ...eventBase, type: z.literal("cache_diagnostic"), diagnostic: CacheDiagnosticSchema }),
   z.object({ ...eventBase, type: z.literal("verification_started"), verificationRunId: z.string(), attempt: z.number().int().nonnegative() }),
   z.object({ ...eventBase, type: z.literal("verification_finished"), verification: VerificationRunSchema }),
   z.object({ ...eventBase, type: z.literal("repair_started"), attempt: z.number().int().positive(), maxAttempts: z.number().int().positive().nullable() }),
@@ -466,7 +472,7 @@ export const RunSpecSchema = z.object({
   skillSelection: z.array(z.string()).max(100).optional(),
   skills: z.array(SkillReferenceSchema).max(100).optional(),
   taskMode: z.enum(["auto", "analysis", "change"]).default("auto").optional(),
-  workflowVersion: z.union([z.literal(1), z.literal(2)]).optional(),
+  workflowVersion: z.union([z.literal(1), z.literal(2), z.literal(3)]).optional(),
   id: z.string(),
   sessionId: z.string(),
   request: z.string().min(1),
@@ -504,6 +510,7 @@ export type ProjectRecord = z.infer<typeof ProjectRecordSchema>;
 
 export const ProfileSchema = z.object({
   budgetPolicyVersion: z.number().int().nonnegative().optional(),
+  contextPolicyMigration: z.object({ version: z.literal(1), reason: z.enum(["legacy_defaults", "invalid_saved_config"]), previous: z.unknown() }).optional(),
   id: z.string(),
   name: z.string(),
   systemPrompt: z.string(),
@@ -522,7 +529,7 @@ export const ProfileSchema = z.object({
     outputReserveRatio: z.number().min(0.1).max(0.4).default(0.2),
     retainRecentTurns: z.number().int().min(1).max(10).default(2),
     resendImagesOnVisualRecheckOnly: z.boolean().default(true)
-  }).default({ compactAtRatio: 0.8, maxAfterCompactionRatio: 0.45, outputReserveRatio: 0.2, retainRecentTurns: 2, resendImagesOnVisualRecheckOnly: true }),
+  }).refine(value => value.maxAfterCompactionRatio < value.compactAtRatio, { message: "压缩后目标比例必须小于触发比例", path: ["maxAfterCompactionRatio"] }).default({ compactAtRatio: 0.8, maxAfterCompactionRatio: 0.45, outputReserveRatio: 0.2, retainRecentTurns: 2, resendImagesOnVisualRecheckOnly: true }),
   planningPolicy: z.object({
     requiredForWrites: z.boolean().default(true),
     requiredForCommands: z.boolean().default(true),
@@ -736,5 +743,7 @@ export function nowIso(): string {
 }
 
 export * from "./prompt-cache.js";
+export * from "./context-policy.js";
+export * from "./cache-diagnostics.js";
 export * from "./browser.js";
 export * from "./skills.js";

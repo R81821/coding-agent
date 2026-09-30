@@ -1,9 +1,10 @@
 import { z } from "zod";
 
-export const WorkflowPhaseSchema = z.enum(["task_understanding", "repository_recon", "build_working_context", "plan_hypothesis", "small_edit", "local_verification", "inspect_result", "diagnose", "update_hypothesis", "broader_verification", "requirements_check", "final_review", "done"]);
+export const WorkflowPhaseSchema = z.enum(["task_understanding", "repository_recon", "identify_architecture", "build_working_context", "plan_hypothesis", "small_edit", "local_verification", "inspect_result", "diagnose", "update_hypothesis", "broader_verification", "integration_test", "requirements_check", "final_review", "done"]);
 export type WorkflowPhase = z.infer<typeof WorkflowPhaseSchema>;
 export const WORKFLOW_LABELS: Record<WorkflowPhase, string> = {
   task_understanding: "理解任务", repository_recon: "仓库探索", build_working_context: "构建工作上下文",
+  identify_architecture: "识别架构", integration_test: "集成测试",
   plan_hypothesis: "计划与假设", small_edit: "局部修改", local_verification: "局部验证", inspect_result: "检查结果",
   diagnose: "失败诊断", update_hypothesis: "更新假设", broader_verification: "扩大验证",
   requirements_check: "核对需求", final_review: "最终评审", done: "完成",
@@ -16,7 +17,27 @@ export const RequirementReceiptSchema = z.object({
   verificationIds: z.array(z.string()).min(1).max(12), diffObservationId: z.string(),
 });
 const pendingCheck = { status: "pending" as const, revision: -1, epoch: "legacy", runId: "", reason: "" };
+export const StepVerificationSchema = z.object({
+  command: z.string().trim().min(1).max(10000), cwd: z.string().default("."),
+  timeoutMs: z.number().int().min(1).max(3600000).default(120000), stdin: z.string().max(1_000_000).optional(),
+});
+export const SequentialPlanStepSchema = z.object({
+  id: z.string().trim().min(1).max(80), text: z.string().trim().min(1).max(1000),
+  verification: z.array(StepVerificationSchema).min(1).max(8),
+});
+export const SequentialWorkflowSchema = z.object({
+  understanding: z.string().default(""), understoodAt: z.number().default(0),
+  architecture: z.string().default(""), architectureEpoch: z.string().default(""),
+  evidenceIds: z.array(z.string()).default([]), generation: z.number().int().nonnegative().default(0),
+  activeStepId: z.string().default(""),
+  steps: z.array(SequentialPlanStepSchema.extend({
+    status: z.enum(["pending", "in_progress", "verified"]).default("pending"),
+    check: CheckStateSchema.default(pendingCheck),
+  })).max(20).default([]),
+  integration: z.array(StepVerificationSchema).max(8).default([]),
+});
 export const WorkflowStateSchema = z.object({
+  sequential: SequentialWorkflowSchema.optional(),
   taskMode: z.enum(["auto", "analysis", "change"]).optional(),
   effect: z.enum(["read", "probe", "repository_write", "unknown"]).optional(),
   todos: z.array(z.object({ id: z.string().min(1).max(100), text: z.string().min(1).max(300), status: z.enum(["pending", "in_progress", "completed", "cancelled"]) })).max(20).optional(),

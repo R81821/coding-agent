@@ -1,0 +1,11 @@
+{
+  "extends": "../../tsconfig.json",
+  "compilerOptions": {
+    "types": ["vite/client", "node", "vitest/globals"],
+    "paths": {
+      "@/*": ["./src/*"],
+      "@harness/protocol": ["../../packages/protocol/src/index.ts"]
+    }
+  },
+  "include": ["src", "server", "tests", "vite.config.ts"]
+}

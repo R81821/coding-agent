@@ -1,4 +1,6 @@
 import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { spawn } from "node:child_process";
+import { fileURLToPath } from "node:url";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, expect, test } from "vitest";
@@ -50,3 +52,32 @@ test("MCP renderer methods remain schema-validated and never expose direct tool 
   await expect(f.rpc("mcp.connect", { serverId: "x" })).rejects.toThrow();
   await expect(f.rpc("mcp.save", { name: "invalid", transport: { type: "stdio", command: "node" }, headers: { Authorization: "secret\r\nInjected: bad" } })).rejects.toThrow();
 });
+
+test("OAuth action connects a public MCP server without starting browser authorization", async () => {
+  const f = await fixture();
+  const child = spawn(process.execPath, [fileURLToPath(new URL("../packages/extensions/test-fixtures/mcp-server.mjs", import.meta.url)), "public"], { windowsHide: true, stdio: ["ignore", "pipe", "pipe"] });
+  cleanup.push(async () => { if (child.exitCode === null) { child.kill(); await new Promise<void>(resolve => child.once("exit", () => resolve())); } });
+  const url = await new Promise<string>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error("Public MCP fixture did not start")), 5000);
+    child.stdout.once("data", data => { clearTimeout(timer); resolve(JSON.parse(data.toString()).url); });
+  });
+  const saved = await f.rpc("mcp.save", { name: "Public", enabled: true, projectPaths: [f.root], transport: { type: "streamable_http", url } }) as { id: string };
+  expect(await f.rpc("mcp.auth.start", { serverId: saved.id })).toMatchObject({ state: "not_required" });
+  expect(await f.rpc("mcp.list", { workspacePath: f.root })).toMatchObject({ statuses: [{ serverId: saved.id, state: "connected", toolCount: 4 }], auth: { [saved.id]: { state: "signed_out" } } });
+}, 15_000);
+
+test("OAuth action opens authorization only after a protected MCP server requests it", async () => {
+  const f = await fixture();
+  const child = spawn(process.execPath, [fileURLToPath(new URL("../packages/extensions/test-fixtures/mcp-server.mjs", import.meta.url)), "oauth"], { windowsHide: true, stdio: ["ignore", "pipe", "pipe"] });
+  cleanup.push(async () => { if (child.exitCode === null) { child.kill(); await new Promise<void>(resolve => child.once("exit", () => resolve())); } });
+  const url = await new Promise<string>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error("Protected MCP fixture did not start")), 5000);
+    child.stdout.once("data", data => { clearTimeout(timer); resolve(JSON.parse(data.toString()).url); });
+  });
+  const saved = await f.rpc("mcp.save", { name: "Protected", enabled: true, projectPaths: [f.root], transport: { type: "streamable_http", url } }) as { id: string };
+  const start = await f.rpc("mcp.auth.start", { serverId: saved.id }) as { state: string; authorizationUrl?: string };
+  expect(start.state).toBe("pending");
+  expect(start.authorizationUrl).toContain("/authorize?");
+  expect(new URL(start.authorizationUrl!).searchParams.get("code_challenge_method")).toBe("S256");
+  expect(await f.rpc("mcp.list", { workspacePath: f.root })).toMatchObject({ auth: { [saved.id]: { state: "pending" } } });
+}, 15_000);

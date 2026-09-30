@@ -1,0 +1,35 @@
+{
+  "name": "@harness/web",
+  "version": "1.4.3",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "tsx ./node_modules/vite/bin/vite.js --host 127.0.0.1 --port 5180 --strictPort",
+    "build": "tsc --noEmit && tsx ./node_modules/vite/bin/vite.js build",
+    "start": "tsx server/main.ts",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run --config ../../vitest.config.ts tests"
+  },
+  "dependencies": {
+    "@harness/protocol": "workspace:*",
+    "class-variance-authority": "^0.7.1",
+    "clsx": "^2.1.1",
+    "lucide-react": "^1.39.0",
+    "radix-ui": "^1.4.3",
+    "react": "^19.1.1",
+    "react-dom": "^19.1.1",
+    "react-markdown": "^10.1.0",
+    "remark-gfm": "^4.0.1",
+    "tailwind-merge": "^3.3.1"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "^4.3.3",
+    "@vitejs/plugin-react": "^5.0.2",
+    "tailwindcss": "^4.3.3",
+    "tw-animate-css": "^1.3.8",
+    "tsx": "^4.20.5",
+    "typescript": "^5.9.2",
+    "vite": "^7.1.3",
+    "vitest": "^3.2.4"
+  }
+}

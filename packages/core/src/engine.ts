@@ -2,6 +2,7 @@ import { ReadEvidenceCache } from "./read-evidence-cache.js";
 import { z } from "zod";
 import { mkdir } from "node:fs/promises";
 import { LightweightWorkflow } from "./lightweight-workflow.js";
+import { SequentialWorkflow } from "./sequential-workflow.js";
 import { runIsolatedProbe } from "./isolated-probe.js";
 import { snapshotWorkspace, compareWorkspace, workspaceFingerprint, type WorkspaceSnapshot } from "./workspace-impact.js";
 import { probeCommandScope, probeDirectory, probeInput, todoTool, validateProbeInput, validateVerificationInput, verificationInput } from "./runtime-tools.js";
@@ -62,7 +63,7 @@ const transitions: Record<RunStatus, RunStatus[]> = {
   ],
   waiting_approval: ["running", "paused", "failed", "cancelled"],
   paused: ["running", "cancelled", "failed"],
-  verifying: ["running", "review", "completed", "failed", "cancelled"],
+  verifying: ["running", "paused", "review", "completed", "failed", "cancelled"],
   review: ["completed", "failed", "cancelled"],
   completed: [],
   failed: [],
@@ -485,6 +486,11 @@ export class HarnessEngine extends EventEmitter {
       const trustedProjectInstructions =
         await this.deps.projectTrust.loadInstructions(spec.workspacePath);
       const repositorySnapshot = await repositoryBaseSnapshot(spec.workspacePath);
+      // Freeze the implementation version so prompts, tools and resumed checkpoints agree.
+      if (spec.workflowVersion === undefined) {
+        spec.workflowVersion = recovery?.workflow ? recovery.workflow.schemaVersion >= 4 ? 3 : recovery.workflow.schemaVersion >= 3 ? 2 : 1 : 3;
+        this.deps.database.saveRun(spec, state.status);
+      }
       const messages = buildInitialMessages({
         run: spec,
         profile,
@@ -502,7 +508,8 @@ export class HarnessEngine extends EventEmitter {
             48_000,
           );
       const modern = spec.workflowVersion !== 1 && (!recovery?.workflow || recovery.workflow.schemaVersion >= 3);
-      const Workflow = modern ? LightweightWorkflow : CodingWorkflow;
+      const sequential = modern && spec.workflowVersion !== 2 && (!recovery?.workflow || recovery.workflow.schemaVersion >= 4 || spec.workflowVersion === 3);
+      const Workflow = sequential ? SequentialWorkflow : modern ? LightweightWorkflow : CodingWorkflow;
       const workflow = new Workflow(spec.request, (snapshot, detail) => {
         this.emitEvent(spec.id, state, { type: "workflow_updated", workflow: snapshot, detail });
       }, recovery?.workflow, profile.verificationPolicy, spec.taskMode ?? "auto");
@@ -511,6 +518,7 @@ export class HarnessEngine extends EventEmitter {
       const workflowTool = workflow.tool();
       const runtimeTools = new Map<string, ToolDefinition>();
       if (workflow instanceof LightweightWorkflow) {
+        if (workflow instanceof SequentialWorkflow && spec.taskMode !== "analysis") runtimeTools.set("advance_workflow", workflow.planningTool());
         for (const tool of lightweightTools(this.deps.tools, profile.toolNames)) runtimeTools.set(tool.contract.name, tool);
         runtimeTools.set("todo", todoTool(workflow));
         runtimeTools.set("read_evidence", {
@@ -532,9 +540,16 @@ export class HarnessEngine extends EventEmitter {
             let value;
             try { value = validateVerificationInput(input); } catch (error) { state.toolCalls++; return { isError: true, output: { code: "verification_config_missing", error: String(error), recoverable: true } }; }
             const terminal = this.deps.tools.get("terminal")!;
-            const blocked = workflow.before({ id: "check", name: "terminal", input: value }, terminal);
-            if (blocked) { state.toolCalls++; return { isError: true, output: { code: "analysis_mode_read_only", error: blocked } }; }
+            const blocked = workflow instanceof SequentialWorkflow && spec.taskMode !== "analysis"
+              ? workflow.verificationGate(value.stage)
+              : workflow.before({ id: "check", name: "terminal", input: value }, terminal);
+            if (blocked) { state.toolCalls++; return { isError: true, output: { code: spec.taskMode === "analysis" ? "analysis_mode_read_only" : "workflow_gate_rejected", error: blocked } }; }
+            if (workflow instanceof SequentialWorkflow && workflow.state.sequential?.steps.length) {
+              const planned = workflow.plannedChecks().some(check => check.stage === value.stage && check.command === value.command && check.cwd === value.cwd && check.stdin === value.stdin);
+              if (!planned) { state.toolCalls++; return { isError: true, output: { code: "verification_not_planned", error: "Use a planned command for this stage, or revise the plan with a reason before executing new checks." } }; }
+            }
             workflow.state.verification = [...workflow.state.verification.filter(item => !(item.stage === value.stage && item.command === value.command && item.cwd === value.cwd && item.stdin === value.stdin)), value];
+            if (workflow instanceof SequentialWorkflow) workflow.move(value.stage === "local" ? "local_verification" : "integration_test", value.stage === "local" ? "验证当前步骤及之前步骤" : "验证组件集成行为");
             const run = await this.verify(spec, profile, state, state.repairAttemptsUsed, value.stage);
             return { output: { evidenceId: run.id, passed: run.passed, revision: run.revision, results: run.results }, isError: !run.passed };
           },
@@ -613,6 +628,14 @@ export class HarnessEngine extends EventEmitter {
         providerRetryBaseDelayMs: 500,
         maxToolSelfCorrections: null,
       };
+      const disableModelSummary = this.deps.database.listCompactions(spec.id).some(record =>
+        ["truncated", "empty", "invalid_json", "provider_error", "target_fallback", "disabled_after_failure"].includes(record.summaryOutcome ?? ""));
+      if (state.transcript.length) this.emitEvent(spec.id, state, { type: "context_adjusted", adjustment: { kind: "resume_rebuild" } });
+      if (profile.contextPolicyMigration && !recovery) {
+        const capacity = Math.min(profile.contextPolicy.workingContextTokens ?? 128000, route.model.capabilities.maxContextTokens);
+        this.emitEvent(spec.id, state, { type: "context_adjusted", adjustment: { kind: "policy_migration", policyVersion: profile.contextPolicyMigration.version,
+          capacityTokens: capacity, triggerTokens: Math.floor(capacity * profile.contextPolicy.compactAtRatio), targetTokens: Math.floor(capacity * profile.contextPolicy.maxAfterCompactionRatio) } });
+      }
       const bridgeResult = await runWithPiAgent({
         runId: spec.id,
         sessionId: spec.sessionId,
@@ -633,6 +656,8 @@ export class HarnessEngine extends EventEmitter {
         },
         ...(state.transcript.length ? { resumeTranscript: state.transcript } : {}),
         contextPolicy: profile.contextPolicy,
+        disableModelSummary,
+        onContextAdjustment: adjustment => { this.emitEvent(spec.id, state, { type: "context_adjusted", adjustment }); },
         drainSteering: () => this.drainSteering(spec.id, state),
         getPinnedContext: () => JSON.stringify({
           projectBaseSnapshot: repositorySnapshot,
@@ -750,7 +775,16 @@ export class HarnessEngine extends EventEmitter {
             if (repetition && !stopReason && !modern) stop("repeated_observation", repetition);
             state.pendingNonIdempotent.delete(call.id);
             this.saveCheckpoint(spec.id, state, "tool_batch");
-            return modern ? { ...result, output: { evidenceId: call.id, result: compactObservation(result.output, 6000), isError: result.isError === true } } : call.name === "terminal" ? { ...result, output: { observation: compactObservation(result.output), isError: result.isError === true } } : result;
+            // Evidence pages already enforce their own bounded range; truncating them again
+            // would hide the requested middle of the original result and its next offset.
+            if (result.trustedInstruction || call.name === "read_evidence") return result;
+            if (modern || call.name === "terminal") {
+              const preview = compactObservation(result.output, 6000);
+              const original = typeof result.output === "string" ? result.output : JSON.stringify(result.output) ?? "";
+              if (original.length > preview.length) this.emitEvent(spec.id, state, { type: "context_adjusted", adjustment: { kind: "tool_result_bound", beforeCharacters: original.length, afterCharacters: preview.length } });
+              return { ...result, output: modern ? { evidenceId: call.id, result: preview, isError: result.isError === true } : { observation: preview, isError: result.isError === true } };
+            }
+            return result;
           } catch (error) {
             const uncertainMcp = error instanceof McpUncertainCallError;
             if (uncertainMcp) stop("review_incomplete", error.message);
@@ -842,6 +876,7 @@ export class HarnessEngine extends EventEmitter {
             inputTokens: compaction.inputTokens,
             outputTokens: compaction.outputTokens,
             deterministicFallback: compaction.deterministicFallback,
+            ...(compaction.summaryOutcome ? { summaryOutcome: compaction.summaryOutcome } : {}),
             trust: "untrusted_tool" as const,
             createdAt: nowIso(),
           };
@@ -851,6 +886,7 @@ export class HarnessEngine extends EventEmitter {
           this.saveCheckpoint(spec.id, state, "compaction");
         },
         onProviderEvent: (event) => {
+          if (event.type === "cache_diagnostic" && event.diagnostic) this.emitEvent(spec.id, state, { type: "cache_diagnostic", diagnostic: event.diagnostic });
           if (event.type === "text_delta") {
             const delta = event.delta ?? "";
             this.emitEvent(spec.id, state, { type: "text_delta", delta });
@@ -955,7 +991,7 @@ export class HarnessEngine extends EventEmitter {
               if (modern) {
                 if (!workflow.needsChange && workflow.checksCurrent() && finalText.trim()) return;
                 if (state.turns >= spec.budget.maxTurns || state.toolCalls >= spec.budget.maxToolCalls) { stop("review_incomplete", "修改待验证或缺少当前证据"); return; }
-                await control.promptUntrusted(JSON.stringify({ workingMemory: (workflow as LightweightWorkflow).projection(), nextAction: workflow.checksCurrent() ? "Read git_diff, check the original requirements against the actual diff and test evidence, then report findings and limitations." : workflow.state.effect === "unknown" ? "The last execution effect is unconfirmed. Run a read-only repository recheck (git status --short or git diff --no-ext-diff) and resolve it before reporting; never claim the workspace is unchanged." : "Use run_verification with a relevant real test command (including stdin when required). Inspect and fix failing checks before reporting completion. Unconfirmed execution effects require repository inspection." }));
+                await control.promptUntrusted(JSON.stringify({ workingMemory: (workflow as LightweightWorkflow).projection(), nextAction: workflow instanceof SequentialWorkflow && workflow.needsChange ? workflow.nextAction() : workflow.checksCurrent() ? "Read git_diff, check the original requirements against the actual diff and test evidence, then report findings and limitations." : workflow.state.effect === "unknown" ? "The last execution effect is unconfirmed. Run a read-only repository recheck (git status --short or git diff --no-ext-diff) and resolve it before reporting; never claim the workspace is unchanged." : "Use run_verification with a relevant real test command (including stdin when required). Inspect and fix failing checks before reporting completion. Unconfirmed execution effects require repository inspection." }));
                 state.transcript = control.transcript();
                 if (stopReason) { await finishStoppedRun(); return; }
                 continue;
@@ -1249,6 +1285,7 @@ export class HarnessEngine extends EventEmitter {
   }
 
   private verificationItems(profile: Profile, state: ActiveRun): Profile["verificationPolicy"]["items"] {
+    if (state.workflow instanceof SequentialWorkflow && state.workflow.state.sequential?.steps.length) return [...profile.verificationPolicy.items, ...state.workflow.plannedChecks()];
     return [...profile.verificationPolicy.items, ...(state.workflow?.state.verification ?? []).map((item, index) => ({ ...item, id: "task-check-" + index, required: true, expectedExitCodes: [0] }))];
   }
 
@@ -1489,7 +1526,9 @@ function traceAttributes(event: AgentEvent): Record<string, unknown> {
     case "verification_finished": return { verificationRunId: event.verification.id, passed: event.verification.passed, attempt: event.verification.attempt };
     case "provider_retry": return { attempt: event.attempt, maxAttempts: event.maxAttempts, delayMs: event.delayMs, category: event.category, recovery: event.recovery };
     case "self_correction_started": return { trigger: event.trigger, attempt: event.attempt, maxAttempts: event.maxAttempts };
-    case "context_compacted": return { compactionId: event.record.id, inputTokens: event.record.inputTokens, outputTokens: event.record.outputTokens, deterministicFallback: event.record.deterministicFallback };
+    case "context_compacted": return { compactionId: event.record.id, inputTokens: event.record.inputTokens, outputTokens: event.record.outputTokens, deterministicFallback: event.record.deterministicFallback, summaryOutcome: event.record.summaryOutcome };
+    case "context_adjusted": return event.adjustment;
+    case "cache_diagnostic": return event.diagnostic;
     case "plugin_event": return { pluginId: event.pluginId, action: event.action };
     case "search_usage": return { providerId: event.providerId, searchId: event.searchId, resultCount: event.resultCount };
     case "recovery_event": return { checkpointId: event.checkpointId ?? "", action: event.action };

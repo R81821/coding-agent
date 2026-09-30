@@ -1,0 +1,680 @@
+/* User appearance preferences override both of the existing mode palettes. */
+:root[data-appearance] {
+  --bg: var(--appearance-bg);
+  --panel: color-mix(in srgb, var(--appearance-fg) 4%, var(--appearance-bg));
+  --panel-2: color-mix(in srgb, var(--appearance-fg) 8%, var(--appearance-bg));
+  --sidebar-surface: var(--panel-2);
+  --muted: var(--appearance-muted);
+  --line: var(--appearance-line);
+  --line-strong: color-mix(
+    in srgb,
+    var(--appearance-fg) 35%,
+    var(--appearance-bg)
+  );
+  --accent: var(--appearance-accent);
+  --accent-strong: var(--appearance-fg);
+  --accent-soft: color-mix(
+    in srgb,
+    var(--appearance-accent) 16%,
+    var(--appearance-bg)
+  );
+  --color-bg: var(--appearance-bg);
+  --color-text: var(--appearance-fg);
+  --color-text-muted: var(--appearance-muted);
+  --color-surface: var(--panel);
+  --color-surface-strong: var(--panel-2);
+  --color-line: var(--appearance-line);
+  --color-line-strong: var(--line-strong);
+  --color-accent: var(--appearance-accent);
+  --color-accent-text: var(--appearance-accent);
+  --color-accent-soft: var(--accent-soft);
+  --font-sans: var(--ui-font);
+  --font-mono: var(--code-font);
+  --text-xs: calc(var(--ui-font-size) - 2px);
+  --text-sm: var(--ui-font-size);
+  --text-base: calc(var(--ui-font-size) + 2px);
+}
+:root[data-appearance] body {
+  color: var(--color-text);
+  background: var(--bg);
+  font-family: var(--ui-font);
+  font-size: var(--ui-font-size);
+  font-weight: var(--ui-font-weight);
+}
+:root[data-appearance] .workbench {
+  font-family: var(--ui-font);
+}
+:root[data-appearance] .workbench.app-shell {
+  background: var(--sidebar-surface);
+}
+:root[data-appearance] .workbench :is(main, .content, .topbar, .composer-wrap) {
+  background: var(--bg);
+  color: var(--color-text);
+}
+:root[data-appearance]
+  .workbench
+  :is(
+    .glass,
+    .glass-strong,
+    .workbench-prompt,
+    .composer-project-bar,
+    .user-message,
+    .task-starter
+  ) {
+  background: var(--panel);
+  color: var(--color-text);
+  border-color: var(--line);
+}
+:root[data-appearance] .workbench :is(button, input, select, textarea) {
+  font-family: var(--ui-font);
+}
+:root[data-appearance] .workbench :is(input, select, textarea) {
+  color: var(--color-text);
+  border-color: var(--line);
+}
+:root[data-appearance]
+  .workbench
+  :is(
+    input:not([type="checkbox"]):not([type="range"]):not([type="color"]):not(
+        .settings-search input
+      ):not(.appearance-color input),
+    select
+  ) {
+  background: var(--panel);
+}
+:root[data-appearance]
+  .workbench
+  :is(
+    .sidebar nav button,
+    .project-folder,
+    .project-session,
+    .topbar h1,
+    .secure,
+    .recycle-row strong,
+    .task-starter
+  ) {
+  color: var(--color-text);
+}
+:root[data-appearance] .workbench .sidebar nav button.active,
+:root[data-appearance] .workbench .project-session.is-active {
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+:root[data-appearance]
+  .workbench
+  .sidebar
+  :is(.sidebar-section-label, .sidebar-tools > summary) {
+  color: var(--muted);
+}
+:root[data-appearance] .settings-navigation {
+  background: var(--sidebar-surface);
+  backdrop-filter: none;
+}
+:root[data-appearance] .workbench .sidebar {
+  background: transparent;
+  backdrop-filter: none;
+}
+:root[data-appearance][data-translucent-sidebar="true"] {
+  --sidebar-surface: color-mix(in srgb, var(--panel-2) 80%, transparent);
+}
+:root[data-appearance][data-translucent-sidebar="true"] .workbench .sidebar,
+:root[data-appearance][data-translucent-sidebar="true"] .settings-navigation {
+  backdrop-filter: blur(20px);
+}
+:root[data-appearance] .workbench .bg-accent {
+  background: var(--accent);
+  color: var(--appearance-on-accent);
+}
+:root[data-appearance] .workbench .bg-accent:hover {
+  background: color-mix(in srgb, var(--accent) 85%, var(--color-text));
+}
+:root[data-appearance] .desktop-menu-bar {
+  background: var(--panel-2);
+  color: var(--color-text);
+}
+
+/* Custom foreground/background must also win over legacy light-mode selectors. */
+:root[data-appearance] .workbench :is(input, select, textarea) {
+  color: var(--color-text) !important;
+  border-color: var(--line) !important;
+}
+:root[data-appearance]
+  .workbench
+  :is(
+    input:not(.settings-search input):not(.appearance-color input):not(
+        [type="checkbox"]
+      ):not([type="radio"]):not([type="range"]):not([type="color"]),
+    select,
+    textarea:not(.prompt-textarea)
+  ) {
+  background-color: var(--panel) !important;
+}
+:root[data-appearance]
+  .workbench
+  :is(
+    .settings-search input,
+    .appearance-color input[type="text"],
+    .prompt-textarea
+  ) {
+  background-color: transparent !important;
+}
+:root[data-appearance]
+  .workbench
+  :is(
+    .brand strong,
+    .sidebar-settings,
+    .new-task-button,
+    .workspace-welcome h2,
+    .composer-project-bar button,
+    .topbar select,
+    .tool-group-summary strong
+  ),
+:root[data-appearance]
+  .workbench
+  .md-content
+  :is(h1, h2, h3, h4, h5, h6, strong) {
+  color: var(--color-text);
+}
+:root[data-appearance] .workbench .sidebar nav button[aria-current="page"],
+:root[data-appearance] .workbench .project-session.active,
+:root[data-appearance] .workbench .project-folder-tag {
+  color: var(--color-text);
+  background: var(--accent-soft);
+}
+:root[data-appearance]
+  .workbench
+  :is(.sidebar nav button:hover, .project-folder:hover, .task-starter:hover) {
+  color: var(--color-text);
+  background: var(--panel-2);
+  border-color: var(--line);
+}
+:root[data-appearance] .workbench .topbar,
+:root[data-appearance] .workbench main {
+  border-color: var(--line);
+}
+:root[data-appearance]
+  .workbench
+  .markdown-message
+  :is(.md-code-block pre, .md-source) {
+  color: var(--color-text);
+  background: var(--panel);
+  font-family: var(--code-font);
+  font-size: var(--code-font-size);
+  font-weight: var(--code-font-weight);
+}
+:root[data-appearance] .workbench .md-content :not(pre) > code {
+  color: var(--color-text);
+  background: var(--accent-soft);
+  border-color: var(--line);
+}
+:root[data-appearance]
+  .workbench
+  .md-content
+  :is(blockquote, th, tr:nth-child(even) td) {
+  color: var(--color-text);
+  background: var(--panel);
+}
+:root[data-appearance] .workbench .md-content a {
+  color: var(--accent);
+}
+:root[data-appearance] .workbench .prompt-send {
+  color: var(--appearance-on-accent);
+  background: var(--accent);
+}
+:root[data-appearance] .workbench .prompt-add {
+  color: var(--color-text);
+  background: var(--panel);
+}
+:root[data-appearance-tone="dark"]
+  .workbench
+  :is(.hljs-keyword, .hljs-selector-tag, .hljs-literal) {
+  color: #c9a6ef;
+}
+:root[data-appearance-tone="dark"]
+  .workbench
+  :is(.hljs-string, .hljs-attr, .hljs-addition) {
+  color: #a4ce9c;
+}
+:root[data-appearance-tone="dark"]
+  .workbench
+  :is(.hljs-title, .hljs-function, .hljs-section) {
+  color: #9cc7ed;
+}
+:root[data-appearance-tone="dark"]
+  .workbench
+  :is(.hljs-number, .hljs-symbol, .hljs-built_in) {
+  color: #e7bc8a;
+}
+:root[data-appearance-tone="light"]
+  .workbench
+  :is(.hljs-keyword, .hljs-selector-tag, .hljs-literal) {
+  color: #7635a0;
+}
+:root[data-appearance-tone="light"]
+  .workbench
+  :is(.hljs-string, .hljs-attr, .hljs-addition) {
+  color: #216638;
+}
+:root[data-appearance-tone="light"]
+  .workbench
+  :is(.hljs-title, .hljs-function, .hljs-section) {
+  color: #175da2;
+}
+:root[data-appearance-tone="light"]
+  .workbench
+  :is(.hljs-number, .hljs-symbol, .hljs-built_in) {
+  color: #914b16;
+}
+:root[data-diff-markers="color"][data-appearance-tone="dark"] .diff-add {
+  background: #238b4530;
+  color: #a3efbd;
+}
+:root[data-diff-markers="color"][data-appearance-tone="dark"] .diff-delete {
+  background: #d73a4929;
+  color: #ffb3b8;
+}
+:root[data-diff-markers="color"][data-appearance-tone="light"] .diff-add {
+  background: #e3f3e8;
+  color: #185c32;
+}
+:root[data-diff-markers="color"][data-appearance-tone="light"] .diff-delete {
+  background: #fce8eb;
+  color: #9a2335;
+}
+
+/* Keep headings hierarchical while the base size and body styles stay in sync. */
+:root[data-appearance]
+  .workbench
+  :is(
+    button,
+    input,
+    select,
+    textarea,
+    .settings-row h4,
+    .settings-row p,
+    .settings-page-heading p,
+    .settings-nav-group h3,
+    .settings-message
+  ) {
+  font-size: var(--ui-font-size);
+}
+:root[data-appearance] .workbench :is(button, input, select, textarea) {
+  font-weight: var(--ui-font-weight);
+}
+:root[data-appearance]
+  .workbench
+  .sidebar
+  :is(
+    button,
+    summary,
+    small,
+    p,
+    em,
+    .sidebar-section-label,
+    .sidebar-connection,
+    .project-folder-tag
+  ) {
+  font-size: var(--ui-font-size);
+  font-weight: var(--ui-font-weight);
+}
+:root[data-appearance] .settings-page-heading h2 {
+  font-size: calc(var(--ui-font-size) * 2.14);
+}
+:root[data-appearance] .settings-section > h3 {
+  font-size: calc(var(--ui-font-size) + 2px);
+}
+:root[data-appearance]
+  .workbench
+  :is(.md-content, .md-source, .user-message, .prompt-textarea) {
+  font-family: var(--content-font);
+  font-weight: var(--content-font-weight);
+  font-size: var(--ui-font-size);
+  color: var(--color-text);
+}
+:root[data-appearance] .workbench .md-content :is(p, li, blockquote, td, th) {
+  font-size: inherit;
+  font-family: inherit;
+}
+:root[data-appearance]
+  .workbench
+  :is(
+    .md-code-block pre,
+    .md-content code,
+    .diff-table,
+    .diff-table pre,
+    .diff-table code,
+    .approval-readable pre
+  ) {
+  font-family: var(--code-font);
+  font-size: var(--code-font-size);
+  font-weight: var(--code-font-weight);
+}
+:root[data-appearance] .workbench .md-code-block pre code {
+  font: inherit;
+}
+:root[data-appearance] .workbench :is(.md-code-block, .md-code-toolbar) {
+  background: var(--panel);
+  border-color: var(--line);
+}
+:root[data-appearance][data-pointer-cursor="false"]
+  .workbench
+  :is(
+    button,
+    a,
+    summary,
+    select,
+    input[type="checkbox"],
+    input[type="radio"],
+    [role="button"],
+    label:has(input[type="radio"])
+  ) {
+  cursor: default !important;
+}
+:root[data-appearance][data-pointer-cursor="true"]
+  .workbench
+  :is(
+    button,
+    a,
+    summary,
+    select,
+    input[type="checkbox"],
+    input[type="radio"],
+    [role="button"],
+    label:has(input[type="radio"])
+  ) {
+  cursor: pointer !important;
+}
+:root[data-appearance] .workbench :is(button, input, select):disabled {
+  cursor: not-allowed !important;
+}
+:root[data-reduced-motion="true"] *,
+:root[data-reduced-motion="true"] *::before,
+:root[data-reduced-motion="true"] *::after {
+  animation: none !important;
+  transition: none !important;
+  scroll-behavior: auto !important;
+}
+:root[data-diff-markers="symbols"] .diff-table :is(.diff-add, .diff-delete) {
+  background: transparent;
+  color: var(--color-text);
+}
+:root[data-diff-markers="symbols"] .diff-split .diff-add pre::before {
+  content: "+ ";
+}
+:root[data-diff-markers="symbols"] .diff-split .diff-delete pre::before {
+  content: "− ";
+}
+:root[data-diff-markers="color"]
+  .diff-table:not(.diff-split)
+  pre
+  > span:first-child {
+  visibility: hidden;
+}
+
+.appearance-settings {
+  display: grid;
+  gap: 24px;
+}
+.appearance-settings .settings-row {
+  padding: 16px 0;
+}
+.appearance-settings .settings-row-control {
+  max-width: 68%;
+}
+.appearance-settings .settings-row h4 {
+  margin-bottom: 0;
+}
+.appearance-settings .settings-row p {
+  margin-top: 6px;
+}
+.appearance-settings .settings-row-control > select {
+  width: auto;
+}
+.appearance-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+}
+.appearance-controls select {
+  max-width: 100%;
+  padding: 7px 30px 7px 12px;
+  border-radius: 999px;
+}
+.appearance-modes {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+.appearance-modes button {
+  display: grid;
+  gap: 6px;
+  background: transparent;
+  border: 2px solid transparent;
+  border-radius: 12px;
+  padding: 6px;
+  color: var(--muted);
+  text-align: center;
+}
+.appearance-modes button[aria-pressed="true"] {
+  border-color: var(--accent);
+  color: var(--color-text);
+}
+.appearance-mode-preview {
+  display: flex;
+  gap: 7px;
+  width: 88px;
+  height: 54px;
+  padding: 6px;
+  border: 1px solid #8885;
+  border-radius: 7px;
+  background: #181818;
+}
+.appearance-mode-preview > i {
+  width: 17px;
+  background: #8884;
+  border-radius: 3px;
+}
+.appearance-mode-preview > span {
+  display: grid;
+  align-content: center;
+  gap: 5px;
+  flex: 1;
+}
+.appearance-mode-preview b {
+  height: 3px;
+  background: #9998;
+  border-radius: 2px;
+}
+.appearance-mode-preview b:first-child {
+  background: #4285f4;
+  width: 80%;
+  margin-left: auto;
+}
+.appearance-mode-preview b:nth-child(2) {
+  width: 65%;
+}
+.appearance-mode-preview em {
+  height: 8px;
+  border: 1px solid #8885;
+  border-radius: 4px;
+}
+.appearance-mode-preview.mode-kelo {
+  background: #fafafa;
+}
+.appearance-mode-preview.mode-system {
+  background: linear-gradient(90deg, #fafafa 50%, #181818 50%);
+}
+.appearance-advanced {
+  margin-top: 16px;
+}
+.appearance-advanced > summary {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  color: var(--muted);
+  list-style: none;
+  padding: 10px 0 20px;
+  font-size: var(--ui-font-size);
+}
+.appearance-advanced > summary::-webkit-details-marker {
+  display: none;
+}
+.appearance-advanced:not([open]) > summary svg {
+  transform: rotate(-90deg);
+}
+.appearance-advanced .appearance-panel + .appearance-panel {
+  margin-top: 24px;
+}
+.appearance-segments {
+  display: flex;
+  gap: 3px;
+  padding: 3px;
+  border-radius: 999px;
+  background: var(--panel);
+}
+.appearance-segments button {
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  padding: 6px 12px;
+  border-radius: 999px;
+  white-space: nowrap;
+}
+.appearance-segments button[aria-pressed="true"] {
+  background: var(--panel-2);
+  color: var(--color-text);
+}
+.appearance-switch {
+  position: relative;
+  flex: 0 0 auto;
+  width: 38px;
+  height: 23px;
+  border: 0;
+  border-radius: 20px;
+  padding: 3px;
+  background: var(--line-strong);
+}
+.appearance-switch > span {
+  display: block;
+  width: 17px;
+  height: 17px;
+  border-radius: 50%;
+  background: #fff;
+  transition: transform 0.15s;
+  box-shadow: 0 1px 3px #0004;
+}
+.appearance-switch[aria-checked="true"] {
+  background: var(--accent);
+}
+.appearance-switch[aria-checked="true"] > span {
+  transform: translateX(15px);
+  background: var(--appearance-on-accent);
+}
+.appearance-color {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 6px 10px;
+}
+.workbench .appearance-color input[type="text"] {
+  width: 80px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+  font-size: 13px;
+}
+.workbench .appearance-settings input[type="color"] {
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  overflow: hidden;
+  flex-shrink: 0;
+}
+.appearance-settings input[type="color"]::-webkit-color-swatch-wrapper {
+  padding: 0;
+}
+.appearance-settings input[type="color"]::-webkit-color-swatch {
+  border: 1px solid #8885;
+  border-radius: 50%;
+}
+.appearance-size {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--muted);
+}
+.appearance-size input {
+  width: 72px;
+  padding: 7px 10px;
+  border-radius: 10px;
+}
+.appearance-contrast {
+  display: flex;
+  align-items: center;
+  gap: 20px;
+}
+.appearance-contrast input {
+  width: 160px;
+  max-width: 100%;
+  accent-color: var(--accent);
+}
+.appearance-contrast output {
+  min-width: 3ch;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+.appearance-icon-button {
+  display: grid;
+  place-items: center;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  border-radius: 8px;
+  padding: 5px;
+}
+.appearance-mode-editor {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+  color: var(--muted);
+}
+.appearance-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 12px;
+  font-size: 12px;
+  color: var(--muted);
+}
+.appearance-footer button {
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  padding: 7px 12px;
+  background: transparent;
+  color: var(--color-text);
+}
+@media (max-width: 800px) {
+  .appearance-settings .settings-row-control {
+    max-width: 100%;
+  }
+  .appearance-controls {
+    justify-content: flex-start;
+  }
+  .appearance-modes {
+    gap: 4px;
+  }
+  .appearance-mode-preview {
+    width: 66px;
+  }
+}

@@ -21,6 +21,24 @@ afterEach(async () => {
 });
 
 describe("encrypted persistence", () => {
+  it("persists a legacy context policy migration once, retaining the backup across reopen", async () => {
+    const root = await mkdtemp(join(tmpdir(), "harness-policy-test-"));
+    temporary.push(root);
+    const vault = await VaultCrypto.open(join(root, "envelope.json"), "correct-password");
+    const path = join(root, "harness.sqlite");
+    let database = await HarnessDatabase.open(path, vault);
+    const legacy = { ...DEFAULT_PROFILE, contextPolicy: { ...DEFAULT_PROFILE.contextPolicy, compactAtRatio: .7, maxAfterCompactionRatio: .8 } };
+    // Seed the old on-disk format directly: new writes intentionally reject this policy.
+    (database as unknown as { upsert(table: string, id: string, value: unknown): void }).upsert("profiles", legacy.id, legacy);
+    expect(() => database.saveProfile(legacy)).toThrow();
+    const migrated = database.listProfiles()[0]!;
+    expect(migrated.contextPolicy).toMatchObject({ compactAtRatio: .8, maxAfterCompactionRatio: .45 });
+    expect(migrated.contextPolicyMigration?.previous).toEqual(legacy.contextPolicy);
+    database.close();
+    database = await HarnessDatabase.open(path, vault);
+    expect(database.listProfiles()[0]).toEqual(migrated);
+    database.close(); vault.dispose();
+  });
   it("rejects a wrong application passphrase", async () => {
     const root = await mkdtemp(join(tmpdir(), "harness-vault-test-"));
     temporary.push(root);

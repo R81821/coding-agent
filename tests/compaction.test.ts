@@ -16,7 +16,8 @@ describe("pi transformContext compaction", () => {
       }
     };
     const transcript: ModelMessage[] = [{ role: "user", content: [{ type: "text", text: "ORIGINAL CURRENT REQUEST", trust: "user_request" }] }];
-    for (let index = 0; index < 24; index += 1) transcript.push({ role: index % 2 ? "user" : "assistant", content: [{ type: "text", text: `${index}:${"history ".repeat(40)}`, trust: index % 2 ? "user_request" : "untrusted_tool" }] });
+    // Historical observations are untrusted data; actual user requirements are retained verbatim.
+    for (let index = 0; index < 24; index += 1) transcript.push({ role: index % 2 ? "user" : "assistant", content: [{ type: "text", text: `${index}:${"history ".repeat(40)}`, trust: "untrusted_tool" }] });
     transcript.push({ role: "user", content: [{ type: "text", text: "continue safely", trust: "user_request" }] });
     let compacted = false;
     await runWithPiAgent({ runId: "run", sessionId: "session", provider, model, initialMessages: [{ role: "system", content: [{ type: "text", text: "SAFETY POLICY", trust: "app_policy" }] }, { role: "user", content: [{ type: "text", text: "ORIGINAL CURRENT REQUEST", trust: "user_request" }] }], contracts: [], resolveTool: () => undefined, externalSignal: new AbortController().signal, maxOutputTokens: 200, parallelToolCalls: false, resumeTranscript: transcript, contextPolicy: { compactAtRatio: 0.7, maxAfterCompactionRatio: 0.8, retainRecentTurns: 2 }, getPinnedContext: () => "APPROVED PLAN + PERMISSIONS", beforeToolCall: async () => ({}), executeTool: async () => ({ output: null }), shouldStopAfterTurn: () => false, onProviderEvent: () => {}, onCompaction: async ({ after }) => { compacted = true; expect(JSON.stringify(after)).toContain("ORIGINAL CURRENT REQUEST"); expect(JSON.stringify(after)).toContain("APPROVED PLAN + PERMISSIONS"); } });

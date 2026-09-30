@@ -74,7 +74,7 @@ if (mode === "stdio") {
         if (url.pathname === "/expire") { accessVersion++; json({ ok: true }); return; }
       }
       const expectedToken = mode === "oauth" ? `Bearer fixture-access-secret-${accessVersion}` : "Bearer fixture-token";
-      if (request.headers.authorization !== expectedToken) {
+      if (mode !== "public" && request.headers.authorization !== expectedToken) {
         response.writeHead(401, { "WWW-Authenticate": `Bearer resource_metadata="${oauthOrigin}/.well-known/oauth-protected-resource/mcp"` }); response.end("fixture-token must never appear in diagnostics"); return;
       }
       if (mode === "hang") return;

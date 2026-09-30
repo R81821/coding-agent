@@ -1,5 +1,57 @@
 # Coding Agent 工作流
 
+## 当前默认：分步实施与验证
+
+新运行默认冻结为 `workflowVersion: 3`，工作流检查点为 `schemaVersion: 4`。`SequentialWorkflow` 复用轻量工具、权限、预算、证据和独立评审，并为修改任务强制以下顺序：
+
+```text
+Understand Requirement → Explore Repository → Identify Architecture → Plan
+    → Implement Step 1 → Verify
+    → Implement Step 2 → Verify
+    → … → Integration Test → Diff Review → Done
+```
+
+模型使用 `advance_workflow` 记录阶段，实际检查由 `run_verification` 执行：
+
+| 操作 | 内容与门槛 |
+| --- | --- |
+| `understand` | 保存需求理解摘要和验收条目。计划建立后不能通过重新理解删减验收条件。 |
+| 仓库探索 | 使用读取／搜索工具。允许提前只读探索，但架构记录必须引用理解需求后取得的当前 epoch/revision 的成功完整仓库观察。 |
+| `architecture` | 记录模块职责、依赖关系和变更边界，引用真实 `evidenceIds`；虚构、失败、旧版本及截断证据不通过。 |
+| `plan` | 提供有序步骤，每步包含稳定 ID、描述和至少一个验证命令；另提供至少一个集成测试命令。替换计划须说明 `reason`，保留需求并使全部步骤验证失效。 |
+| `start_step` | 只能开始第一个未通过验证的步骤；先前步骤必须有当前运行 epoch 的通过记录。 |
+| `run_verification stage=local` | 输入当前计划中的命令。运行时执行当前步骤和所有之前步骤的检查，以及 Profile 局部检查；全部成功后才将当前步骤标为已验证。 |
+| `run_verification stage=broader` | 全部步骤通过且局部验证对应当前代码版本后，执行计划中的集成测试和 Profile 扩大检查。修改任务不能用 optional/disabled 跳过集成测试。 |
+| `git_diff` + 最终报告 | 集成测试通过后重新读取完整 diff，再由独立只读评审核对需求、步骤、真实验证输出和集成覆盖。通过后才能 Done。 |
+| `reopen_step` | 指定步骤及修复原因，重新打开该步骤并使后续步骤失效；修复后按顺序重新验证。 |
+
+例如，`plan` 的输入为：
+
+```json
+{
+  "action": "plan",
+  "steps": [
+    { "id": "service", "text": "实现服务逻辑", "verification": [{ "command": "pnpm test service.test.ts" }] },
+    { "id": "caller", "text": "接入调用方", "verification": [{ "command": "pnpm test caller.test.ts" }] }
+  ],
+  "integration": [{ "command": "pnpm test service-integration.test.ts" }]
+}
+```
+
+命令只是格式示例，必须替换为仓库真实存在且覆盖需求的测试。配置支持 `cwd`、`timeoutMs`、`stdin`。所有执行仍经过权限与预算检查，计划本身不授予权限。命令成功只证明执行成功；测试覆盖是否充分、架构结论和修改范围是否合理，仍需模型及独立评审判断。
+
+未完成准备或未开始实施步骤时，修改工具、通用终端及 auto/change 的宿主探针不能执行。精确的只读 Git 查询和只读工具仍可用于探索。`analysis` 模式继续使用只读工具及隔离探针，不要求实施计划或集成测试；`auto` 中只读回答仍保持轻量路径，一旦声明或尝试修改即进入上述门槛。`todo` 只是辅助清单，不能推进实施步骤或伪造验证通过。
+
+步骤状态、验证命令及记录随检查点保存，压缩上下文不丢失。恢复保留需求和计划，但清除步骤的通过状态及架构的当前有效标记；需要重新探索、核对架构，并依次重跑步骤检查。运行时不会自动重放修改。集成或独立评审失败时，重新打开相关步骤后修复；预算不足、审批拒绝及未完成验证均不能变成 Done。
+
+桌面进度展示需求理解、架构结论、各实施步骤状态、局部验证、集成测试和独立评审。停止信息列出尚未完成的步骤。
+
+兼容性：显式 `workflowVersion: 2` 和历史 schemaVersion 3 检查点保留轻量工作流；`workflowVersion: 1` 和更早检查点保留旧工作流。新运行在首次执行时保存有效版本，避免恢复时提示词与执行器不一致。
+
+验证覆盖：`tests/sequential-workflow.test.ts` 检查阶段门槛、伪造／过期证据、重排、修复和恢复；`tests/sequential-engine.test.ts` 通过真实 Engine/Bridge 与模拟 provider 检查完整两步流程、累计检查、集成失败修复、拒绝审批、预算停止及验证边界暂停恢复，不调用收费模型。
+
+## 旧版兼容流程（workflowVersion 1）
+
 运行时维护独立于聊天历史的 `CodingWorkflow`。以下阶段通过 `workflow_updated` 事件显示在会话中，并随检查点保存：
 
 ```mermaid

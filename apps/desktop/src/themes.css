@@ -7,7 +7,7 @@
 .theme-settings-heading h3 { display: flex; align-items: center; gap: 9px; margin: 8px 0; font-size: 18px; font-weight: 600; }
 .theme-settings-heading p, .theme-settings-note { color: var(--muted); font-size: 12px; line-height: 1.7; }
 .theme-status { color: var(--muted); font-size: 11px; line-height: 1.6; padding-top: 6px; max-width: 220px; }
-.theme-options { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px; border: 0; margin: 22px 0 14px; padding: 0; min-width: 0; }
+.theme-options { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 220px), 1fr)); gap: 18px; border: 0; margin: 22px 0 14px; padding: 0; min-width: 0; }
 .theme-option { display: block; position: relative; cursor: pointer; min-width: 0; padding: 7px; border: 1px solid var(--line); border-radius: 19px; transition: border-color .18s, background .18s; }
 .theme-option:hover { border-color: var(--line-strong); background: rgba(255,255,255,.025); }
 .theme-option.is-selected { border-color: var(--accent); background: var(--accent-soft); }
@@ -16,6 +16,11 @@
 .theme-preview { display: flex; height: 164px; border-radius: 12px; padding: 12px; gap: 12px; overflow: hidden; border: 1px solid rgba(255,255,255,.08); }
 .theme-preview-classic { background: #211e27; }
 .theme-preview-kelo { background: #fff; border-color: #d9dde5; }
+.theme-preview-system { background: linear-gradient(115deg, #fff 50%, #211e27 50%); border-color: #a8adb7; }
+.theme-preview-system .theme-preview-nav i { background: #a8adb7; }
+.theme-preview-system .theme-preview-workspace { background: linear-gradient(115deg, #fff 42%, #191919 42%); border-color: #a8adb7; }
+.theme-preview-system .theme-preview-title, .theme-preview-system .theme-preview-subtitle { background: #92929f; }
+.theme-preview-system .theme-preview-cards i, .theme-preview-system .theme-preview-composer { background: #a8adb730; border-color: #a8adb7; }
 .theme-preview-nav { display: flex; flex-direction: column; gap: 9px; width: 20%; padding: 6px 0; }
 .theme-preview-nav i { width: 75%; height: 5px; background: rgba(255,255,255,.19); border-radius: 4px; }
 .theme-preview-nav i:first-child { width: 28%; height: 16px; background: #b397d8; margin-bottom: 10px; }
@@ -72,9 +77,10 @@ html[data-theme="kelo"] * { scrollbar-color: #484b58 transparent; }
 html[data-theme="kelo"] *::-webkit-scrollbar-thumb { background-color: #484b58; }
 html[data-theme="kelo"] .workbench.app-shell { background: var(--kelo-background); padding: 14px 14px 14px 0; }
 html[data-theme="kelo"] .workbench.sidebar-collapsed { padding-left: 14px; }
+html[data-theme="kelo"] .workbench .sidebar { --sidebar-section-color: #858995; }
 html[data-theme="kelo"] .workbench .brand-mark { background: rgba(255,255,255,.075); color: #fff; border: 1px solid var(--line); }
 html[data-theme="kelo"] .workbench .brand strong { color: #f5f5fa; }
-html[data-theme="kelo"] .workbench :is(.brand small, .sidebar-section-label, .sidebar-hint, .sidebar-tools > summary, .sidebar-settings small, .sidebar-connection, .project-folder-count, .history-session-content small) { color: var(--muted); }
+html[data-theme="kelo"] .workbench :is(.brand small, .sidebar-hint, .sidebar-settings small, .sidebar-connection) { color: var(--muted); }
 html[data-theme="kelo"] .workbench :is(.new-task-button, .sidebar nav button, .project-folder, .project-session, .sidebar-settings) { color: #c8cad6; }
 html[data-theme="kelo"] .workbench :is(.sidebar nav button[aria-current="page"], .history-session.active) { background: rgba(255,255,255,.09); color: #fff; }
 html[data-theme="kelo"] .workbench :is(.sidebar nav button:hover, .project-folder:hover) { background: rgba(255,255,255,.055); }
@@ -127,7 +133,7 @@ html[data-theme="kelo"] .is-selected .theme-check { color: #11131b; background: 
   .workbench .topbar .theme-quick-switch { max-width: 98px; }
 }
 @media (prefers-reduced-motion: reduce) {
-  html[data-theme="kelo"] .task-starter:hover { transform: none; }
+  html[data-theme="kelo"]:not([data-reduced-motion="false"]) .task-starter:hover { transform: none; }
 }
 
 /* Kelo keeps its glass geometry on a pure white light canvas. */
@@ -165,9 +171,15 @@ html[data-theme="kelo"] body { color: #242833; background: #fff; }
 html[data-theme="kelo"] ::selection { color: #fff; background: #676bd8; }
 html[data-theme="kelo"] * { scrollbar-color: #c4c9d2 transparent; }
 html[data-theme="kelo"] .workbench.app-shell { background: #fff; }
+html[data-theme="kelo"] .workbench .sidebar { --sidebar-section-color: #8d939e; }
 html[data-theme="kelo"] .workbench .brand-mark { color: #4d51bd; background: #f1f2ff; }
 html[data-theme="kelo"] .workbench .brand strong { color: #222631; }
-html[data-theme="kelo"] .workbench :is(.brand small, .sidebar-section-label, .sidebar-hint, .sidebar-tools > summary, .sidebar-settings small, .sidebar-connection, .project-folder-count, .history-session-content small) { color: var(--muted); }
+html[data-theme="kelo"] .workbench :is(.brand small, .sidebar-hint, .sidebar-settings small, .sidebar-connection) { color: var(--muted); }
+html[data-theme="kelo"] .session-status { color: #858b97; }
+html[data-theme="kelo"] .session-status:is(.session-status-planning, .session-status-running, .session-status-verifying) { color: #4d65bd; }
+html[data-theme="kelo"] .session-status:is(.session-status-waiting_approval, .session-status-paused, .session-status-review) { color: #9e6a24; }
+html[data-theme="kelo"] .session-status-completed { color: #168052; }
+html[data-theme="kelo"] .session-status-failed { color: #ba4050; }
 html[data-theme="kelo"] .workbench :is(.new-task-button, .sidebar nav button, .project-folder, .project-session, .sidebar-settings) { color: #4c5260; }
 html[data-theme="kelo"] .workbench :is(.sidebar nav button[aria-current="page"], .history-session.active) { color: #353aa5; background: #eef0ff; }
 html[data-theme="kelo"] .workbench :is(.sidebar nav button:hover, .project-folder:hover) { background: #f4f5f8; }

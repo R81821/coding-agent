@@ -41,10 +41,10 @@ export function McpView({ workspacePath, request = requestDefault, initialSnapsh
     const timer = setInterval(() => { void refresh().catch(() => {}); }, 2000);
     return () => clearInterval(timer);
   }, [pendingAuth, refresh]);
-  async function act(work: () => Promise<void>, message: string) {
+  async function act(work: () => Promise<void | string>, message: string) {
     const current = generation.current;
     setBusy(true); setError(""); setNotice("");
-    try { await work(); if (current === generation.current) { setNotice(message); await refresh(); } }
+    try { const result = await work(); if (current === generation.current) { setNotice(result ?? message); await refresh(); } }
     catch (error) { if (current === generation.current) setError(error instanceof Error ? error.message : String(error)); }
     finally { if (current === generation.current) setBusy(false); }
   }
@@ -74,16 +74,20 @@ export function McpView({ workspacePath, request = requestDefault, initialSnapsh
         <p className="mcp-endpoint" title={server.transport.type === "stdio" ? server.transport.command : server.transport.url}>{server.transport.type === "stdio" ? server.transport.command : server.transport.url}</p>
         <div className="mcp-meta"><span>{server.transport.type === "stdio" ? "本地 · stdio" : server.transport.type === "sse" ? "远程 · SSE" : "远程 · HTTP"}</span><span>{bound ? "已绑定当前项目" : `绑定 ${server.projectPaths.length} 个项目`}</span><span>{status?.toolCount ?? 0} 个工具</span></div>
         {status?.error && <p className="mcp-error">{status.error}</p>}{auth?.error && <p className="mcp-error">{auth.error}</p>}
-        {server.transport.type !== "stdio" && <p className="mcp-muted">{auth?.state === "authorized" ? "OAuth 已登录" : auth?.state === "pending" ? "等待浏览器完成登录" : server.headerKeys.length ? `已保存请求头：${server.headerKeys.join("、")}` : "未配置 OAuth 登录"}</p>}
+        {server.transport.type !== "stdio" && <p className="mcp-muted">{auth?.state === "authorized" ? "OAuth 已登录" : auth?.state === "pending" ? "等待浏览器完成登录" : state === "connected" ? "当前连接无需 OAuth 登录" : server.headerKeys.length ? `已保存请求头：${server.headerKeys.join("、")}` : "未配置 OAuth 登录"}</p>}
         <div className="mcp-actions">
           <BuiButton size="sm" disabled={busy || !workspacePath || !bound || !server.enabled} onClick={() => void act(async () => { await request({ method: state === "connected" ? "mcp.disconnect" : "mcp.connect", params: { serverId: server.id, workspacePath } }); }, state === "connected" ? "连接已断开，在途调用已取消" : "连接成功")}>{state === "connected" ? "断开连接" : "测试连接"}</BuiButton>
           <BuiButton size="sm" disabled={busy || !workspacePath || !bound || !server.enabled} onClick={() => void act(async () => { const result = await request<{ tools: CatalogTool[] }>({ method: "mcp.tools", params: { serverId: server.id, workspacePath } }); setCatalog({ id: server.id, tools: result.tools }); setToolQuery(""); }, "工具目录已刷新")}>工具目录</BuiButton>
           <BuiButton size="sm" disabled={busy} onClick={() => setForm(mcpForm(server, workspacePath))}>编辑</BuiButton>
           <BuiButton size="sm" disabled={busy} onClick={() => void act(() => saveServer(server, { enabled: !server.enabled }), server.enabled ? "服务已停用，在途调用已取消" : "服务已启用")}>{server.enabled ? "停用" : "启用"}</BuiButton>
           {!bound && workspacePath && <BuiButton size="sm" disabled={busy} onClick={() => void act(() => saveServer(server, { projectPaths: [...server.projectPaths, workspacePath] }), "已绑定当前项目")}>绑定当前项目</BuiButton>}
-          {server.transport.type !== "stdio" && <BuiButton size="sm" disabled={busy} onClick={() => void act(async () => {
-            if (auth?.state === "authorized" || auth?.state === "pending") await request({ method: "mcp.auth.logout", params: { serverId: server.id } });
-            else { const result = await request<{ authorizationUrl?: string }>({ method: "mcp.auth.start", params: { serverId: server.id } }); if (result.authorizationUrl) await window.harness.openExternal(result.authorizationUrl); }
+          {server.transport.type !== "stdio" && <BuiButton size="sm" disabled={busy || !workspacePath || !bound || !server.enabled} onClick={() => void act(async () => {
+            if (auth?.state === "authorized" || auth?.state === "pending") { await request({ method: "mcp.auth.logout", params: { serverId: server.id } }); return; }
+            const result = await request<{ state: "not_required" | "pending" | "authorized"; authorizationUrl?: string }>({ method: "mcp.auth.start", params: { serverId: server.id } });
+            if (result.state === "not_required") return "此服务无需 OAuth 登录，已连接";
+            if (result.state === "authorized") return "OAuth 已登录";
+            if (!result.authorizationUrl) throw new Error("服务未返回 OAuth 授权地址");
+            await window.harness.openExternal(result.authorizationUrl);
           }, auth?.state === "authorized" || auth?.state === "pending" ? "已退出登录" : "请在浏览器完成登录")}>{auth?.state === "authorized" ? "退出登录" : auth?.state === "pending" ? "取消登录" : "OAuth 登录"}</BuiButton>}
           <BuiButton size="sm" variant="ghost" disabled={busy} onClick={() => setRemoveId(server.id)}>删除</BuiButton>
         </div>

@@ -28,6 +28,7 @@ import type {
 } from "@harness/protocol";
 import {
   ProfileSchema,
+  migrateContextPolicy,
   ProjectRecordSchema,
   SessionRecordSchema,
 } from "@harness/protocol";
@@ -120,11 +121,12 @@ export class HarnessDatabase {
 
   listProfiles(): Profile[] {
     return this.list<unknown>("profiles").map((stored) => {
-      const normalized = ProfileSchema.parse(stored);
+      const migrated = migrateContextPolicy(stored);
+      const normalized = ProfileSchema.parse(migrated);
       if (
         !stored ||
         typeof stored !== "object" ||
-        !("resiliencePolicy" in stored)
+        !("resiliencePolicy" in stored) || migrated !== stored
       ) {
         this.upsert("profiles", normalized.id, normalized);
       }

@@ -7,7 +7,7 @@ describe("1.4 compacted model history", () => {
   it("rejects DSML summaries and checkpoints the compacted context instead of original history", async () => {
     const model = descriptor({ providerId: "fake", modelId: "compact", displayName: "Compact", capabilities: { vision: false, tools: true, parallelTools: false, structuredOutput: true, maxContextTokens: 4096, dataPolicy: "local" } });
     const requests: ModelRequest[] = [], saved: ModelMessage[][] = [];
-    const provider: ModelProvider = { id: "fake", async listModels() { return [model]; }, async health() { return true; }, estimateCost() { return 0; }, async *stream(request) {
+    const provider: ModelProvider = { id: "fake", supportsNonThinkingCompaction: () => true, async listModels() { return [model]; }, async health() { return true; }, estimateCost() { return 0; }, async *stream(request) {
       requests.push(request);
       yield { type: "text_delta" as const, delta: request.purpose === "compaction" ? "<DSML><invoke name='terminal'>bad</invoke></DSML>" : "Analysis complete; evidence retained." };
     } };

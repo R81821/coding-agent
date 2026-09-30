@@ -1,7 +1,7 @@
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { expect, it } from "vitest";
-import { WorkflowStateSchema, type AgentEvent } from "@harness/protocol";
+import { SequentialWorkflowSchema, WorkflowStateSchema, type AgentEvent } from "@harness/protocol";
 import { WorkflowProgress } from "./WorkflowProgress.js";
 function event(change: boolean): AgentEvent {
  const workflow = WorkflowStateSchema.parse({ taskMode: change ? "change" : "analysis", intent: change ? "change" : "analysis", phase: "repository_recon", diffRevision: -1, diagnosisRequired: false, lastFailure: "", requirementEvidence: [], review: "", objective: "fixture", requirements: [], context: "", plan: [], observations: [], relevantFiles: [], changedFiles: change ? ["src/example.ts"] : [], revision: change ? 1 : 0, localRevision: -1, broaderRevision: -1, requirementsRevision: -1, reviewedRevision: -1, failures: 0, hypotheses: [], repairs: 0, todos: [{id:"todo",text:"核对设置",status:"in_progress"}] });
@@ -14,4 +14,15 @@ it("shows actual todos and analysis without a fabricated modification revision",
 it("shows actual changes and required independent review", () => {
  const html = renderToStaticMarkup(<WorkflowProgress events={[event(true)]} />);
  expect(html).toContain("src/example.ts"); expect(html).toContain("修改版本 1"); expect(html).not.toContain("无需评审");
+});
+it("shows architecture, step verification and mandatory integration separately from todo", () => {
+  const update = event(true);
+  if (update.type !== "workflow_updated") throw new Error("Expected workflow update");
+  update.workflow.sequential = SequentialWorkflowSchema.parse({ understanding: "连接服务与调用方", architecture: "服务层提供逻辑，调用方负责组合", architectureEpoch: update.workflow.epoch, steps: [{ id: "service", text: "实现服务", verification: [{ command: "unit-service" }], status: "verified" }, { id: "caller", text: "连接调用方", verification: [{ command: "unit-caller" }], status: "in_progress" }] });
+  const html = renderToStaticMarkup(<WorkflowProgress events={[update]} />);
+  expect(html).toContain("连接服务与调用方");
+  expect(html).toContain("服务层提供逻辑");
+  expect(html).toContain("实现服务 · 验证通过");
+  expect(html).toContain("连接调用方 · 实施／验证中");
+  expect(html).toContain("集成测试");
 });

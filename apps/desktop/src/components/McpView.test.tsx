@@ -27,3 +27,11 @@ test("no-project view tells users to select a project before connecting", () => 
   const html = renderToStaticMarkup(<McpView workspacePath="" />);
   expect(html).toContain("选择项目后"); expect(html).toContain("新增服务");
 });
+
+test("a connected public remote service tells the user OAuth is unnecessary", () => {
+  const config = McpServerConfigSchema.parse({ id: "public", name: "Microsoft Learn", revision: 1, enabled: true, transport: { type: "streamable_http", url: "https://learn.microsoft.com/api/mcp" }, projectPaths: ["C:/project"] });
+  const { env, headers, ...publicFields } = config;
+  const html = renderToStaticMarkup(<McpView workspacePath="C:/project" initialSnapshot={{ servers: [{ ...publicFields, envKeys: [], headerKeys: [] }], statuses: [{ serverId: "public", revision: 1, workspacePath: "C:/project", state: "connected", toolCount: 3 }], auth: { public: { state: "signed_out" } } }} />);
+  expect(html).toContain("当前连接无需 OAuth 登录");
+  expect(html).toContain("3 个工具");
+});

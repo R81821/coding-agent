@@ -62,10 +62,10 @@ export function DesktopChrome({ children }: { children: React.ReactNode }) {
   }
 
   useEffect(() => {
-    const syncTheme = () => { void window.harness.setTitlebarTheme(document.documentElement.dataset.theme === "kelo" ? "kelo" : "classic").catch(() => setError("窗口配色同步失败，请重新加载。")); };
+    const syncTheme = () => { const { appearanceTone, theme } = document.documentElement.dataset; void window.harness.setTitlebarTheme((appearanceTone ? appearanceTone === "light" : theme === "kelo") ? "kelo" : "classic").catch(() => setError("窗口配色同步失败，请重新加载。")); };
     syncTheme();
     const observer = new MutationObserver(syncTheme);
-    observer.observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
+    observer.observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme", "data-appearance-tone"] });
     return () => observer.disconnect();
   }, []);
   useEffect(() => {

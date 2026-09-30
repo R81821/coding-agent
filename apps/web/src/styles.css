@@ -1,0 +1,166 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+@custom-variant dark (&:is(.dark *));
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--foreground);
+  --color-popover: var(--card);
+  --color-popover-foreground: var(--foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--foreground);
+  --color-muted: var(--secondary);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--foreground);
+  --color-destructive: var(--destructive);
+  --color-border: var(--border);
+  --color-input: var(--border);
+  --color-ring: var(--primary);
+  --color-sidebar: var(--sidebar);
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+  --font-sans: "Inter", "Segoe UI", "Microsoft YaHei", sans-serif;
+}
+
+:root {
+  --background: #fcfcfa;
+  --foreground: #292e2b;
+  --card: #ffffff;
+  --primary: #47644f;
+  --primary-foreground: #ffffff;
+  --secondary: #f0f2ee;
+  --muted-foreground: #777d77;
+  --accent: #e7ece5;
+  --destructive: #bd4945;
+  --border: #e4e7e1;
+  --sidebar: #f3f4f0;
+  --radius: 0.75rem;
+}
+.dark {
+  --background: #191d1b;
+  --foreground: #e3e8e1;
+  --card: #202622;
+  --primary: #b5d0b1;
+  --primary-foreground: #1d3022;
+  --secondary: #292f2a;
+  --muted-foreground: #a0aba1;
+  --accent: #303d33;
+  --destructive: #f18f89;
+  --border: #333c35;
+  --sidebar: #171b18;
+}
+@layer base {
+  * {
+    @apply border-border;
+    scrollbar-width: thin;
+    scrollbar-color: var(--border) transparent;
+  }
+  body {
+    @apply m-0 bg-background font-sans text-sm text-foreground antialiased;
+  }
+  button,
+  [role="button"] {
+    cursor: pointer;
+  }
+  button:disabled {
+    cursor: not-allowed;
+  }
+  ::selection {
+    background: #bbcdbb80;
+  }
+}
+@layer components {
+  .prose-harness {
+    @apply leading-7 break-words;
+  }
+  .prose-harness > * + * {
+    @apply mt-4;
+  }
+  .prose-harness h1,
+  .prose-harness h2,
+  .prose-harness h3 {
+    @apply mt-6 font-semibold;
+  }
+  .prose-harness h1 {
+    @apply text-xl;
+  }
+  .prose-harness h2 {
+    @apply text-lg;
+  }
+  .prose-harness ul {
+    @apply list-disc space-y-1 pl-5;
+  }
+  .prose-harness ol {
+    @apply list-decimal space-y-1 pl-5;
+  }
+  .prose-harness pre {
+    @apply overflow-x-auto rounded-xl border bg-secondary p-4 text-xs;
+  }
+  .prose-harness :not(pre) > code {
+    @apply rounded bg-secondary px-1 py-0.5 text-[0.9em];
+  }
+  .prose-harness a {
+    @apply text-primary underline underline-offset-4;
+  }
+  .prose-harness table {
+    @apply block max-w-full overflow-x-auto border-collapse text-left;
+  }
+  .prose-harness td,
+  .prose-harness th {
+    @apply border px-3 py-2;
+  }
+  .prose-harness blockquote {
+    @apply border-l-2 pl-4 text-muted-foreground;
+  }
+  .sidebar-type,
+  .sidebar-type [data-slot="button"] {
+    font-size: 14px;
+    font-weight: 400;
+  }
+  .mascot-walk {
+    width: 96px;
+    height: 96px;
+    background: url("./assets/xiaohuiga-pinwheel-walk.png") 0 0 / 300% 200%
+      no-repeat;
+    image-rendering: pixelated;
+    animation: pinwheel-walk 900ms step-end infinite;
+  }
+}
+@keyframes pinwheel-walk {
+  0%,
+  100% {
+    background-position: 0 0;
+  }
+  16.6667% {
+    background-position: 50% 0;
+  }
+  33.3333% {
+    background-position: 100% 0;
+  }
+  50% {
+    background-position: 0 100%;
+  }
+  66.6667% {
+    background-position: 50% 100%;
+  }
+  83.3333% {
+    background-position: 100% 100%;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    scroll-behavior: auto !important;
+    transition-duration: 0.01ms !important;
+  }
+}

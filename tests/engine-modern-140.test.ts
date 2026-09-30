@@ -21,6 +21,7 @@ const say = (delta: string): ProviderStreamEvent => ({ type: "text_delta", delta
 const call = (id: string, name: string, input: Record<string, unknown>): ProviderStreamEvent => ({ type: "tool_call", toolCall: { id, name, input } });
 
 type ModernOptions = {
+  sourceText?: string;
   taskMode?: RunSpec["taskMode"];
   verificationWritesSource?: boolean;
   /** Give the profile a real local check so `verify()` has an item to run. */
@@ -34,8 +35,8 @@ type ModernOptions = {
 };
 
 /**
- * The 1.4.0 modern workflow is the production default: RunSpec omits workflowVersion, so
- * `modern` is true and the lightweight tools plus runtime gates are what the model actually sees.
+ * Pin the 1.4.0 compatibility workflow. The production default now has sequential implementation
+ * gates and is exercised separately in sequential-engine.test.ts.
  */
 async function analysisRun(
   respond: (request: ModelRequest, turn: number, workspace: string) => ProviderStreamEvent[],
@@ -59,7 +60,7 @@ async function analysisRun(
         return saveCheckpoint(checkpoint);
       };
     }
-    await writeFile(join(root, "memory.ts"), "export const memory = 1;\n");
+    await writeFile(join(root, "memory.ts"), options.sourceText ?? "export const memory = 1;\n");
     const requests: ModelRequest[] = [];
     const executions: string[] = [];
     const model = descriptor({ providerId: "fake", modelId: "modern", displayName: "Modern", capabilities: { vision: false, tools: true, parallelTools: true, structuredOutput: true, maxContextTokens: 128_000, dataPolicy: "local" } });
@@ -82,6 +83,7 @@ async function analysisRun(
         : {}),
     };
     const run: RunSpec = {
+      workflowVersion: 2,
       id: newId("run"),
       sessionId: "modern-140",
       request: "检查 memory 模块并给出优化方案",
@@ -131,6 +133,18 @@ function toolOutput(request: ModelRequest | undefined, toolCallId: string): stri
 }
 
 describe("1.4.0 modern analysis path end to end", () => {
+  it("keeps complete stored evidence available through a bounded page after initial preview truncation", async () => {
+    const marker = "MIDDLE_EVIDENCE_MARKER";
+    const observed = await analysisRun((_request, turn) => turn === 1
+      ? [call("large-read", "read_file", { path: "memory.ts" })]
+      : turn === 2 ? [call("recall-large", "read_evidence", { id: "large-read", offset: 0, limit: 16000 })]
+      : [say("已读取原始证据，检查完成。")], { sourceText: "a".repeat(6000) + marker + "z".repeat(6000) });
+    expect(toolOutput(observed.requests[1], "large-read")).not.toContain(marker);
+    expect(toolOutput(observed.requests[2], "recall-large")).toContain(marker);
+    expect(observed.events).toContainEqual(expect.objectContaining({ type: "context_adjusted", adjustment: expect.objectContaining({ kind: "tool_result_bound" }) }));
+    const evidence = observed.events.find(event => event.type === "tool_finished" && event.callId === "large-read");
+    expect(JSON.stringify(evidence)).toContain(marker);
+  });
   it("completes a read-only analysis with no phantom revision and no update_workflow", async () => {
     const observed = await analysisRun((_request, turn) => turn === 1
       ? [call("read", "read_file", { path: "memory.ts" })]
