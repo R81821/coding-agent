@@ -29,17 +29,21 @@ function finishStep(w: SequentialWorkflow, stepId: string) {
   w.applyEffect({ kind: "repository_write", changedFiles: [stepId + ".ts"] });
   w.recordVerification(receipt(w));
 }
+function accept(w: SequentialWorkflow, overrides: Record<string, unknown> = {}) {
+  const diff = w.state.observations.findLast(item => ["git_diff", "workspace_diff"].includes(item.tool))!;
+  w.acceptRequirements(w.state.requirementIds.map(requirementId => ({ requirementId, summary: "Service and caller behavior are covered by the passing test suites", observationIds: [diff.id], verificationIds: [w.state.localCheck.runId, w.state.broaderCheck.runId], diffObservationId: diff.id, passed: true, ...overrides })));
+}
 
 describe("sequential implementation gates", () => {
-  it("requires understanding, fresh exploration, architecture and a plan before writes", () => {
+  it("requires understanding, current repository evidence, architecture and a plan before writes", () => {
     const w = new SequentialWorkflow("Implement", () => {});
     expect(w.before({ id: "write", name: "patch", input: {} }, writer)).toContain("workflow_preparation_required");
     expect(w.needsChange).toBe(true);
     inspect(w, "too-early");
     w.advance({ action: "understand", summary: "Implement service", requirements: ["Service works"] });
-    expect(() => w.advance({ action: "architecture", summary: "architecture", evidenceIds: ["too-early"] })).toThrow(/fresh/);
     expect(() => w.advance({ action: "architecture", summary: "architecture", evidenceIds: ["invented"] })).toThrow(/fresh/);
     expect(() => w.advance({ action: "plan", steps: [{ id: "one", text: "one", verification: [check("test")] }], integration: [check("integration")] })).toThrow(/identify architecture/);
+    expect(() => w.advance({ action: "architecture", summary: "architecture", evidenceIds: ["too-early"] })).not.toThrow();
     prepare(w);
     expect(w.before({ id: "write", name: "patch", input: {} }, writer)).toContain("workflow_step_required");
     w.advance({ action: "start_step", stepId: "service" });
@@ -72,7 +76,7 @@ describe("sequential implementation gates", () => {
     expect(w.plannedChecks().filter(item => item.stage === "local").map(item => item.command)).toEqual(["unit-service", "unit-caller"]);
   });
 
-  it("requires integration followed by fresh diff and independent review", () => {
+  it("requires integration followed by fresh diff and test-backed requirement acceptance", () => {
     const w = prepare();
     finishStep(w, "service"); finishStep(w, "caller");
     w.observe({ id: "early-diff", name: "git_diff", input: {} }, { output: "diff" });
@@ -84,10 +88,15 @@ describe("sequential implementation gates", () => {
     expect(w.baseCanFinish()).toBe(false);
     w.observe({ id: "final-diff", name: "git_diff", input: {} }, { output: "complete diff" });
     w.acceptFinalReport("Service and caller verified");
-    expect(w.baseCanFinish()).toBe(true);
+    expect(w.baseCanFinish()).toBe(false);
     expect(w.canFinish()).toBe(false);
-    w.recordIndependentReview(true, "Requirements and integration coverage verified");
+    accept(w);
+    expect(w.state.requirementsRevision).toBe(w.state.revision);
+    expect(w.state.reviewedRevision).toBe(-1);
+    w.acceptFinalReport("Service and caller verified");
     expect(w.canFinish()).toBe(true);
+    expect(w.requiresIndependentReview).toBe(false);
+    expect(w.state.independentReview.status).toBe("skipped");
   });
 
   it("reopens a failed integration/review and invalidates the chosen step and successors", () => {
@@ -99,6 +108,74 @@ describe("sequential implementation gates", () => {
     w.advance({ action: "reopen_step", stepId: "service", reason: "integration found wrong service behavior" });
     expect(w.state.sequential?.steps.map(step => step.status)).toEqual(["in_progress", "pending"]);
     expect(() => w.advance({ action: "start_step", stepId: "caller" })).toThrow();
+  });
+
+  it("repairs a failed integration suite, reruns tests and completes with refreshed acceptance evidence", () => {
+    const w = prepare();
+    finishStep(w, "service"); finishStep(w, "caller");
+    w.recordVerification(receipt(w, "broader", false));
+    expect(w.canFinish()).toBe(false);
+    expect(w.nextAction()).toContain("repair and reverify");
+    const requirements = [...w.state.requirements];
+    w.advance({ action: "reopen_step", stepId: "caller", reason: "Diagnosed integration failure: fix caller mapping and add the boundary regression in its test file" });
+    w.applyEffect({ kind: "repository_write", changedFiles: ["caller.ts", "caller.test.ts"] });
+    w.recordVerification(receipt(w, "local"));
+    w.recordVerification(receipt(w, "broader"));
+    w.observe({ id: "repaired-diff", name: "workspace_diff", input: {} }, { output: "complete repaired code and test diff" });
+    accept(w);
+    w.acceptFinalReport("Caller mapping fixed; regression and integration suites passed");
+    expect(w.canFinish()).toBe(true);
+    expect(w.state.requirements).toEqual(requirements);
+    expect(w.state.independentReview.status).toBe("skipped");
+  });
+
+  it("preserves current verification when requirement acceptance is rejected and requests correction", () => {
+    const w = prepare();
+    finishStep(w, "service"); finishStep(w, "caller");
+    w.recordVerification(receipt(w, "broader"));
+    w.observe({ id: "final-diff", name: "workspace_diff", input: {} }, { output: "complete diff" });
+    accept(w); w.acceptFinalReport("Service and caller verified");
+    const verified = w.snapshot();
+    const feedback = "Missing code evidence for caller behavior";
+    expect(() => accept(w, { passed: false, summary: feedback })).toThrow(feedback);
+
+    expect(w.state.localCheck).toEqual(verified.localCheck);
+    expect(w.state.broaderCheck).toEqual(verified.broaderCheck);
+    expect(w.state.diffRevision).toBe(verified.diffRevision);
+    expect(w.state.sequential?.steps).toEqual(verified.sequential?.steps);
+    expect(w.state.requirements).toEqual(verified.requirements);
+    expect(w.state.plan).toEqual(verified.plan);
+    expect(w.checksCurrent()).toBe(true);
+    expect(w.baseCanFinish()).toBe(false);
+    expect(w.canFinish()).toBe(false);
+    expect(w.state.requirementsRevision).toBe(-1);
+    expect(w.state.reviewedRevision).toBe(-1);
+    expect(w.state.failures).toBe(0);
+    expect(w.projection()).toMatchObject({ independentReview: { status: "skipped" }, requirementReview: [] });
+    expect(w.nextAction()).toContain("check_requirements");
+    expect(() => w.advance({ action: "understand", summary: "Ignore the missing evidence", requirements: ["Service works"] })).toThrow(/Keep/);
+
+    w.observe({ id: "missing-evidence", name: "read_file", input: { path: "caller.ts" } }, { output: "raw caller source" });
+    accept(w, { observationIds: ["missing-evidence"] });
+    w.acceptFinalReport("Updated findings with the missing raw evidence");
+    expect(w.canFinish()).toBe(true);
+  });
+
+  it.each(["write", "tool-failure"])("invalidates passing verification and acceptance after %s", kind => {
+    const w = prepare();
+    finishStep(w, "service"); finishStep(w, "caller");
+    w.recordVerification(receipt(w, "broader"));
+    w.observe({ id: "final-diff", name: "workspace_diff", input: {} }, { output: "complete diff" });
+    accept(w); w.acceptFinalReport("Service and caller verified");
+    if (kind === "write") w.applyEffect({ kind: "repository_write", changedFiles: ["caller.ts"] });
+    else w.observe({ id: "broken-read", name: "read_file", input: { path: "caller.ts" } }, { output: "EACCES caller.ts", isError: true });
+    expect(w.checksCurrent()).toBe(false);
+    expect(w.canFinish()).toBe(false);
+    expect(w.state.localCheck.status).toBe("pending");
+    expect(w.state.broaderCheck.status).toBe("pending");
+    expect(w.state.diffRevision).toBe(-1);
+    expect(w.state.independentReview.status).toBe("skipped");
+    if (kind === "write") expect(w.state.sequential?.steps[1]?.status).toBe("in_progress");
   });
 
   it("preserves requirements and plan on recovery but invalidates architecture and all receipts", () => {

@@ -1,8 +1,10 @@
 import type { AgentEvent } from "@harness/protocol";
-import { dedupeFinalText } from "./assistant-messages.js";
+import { dedupeFinalText, replacesFinalText } from "./assistant-messages.js";
 
 type ToolStartedEvent = Extract<AgentEvent, { type: "tool_started" }>;
 type ToolFinishedEvent = Extract<AgentEvent, { type: "tool_finished" }>;
+type ResultEvent = Extract<AgentEvent, { type: "result" }>;
+type TextPart = { text: string; turn: string | undefined };
 
 export type ToolTimelineItem = {
   kind: "tool";
@@ -15,7 +17,7 @@ export type TimelineItem =
   | { kind: "event"; event: AgentEvent };
 
 export type ConversationStreamItem =
-  | { kind: "text"; id: string; text: string; process: boolean }
+  | { kind: "text"; id: string; text: string; process: boolean; result?: ResultEvent }
   | Extract<TimelineItem, { kind: "tool_group" }>
   | Extract<TimelineItem, { kind: "event" }>;
 
@@ -26,30 +28,71 @@ export function buildConversationStream(events: AgentEvent[]): ConversationStrea
   let textIndex = 0;
   let pendingTurnStart = false;
   let latestTurnStart: number | undefined;
+  let currentTurn: string | undefined;
+  let textParts: TextPart[] = [];
+  const emittedParts = new Map<ConversationStreamItem, TextPart[]>();
   let activeGroup: Extract<TimelineItem, { kind: "tool_group" }> | undefined;
-  const pushText = (value: string, process: boolean): boolean => {
+  const pushText = (value: string, process: boolean, parts: TextPart[] = [], result?: ResultEvent): boolean => {
     if (!value.trim() || isHiddenSystemMessage(value)) return false;
-    stream.push({ kind: "text", id: `text-${textIndex++}`, text: value, process });
+    const item: ConversationStreamItem = { kind: "text", id: `text-${textIndex++}`, text: value, process, ...(result ? { result } : {}) };
+    stream.push(item);
+    emittedParts.set(item, parts);
     return true;
   };
-  const flushText = (process: boolean): boolean => {
-    const emitted = pushText(text, process);
+  const resetText = () => {
     text = "";
+    textParts = [];
     pendingTurnStart = false;
     latestTurnStart = undefined;
+  };
+  const flushText = (process: boolean): boolean => {
+    const emitted = pushText(text, process, textParts);
+    resetText();
     return emitted;
   };
+  const removeTurnText = (turn: string) => {
+    // A report may already have been flushed by an activity event. Remove only its exact
+    // source turn, leaving every other turn and the stored events intact.
+    for (let index = stream.length - 1; index >= 0; index--) {
+      const item = stream[index];
+      if (item?.kind !== "text") continue;
+      const parts = emittedParts.get(item);
+      if (!parts?.some(part => part.turn === turn)) continue;
+      const remaining = parts.filter(part => part.turn !== turn);
+      const value = remaining.map(part => part.text).join("").trim();
+      if (value) {
+        item.text = value;
+        item.process = true;
+        delete item.result;
+        emittedParts.set(item, remaining);
+      } else {
+        stream.splice(index, 1);
+        emittedParts.delete(item);
+      }
+    }
+  };
+  const turnText = (turn: string | undefined): string => turn === undefined ? "" :
+    [...emittedParts.values(), textParts].flatMap(parts => parts.filter(part => part.turn === turn)).map(part => part.text).join("");
   for (const event of events) {
     if (event.type === "text_delta") {
       if (pendingTurnStart && event.delta.trim()) {
-        if (text && !/\s$/.test(text) && !/^\s/.test(event.delta)) text += " ";
+        if (text && !/\s$/.test(text) && !/^\s/.test(event.delta)) {
+          text += " ";
+          textParts.push({ text: " ", turn: undefined });
+        }
         latestTurnStart = text.length;
         pendingTurnStart = false;
       }
       text += event.delta;
+      if (!currentTurn?.startsWith(`${event.runId}\0`)) currentTurn = `${event.runId}\0unmarked`;
+      const turn = currentTurn;
+      const last = textParts.at(-1);
+      if (last && last.turn === turn) last.text += event.delta;
+      else textParts.push({ text: event.delta, turn });
     } else if (event.type === "assistant_turn_started") {
       // Keep progress from adjacent model turns in one live message until an activity boundary.
       if (text.trim()) pendingTurnStart = true;
+      currentTurn = `${event.runId}\0${event.sequence}`;
     } else if (event.type === "tool_started") {
       if (flushText(true)) activeGroup = undefined;
       const item: ToolTimelineItem = { kind: "tool", started: event };
@@ -64,32 +107,36 @@ export function buildConversationStream(events: AgentEvent[]): ConversationStrea
       if (tool) tool.finished = event;
     } else if (event.type === "result") {
       const paused = event.status === "paused";
-      let streamedText = text;
-      const latestTurnText = latestTurnStart === undefined ? "" : text.slice(latestTurnStart).trimStart();
-      if (paused && latestTurnStart !== undefined && isHiddenSystemMessage(latestTurnText)) {
-        pushText(text.slice(0, latestTurnStart).trimEnd(), true);
-        streamedText = latestTurnText;
-        text = "";
-        pendingTurnStart = false;
-        latestTurnStart = undefined;
-      } else if (!paused && latestTurnStart !== undefined) {
-        pushText(text.slice(0, latestTurnStart).trimEnd(), true);
-        streamedText = latestTurnText;
-        pushText(streamedText, false);
-        text = "";
-        pendingTurnStart = false;
-        latestTurnStart = undefined;
-      } else if (!paused && pendingTurnStart) {
-        pushText(text.trimEnd(), true);
-        streamedText = "";
-        text = "";
-        pendingTurnStart = false;
-        latestTurnStart = undefined;
+      if (!paused && event.sourceAssistantTurnSequence !== undefined) {
+        const turn = `${event.runId}\0${event.sourceAssistantTurnSequence}`;
+        // A preview/page may contain text but omit its turn marker. Use only the same
+        // exact-prefix compatibility rule until canonical events provide the reference.
+        const fallback = !turnText(turn) && currentTurn === `${event.runId}\0unmarked` &&
+          replacesFinalText(turnText(currentTurn), event.text) ? currentTurn : undefined;
+        flushText(true);
+        removeTurnText(turn);
+        if (fallback) removeTurnText(fallback);
+        pushText(event.text, false, [{ text: event.text, turn }], event);
+      } else if (!paused && currentTurn?.startsWith(`${event.runId}\0`) && replacesFinalText(turnText(currentTurn), event.text)) {
+        flushText(true);
+        removeTurnText(currentTurn);
+        pushText(event.text, false, [{ text: event.text, turn: currentTurn }], event);
       } else {
-        flushText(paused);
+        const start = pendingTurnStart ? text.length : latestTurnStart ?? 0;
+        const prefix = text.slice(0, start).trimEnd();
+        const streamedText = text.slice(start).trimStart();
+        pushText(prefix, true);
+        if (!paused && replacesFinalText(streamedText, event.text)) {
+          // Preserve an added stop/review paragraph instead of discarding the whole result.
+          pushText(event.text, false, [], event);
+        } else {
+          pushText(streamedText, paused || Boolean(event.text.trim()), [],
+            !paused && !event.text.trim() ? event : undefined);
+          const finalText = dedupeFinalText(streamedText, event.text);
+          if (finalText) pushText(finalText, paused, [], event);
+        }
+        resetText();
       }
-      const finalText = dedupeFinalText(streamedText, event.text);
-      if (finalText && !isHiddenSystemMessage(finalText)) stream.push({ kind: "text", id: `result-${event.id}`, text: finalText, process: paused });
       activeGroup = undefined;
     } else if (event.type === "approval_required" || event.type === "error" || event.type === "provider_retry" || event.type === "self_correction_started" || event.type === "repair_started" || event.type === "capabilities_resolved") {
       flushText(true);

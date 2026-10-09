@@ -135,7 +135,7 @@ export class OpenAIProvider extends HttpProvider {
       ...(request.promptCacheKey ? { prompt_cache_key: request.promptCacheKey } : {}), stream: true, store: request.store,
       max_output_tokens: request.maxOutputTokens, parallel_tool_calls: request.parallelToolCalls,
       ...(deepSeek && request.disableThinking ? { reasoning: { effort: "none" } } : {}),
-      tools: request.tools.map(tool => ({ type: "function", name: tool.name, description: tool.description, parameters: tool.inputSchema, strict: true })) };
+      tools: request.tools.map(tool => ({ type: "function", name: tool.name, description: tool.description, parameters: tool.inputSchema, strict: tool.strict ?? true })) };
     const send = (value: unknown) => this.request(this.baseUrl + "/responses", { method: "POST", headers: authHeaders(this.apiKey), signal, body: canonicalJson(value) });
     if (request.cacheDiagnostics) yield { type: "cache_diagnostic", diagnostic: this.cacheDiagnostics.observe(request, "responses", body, fullInput) };
     let response = await send(body);
@@ -364,7 +364,7 @@ export class OpenAICompatibleProvider extends HttpProvider {
         ...(request.promptCacheKey ? { prompt_cache_key: request.promptCacheKey } : {}),
         parallel_tool_calls: request.parallelToolCalls,
         ...(isOfficialDeepSeek(this.baseUrl) && request.disableThinking ? { thinking: { type: "disabled" } } : {}),
-        tools: request.tools.map((tool) => ({ type: "function", function: { name: tool.name, description: tool.description, parameters: tool.inputSchema, strict: true } }))
+        tools: request.tools.map((tool) => ({ type: "function", function: { name: tool.name, description: tool.description, parameters: tool.inputSchema, strict: tool.strict ?? true } }))
     };
     if (request.cacheDiagnostics) yield { type: "cache_diagnostic", diagnostic: this.cacheDiagnostics.observe(request, "chat_completions", body) };
     const response = await this.request(`${this.baseUrl}/chat/completions`, {

@@ -27,6 +27,24 @@ it('cancels in-flight requests without reporting success', async () => {
   jobs.cancel(job.id);
   expect((await finished(jobs, job.id)).status).toBe('cancelled');
 });
+it('freezes the selected profile output ceiling for a running recommendation job', async () => {
+  const requests: ModelRequest[] = [];
+  const model = descriptor({ providerId: 'openai', modelId: 'configured', displayName: 'Configured' });
+  model.capabilities.maxOutputTokens = 2048;
+  const provider: ModelProvider = {
+    id: 'openai', listModels: async () => [model], health: async () => true, estimateCost: () => 0,
+    async *stream(request) { requests.push(request); yield { type: 'text_delta', delta: 'No results.' } as const; }
+  };
+  const installer = new SkillInstaller(new SkillService('/unused'));
+  const jobs = new SkillJobs(installer, [provider], () => {});
+  const profile = structuredClone(DEFAULT_PROFILE);
+  profile.generationPolicy = { maxOutputTokens: 1234, reviewMaxOutputTokens: 512 };
+  const job = jobs.recommend('anything', profile);
+  profile.generationPolicy.maxOutputTokens = 8_192;
+  expect((await finished(jobs, job.id)).status).toBe('completed');
+  expect(requests).toHaveLength(1);
+  expect(requests[0]!.maxOutputTokens).toBe(1234);
+});
 it.each([false, true])('uses read-only GitHub fallback when search is missing or misconfigured (%s)', async invalidSearch => {
   const requests: ModelRequest[] = []; let fallbackUsed = false;
   const provider: ModelProvider = {

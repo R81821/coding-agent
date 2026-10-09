@@ -11,7 +11,15 @@ afterEach(async () => { await Promise.all(directories.splice(0).map(path => rm(p
 describe("embedded browser boundary", () => {
   it("allows local previews but rejects privileged and credential-bearing URLs", () => {
     expect(browserUrl("http://127.0.0.1:3000")).toBe("http://127.0.0.1:3000/");
-    for (const url of ["file:///C:/secret", "javascript:alert(1)", "https://user:pass@example.com", "data:text/html,hello"]) expect(() => browserUrl(url)).toThrow();
+    for (const url of ["javascript:alert(1)", "https://user:pass@example.com", "data:text/html,hello", "chrome://settings"]) expect(() => browserUrl(url)).toThrow();
+  });
+  it("accepts file navigation with encoded paths, queries and fragments", () => {
+    expect(browserUrl("file:///C:/项目/preview page.html?mode=preview#section-1")).toBe("file:///C:/%E9%A1%B9%E7%9B%AE/preview%20page.html?mode=preview#section-1");
+    for (const url of ["file:///D:/preview/a%23b%25.html", "file:///tmp/preview.html", "file://server/share/preview.html"]) expect(browserUrl(url)).toBe(url);
+  });
+  it("keeps downloads limited to network URLs and network-backed blobs", () => {
+    expect(browserUrl("blob:https://example.com/fixture", true)).toBe("blob:https://example.com/fixture");
+    for (const url of ["file:///C:/preview.html", "blob:file:///C:/preview.html", "blob:null/fixture", "about:blank"]) expect(() => browserUrl(url, true)).toThrow();
   });
   it("requires specific upload files and refuses arbitrary JavaScript actions", () => {
     expect(BrowserActionSchema.safeParse({ action: "upload", selector: "input", paths: [] }).success).toBe(false);

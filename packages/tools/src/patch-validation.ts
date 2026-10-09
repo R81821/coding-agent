@@ -107,3 +107,115 @@ export function validatePatchPaths(patch: string): void {
   }
   if (!sawPath || oldPath !== undefined || oldLines || newLines) throw new Error("Patch contains incomplete file headers or hunks");
 }
+
+export interface PatchTargetRange { path: string; startLine: number; endLine: number }
+interface PatchSourceHunk { path: string; startLine: number; lines: string[]; newFile: boolean }
+export class PatchFormatError extends Error {
+  constructor(message: string, readonly paths: string[], readonly targets: PatchTargetRange[]) { super(message); }
+}
+
+/** Repair redundant counts/new-file positions. Never change old positions or source lines. */
+export function prepareUnifiedPatch(patch: string): {
+  patch: string; paths: string[]; targets: PatchTargetRange[]; sourceHunks: PatchSourceHunk[]; correctedHunks: number;
+} {
+  const lines = patch.split(/\r?\n/);
+  const paths = new Set<string>();
+  const targets: PatchTargetRange[] = [];
+  const sourceHunks: PatchSourceHunk[] = [];
+  let oldPath: string | undefined;
+  let filePath: string | undefined;
+  let fileHeaders = false;
+  let newFile = false;
+  let fileDelta = 0;
+  let correctedHunks = 0;
+  const fail: (message: string, line: number) => never = (message, line) => {
+    throw new PatchFormatError(`${message} at line ${line + 1}`, [...paths], targets);
+  };
+  const remember = (path: string, allowNull: boolean, stripPrefix: boolean): string => {
+    validatePath(path, allowNull, stripPrefix);
+    const actual = stripPrefix ? path.replace(/^[ab]\//, "") : path;
+    if (actual !== "/dev/null") paths.add(actual);
+    return actual;
+  };
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index]!;
+    if (line.startsWith("diff --git ")) {
+      if (oldPath !== undefined) fail("Patch is missing its new-file header", index);
+      for (const path of diffPaths(line.slice(11))) remember(path, false, true);
+      fileHeaders = false;
+      filePath = undefined;
+      fileDelta = 0;
+    } else if (/^---[ \t]/.test(line)) {
+      if (oldPath !== undefined) fail("Patch is missing its new-file header", index);
+      oldPath = remember(headerPath(line.slice(4), true), true, true);
+      fileHeaders = false;
+      fileDelta = 0;
+    } else if (/^\+\+\+[ \t]/.test(line)) {
+      if (oldPath === undefined) fail("Patch is missing its old-file header", index);
+      const newPath = remember(headerPath(line.slice(4), true), true, true);
+      if (oldPath === "/dev/null" && newPath === "/dev/null") fail("Patch cannot have two null paths", index);
+      filePath = oldPath === "/dev/null" ? newPath : oldPath;
+      newFile = oldPath === "/dev/null";
+      oldPath = undefined;
+      fileHeaders = true;
+    } else if (line.startsWith("@@")) {
+      if (!fileHeaders || !filePath) fail("Patch hunk is missing file headers", index);
+      const header = /^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@(.*)$/.exec(line);
+      if (!header) fail("Patch contains an invalid hunk header", index);
+      const oldStart = Number(header[1]);
+      const declaredOld = Number(header[2] ?? 1);
+      const newStart = Number(header[3]);
+      const declaredNew = Number(header[4] ?? 1);
+      if (![oldStart, declaredOld, newStart, declaredNew].every(Number.isSafeInteger)) fail("Patch contains an invalid hunk range", index);
+      let oldCount = 0;
+      let newCount = 0;
+      const sourceLines: string[] = [];
+      let changes = 0;
+      let lastWasContent = false;
+      let cursor = index + 1;
+      for (; cursor < lines.length; cursor += 1) {
+        const body = lines[cursor]!;
+        if (body.startsWith("@@") || body.startsWith("diff --git ") || (body === "" && cursor === lines.length - 1)) break;
+        // Plain multi-file diffs have no unambiguous delimiter. Only split a header pair
+        // after the preceding hunk's declared content is complete; otherwise reject it.
+        if (/^---[ \t]/.test(body) && /^\+\+\+[ \t]/.test(lines[cursor + 1] ?? "") && (lines[cursor + 2] ?? "").startsWith("@@")) {
+          if (oldCount < declaredOld || newCount < declaredNew) fail("Ambiguous file boundary; use diff --git headers or correct the preceding hunk counts", cursor);
+          break;
+        }
+        if (body === "\\ No newline at end of file") {
+          if (!lastWasContent) fail("Patch contains a misplaced no-newline marker", cursor);
+          lastWasContent = false;
+          continue;
+        }
+        if (body.startsWith(" ")) { oldCount += 1; newCount += 1; sourceLines.push(body.slice(1)); }
+        else if (body.startsWith("-")) { oldCount += 1; changes += 1; sourceLines.push(body.slice(1)); }
+        else if (body.startsWith("+")) { newCount += 1; changes += 1; }
+        else fail("Patch hunk contains a line without a context/addition/deletion prefix", cursor);
+        lastWasContent = true;
+      }
+      if (!changes) fail("Patch hunk contains no changes", index);
+      if ((oldCount > 0 && oldStart === 0) || (newCount > 0 && newStart === 0)) fail("Patch contains an invalid zero hunk start", index);
+      targets.push({ path: filePath, startLine: Math.max(1, oldStart), endLine: Math.max(1, oldStart + oldCount - 1) });
+      sourceHunks.push({ path: filePath, startLine: oldStart, lines: sourceLines, newFile });
+      // New positions are determined by original source positions plus the preceding
+      // edits. Incorrect hand-written counts must not turn this bookkeeping into a
+      // false source offset. The old/source position is never guessed or relocated.
+      const actualNewStart = oldStart + fileDelta + (oldCount === 0 ? 1 : newCount === 0 ? -1 : 0);
+      if (actualNewStart < 0) fail("Patch contains an invalid resulting hunk start", index);
+      if (declaredOld !== oldCount || declaredNew !== newCount || newStart !== actualNewStart) {
+        lines[index] = `@@ -${oldStart},${oldCount} +${actualNewStart},${newCount} @@${header[5]}`;
+        correctedHunks += 1;
+      }
+      fileDelta += newCount - oldCount;
+      index = cursor - 1;
+    } else if (/^(?:rename|copy) (?:from|to) /.test(line)) {
+      const prefix = /^(?:rename|copy) (?:from|to) /.exec(line)![0];
+      remember(headerPath(line.slice(prefix.length)), false, false);
+    } else if (oldPath !== undefined) fail("Patch is missing its new-file header", index);
+  }
+  if (oldPath !== undefined) fail("Patch is missing its new-file header", lines.length - 1);
+  const normalized = lines.join("\n");
+  try { validatePatchPaths(normalized); }
+  catch (error) { throw new PatchFormatError(error instanceof Error ? error.message : String(error), [...paths], targets); }
+  return { patch: normalized, paths: [...paths], targets, sourceHunks, correctedHunks };
+}

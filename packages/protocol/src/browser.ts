@@ -33,7 +33,11 @@ export type BrowserLayout = z.infer<typeof BrowserLayoutSchema>;
 export function browserUrl(value: string, download = false): string {
   if (value === "about:blank" && !download) return value;
   const url = new URL(value);
-  if (url.username || url.password || !["http:", "https:", ...(download ? ["blob:"] : [])].includes(url.protocol)) throw new Error("浏览器仅支持 HTTP/HTTPS 网页");
-  if (url.protocol === "blob:") browserUrl(url.pathname);
+  const protocols = download ? ["http:", "https:", "blob:"] : ["http:", "https:", "file:"];
+  if (url.username || url.password || !protocols.includes(url.protocol)) throw new Error(download ? "下载仅支持 HTTP/HTTPS 或网页 Blob 地址" : "浏览器仅支持 HTTP/HTTPS 网页或 file:// 本地文件");
+  if (url.protocol === "blob:") {
+    if (!["http:", "https:"].includes(new URL(url.pathname).protocol)) throw new Error("Blob 下载必须来自 HTTP/HTTPS 网页");
+    browserUrl(url.pathname);
+  }
   return url.href;
 }

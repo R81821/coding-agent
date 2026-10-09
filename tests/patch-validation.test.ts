@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { applyPatchTool } from "../packages/tools/src/builtins.js";
-import { validatePatchPaths } from "../packages/tools/src/patch-validation.js";
+import { prepareUnifiedPatch, validatePatchPaths } from "../packages/tools/src/patch-validation.js";
 
 const temporary: string[] = [];
 afterEach(async () => { await Promise.all(temporary.splice(0).map(path => rm(path, { recursive: true, force: true }))); });
@@ -113,9 +113,131 @@ describe("Git path and syntax defenses", () => {
     const context = await repository();
     await writeFile(join(context.workspacePath, "existing.txt"), "untouched\n");
     const patch = newFile("b/new.txt") + "--- a/existing.txt\n+++ b/existing.txt\n@@ -1 +1 @@\n-wrong\n+changed\n";
-    await expect(applyPatchTool.execute({ patch }, context)).rejects.toThrow(/Patch validation failed/);
+    await expect(applyPatchTool.execute({ patch }, context)).resolves.toMatchObject({ isError: true, output: {
+      applied: false, phase: "validation", diagnostic: { kind: "conflict", paths: ["new.txt", "existing.txt"], retry: "refresh_changed_context" }
+    } });
     await expect(readFile(join(context.workspacePath, "new.txt"))).rejects.toMatchObject({ code: "ENOENT" });
     expect(await readFile(join(context.workspacePath, "existing.txt"), "utf8")).toBe("untouched\n");
+  });
+});
+
+describe("model patch format recovery without fuzzy application", () => {
+  it("replays the actual rain patch whose second hunk advertised 15 added lines instead of 17", async () => {
+    const context = await repository();
+    const patch = await readFile(new URL("fixtures/rain-hunk-count.patch", import.meta.url), "utf8");
+    // Preserve the actual source positions without carrying an unrelated 450-line HTML fixture.
+    const original = Array.from({ length: 450 }, (_, index) => `unchanged ${index + 1}`);
+    let cursor = 0;
+    for (const line of patch.split("\n")) {
+      const header = /^@@ -(\d+)/.exec(line);
+      if (header) cursor = Number(header[1]) - 1;
+      else if (line.startsWith("-") && !line.startsWith("--- ")) original[cursor++] = line.slice(1);
+    }
+    const filename = join(context.workspacePath, "pelican-bike.html");
+    await writeFile(filename, original.join("\n") + "\n");
+    // The original command reproduces the observed failure, before the tool's safe recount.
+    expect(() => execFileSync("git", ["apply", "--check", "--whitespace=nowarn", "-"], { cwd: context.workspacePath, input: patch, stdio: "pipe" })).toThrow(/patch fragment without header/);
+    const result = await applyPatchTool.execute({ patch }, context);
+    expect(result, JSON.stringify(result)).toMatchObject({ output: { applied: true, normalizedHunkCounts: true } });
+    const updated = (await readFile(filename, "utf8")).split("\n");
+    expect(updated.slice(86, 96).join("\n")).toContain("@keyframes rainfallNear");
+    expect(updated.filter(line => line.includes("unchanged "))).toEqual(original.filter(line => line.includes("unchanged ")));
+    expect(updated.filter(line => line.includes('class="rain'))).toHaveLength(3);
+    expect(updated.filter(line => line.includes("<pattern id="))).toHaveLength(3);
+  });
+
+  it("recounts both short and oversized hunk lengths while retaining every context line", async () => {
+    const context = await repository();
+    await writeFile(join(context.workspacePath, "data.txt"), "first\nold\nlast\n");
+    const patch = "--- a/data.txt\n+++ b/data.txt\n@@ -1,1 +1,9 @@\n first\n-old\n+new\n last\n";
+    const prepared = prepareUnifiedPatch(patch);
+    expect(prepared.patch).toBe(patch.replace("-1,1 +1,9", "-1,3 +1,3"));
+    await expect(applyPatchTool.execute({ patch }, context)).resolves.toMatchObject({ output: { applied: true } });
+    expect(await readFile(join(context.workspacePath, "data.txt"), "utf8")).toBe("first\nnew\nlast\n");
+  });
+
+  it.each([
+    { before: "first\nlast\n", hunk: "@@ -1,0 +9,8 @@\n+middle\n", after: "first\nmiddle\nlast\n" },
+    { before: "first\nold\nlast\n", hunk: "@@ -2,9 +1,0 @@\n-old\n", after: "first\nlast\n" },
+    { before: "old", hunk: "@@ -1,8 +1,9 @@\n-old\n\\ No newline at end of file\n+new\n\\ No newline at end of file\n", after: "new" }
+  ])("keeps insertion, deletion, and no-newline boundaries correct (%#)", async ({ before, hunk, after }) => {
+    const context = await repository();
+    await writeFile(join(context.workspacePath, "data.txt"), before);
+    const result = await applyPatchTool.execute({ patch: `--- a/data.txt\n+++ b/data.txt\n${hunk}` }, context);
+    expect(result, JSON.stringify(result)).toMatchObject({ output: { applied: true } });
+    expect(await readFile(join(context.workspacePath, "data.txt"), "utf8")).toBe(after);
+  });
+
+  it("validates every file before applying a corrected earlier hunk", async () => {
+    const context = await repository();
+    await writeFile(join(context.workspacePath, "one.txt"), "old\n");
+    await writeFile(join(context.workspacePath, "two.txt"), "untouched\n");
+    const patch = "diff --git a/one.txt b/one.txt\n--- a/one.txt\n+++ b/one.txt\n@@ -1,4 +1,9 @@\n-old\n+new\n"
+      + "diff --git a/two.txt b/two.txt\n--- a/two.txt\n+++ b/two.txt\n@@ -1 +1 @@\n-wrong\n+changed\n";
+    await expect(applyPatchTool.execute({ patch }, context)).resolves.toMatchObject({ isError: true, output: {
+      phase: "validation", applied: false, diagnostic: { kind: "conflict", normalizedHunkCounts: true }
+    } });
+    expect(await readFile(join(context.workspacePath, "one.txt"), "utf8")).toBe("old\n");
+    expect(await readFile(join(context.workspacePath, "two.txt"), "utf8")).toBe("untouched\n");
+  });
+
+  it.each([
+    "@@ -1 +1 @@\n-old\n+new\n",
+    "--- a/data.txt\n@@ -1 +1 @@\n-old\n+new\n",
+    "--- a/data.txt\n+++ b/data.txt\n@@ -1 +1 @@\n",
+    "--- a/data.txt\n+++ b/data.txt\n@@ -1 +1 @@\nold\n+new\n",
+    "--- a/data.txt\n+++ b/data.txt\n@@ invalid @@\n-old\n+new\n",
+    "--- a/data.txt\n+++ b/data.txt\n@@ -1 +1 @@\n\\ No newline at end of file\n-old\n+new\n"
+  ])("returns reusable format diagnostics for genuine malformed input (%#)", async patch => {
+    const context = await repository();
+    await writeFile(join(context.workspacePath, "data.txt"), "old\n");
+    await expect(applyPatchTool.execute({ patch }, context)).resolves.toMatchObject({ isError: true, output: {
+      applied: false, phase: "validation", diagnostic: { kind: "format", retry: "correct_patch", normalizedHunkCounts: false }
+    } });
+    expect(await readFile(join(context.workspacePath, "data.txt"), "utf8")).toBe("old\n");
+  });
+
+  it.each([
+    "--- a/data.txt\n+++ b/data.txt\n@@ -1 +1 @@\n-old\n+new\n",
+    "--- a/data.txt\n+++ b/data.txt\n@@ -1,3 +1,3 @@\n first\n-old\n+new\n last\n"
+  ])("rejects exact content at a shifted source position instead of guessing a match (%#)", async patch => {
+    const context = await repository();
+    const original = "prefix\nfirst\nold\nlast\n";
+    await writeFile(join(context.workspacePath, "data.txt"), original);
+    await expect(applyPatchTool.execute({ patch }, context)).resolves.toMatchObject({ isError: true, output: {
+      applied: false, phase: "validation", diagnostic: { kind: "conflict", paths: ["data.txt"], retry: "refresh_changed_context" }
+    } });
+    expect(await readFile(join(context.workspacePath, "data.txt"), "utf8")).toBe(original);
+  });
+
+  it("does not ignore real whitespace or a missing source line while recounting", async () => {
+    const context = await repository();
+    await writeFile(join(context.workspacePath, "data.txt"), "old \n");
+    const patch = "--- a/data.txt\n+++ b/data.txt\n@@ -1,7 +1,9 @@\n-old\n+new\n";
+    await expect(applyPatchTool.execute({ patch }, context)).resolves.toMatchObject({ isError: true, output: {
+      applied: false, phase: "validation", diagnostic: { kind: "conflict", normalizedHunkCounts: true }
+    } });
+    expect(await readFile(join(context.workspacePath, "data.txt"), "utf8")).toBe("old \n");
+  });
+
+  it("preserves header-looking source text rather than interpreting it as target metadata", async () => {
+    const context = await repository();
+    await writeFile(join(context.workspacePath, "data.txt"), "-- ../ordinary content\n");
+    const patch = "--- a/data.txt\n+++ b/data.txt\n@@ -1,5 +1,9 @@\n--- ../ordinary content\n+++ ../ordinary content\n";
+    await expect(applyPatchTool.execute({ patch }, context)).resolves.toMatchObject({ output: { applied: true } });
+    expect(await readFile(join(context.workspacePath, "data.txt"), "utf8")).toBe("++ ../ordinary content\n");
+  });
+
+  it("rejects ambiguous plain file boundaries instead of hiding missing hunk content", async () => {
+    const patch = "--- a/one.txt\n+++ b/one.txt\n@@ -1,2 +1,2 @@\n-old\n+new\n--- a/two.txt\n+++ b/two.txt\n@@ -1 +1 @@\n-old\n+new\n";
+    const context = await repository();
+    await writeFile(join(context.workspacePath, "one.txt"), "old\n");
+    await writeFile(join(context.workspacePath, "two.txt"), "old\n");
+    await expect(applyPatchTool.execute({ patch }, context)).resolves.toMatchObject({ isError: true, output: {
+      diagnostic: { kind: "format", retry: "correct_patch" }
+    } });
+    expect(await readFile(join(context.workspacePath, "one.txt"), "utf8")).toBe("old\n");
+    expect(await readFile(join(context.workspacePath, "two.txt"), "utf8")).toBe("old\n");
   });
 });
 

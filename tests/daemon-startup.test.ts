@@ -19,6 +19,10 @@ describe("desktop daemon startup diagnostics", () => {
   it("keeps only a bounded stderr tail", () => {
     expect(appendBounded("1234", "5678", 5)).toBe("45678");
   });
+  it("explains a live database owner instead of suggesting a passphrase failure", () => {
+    expect(daemonStartupError("Error: Database is locked: C:/data/harness.sqlite\n", 1).message)
+      .toContain("数据库正被另一个 Daemon 占用");
+  });
 });
 
 const progressLine = (stage: string, completed?: number, total?: number) => "HARNESS_STARTUP_PROGRESS:" + JSON.stringify({ stage, completed, total }) + "\n";

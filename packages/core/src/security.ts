@@ -1,4 +1,5 @@
 import { resolve } from "node:path";
+import { commandMatchesGrant } from "@harness/tools";
 import type { PermissionGrant, RiskLevel, ToolCall } from "@harness/protocol";
 
 const riskRank: Record<RiskLevel, number> = { read: 0, write: 1, high: 2, destructive: 3 };
@@ -14,6 +15,7 @@ export class PermissionEngine {
     if (risk === "read" && options.allowReadByDefault !== false) return { allowed: true, reason: "Read-only workspace tools are allowed by default", risk };
     if (toolName === "browser" && ["upload", "download", "click", "fill", "press_key"].includes(String(input.action))) return { allowed: false, reason: "Browser input and file transfers require approval for this specific action", risk };
     if (risk === "destructive") return { allowed: false, reason: "Destructive operations always require one-time approval", risk };
+    if (toolName === "terminal" && typeof input.stdin === "string" && input.stdin.length > 0) return { allowed: false, reason: "Terminal script input requires one-time approval for its contents", risk };
     const grant = grants.find((candidate) => this.matches(candidate, toolName, input, risk, workspacePath));
     return grant
       ? { allowed: true, reason: "Matched a scoped run or task grant", risk }
@@ -23,12 +25,12 @@ export class PermissionEngine {
   private matches(grant: PermissionGrant, toolName: string, input: Record<string, unknown>, risk: RiskLevel, workspacePath: string): boolean {
     // Empty constraint arrays mean "no constraint on that dimension"; "**" matches all paths.
     // Approval-generated grants (engine.authorizeTool) always carry a concrete scope.
-    if (grant.expiresAt && new Date(grant.expiresAt).getTime() <= Date.now()) return false;
+    if (grant.expiresAt && !(new Date(grant.expiresAt).getTime() > Date.now())) return false;
     if (!grant.toolNames.includes(toolName) || riskRank[risk] > riskRank[grant.maxRisk]) return false;
     const requestedPath = typeof input.path === "string" ? resolve(workspacePath, input.path) : undefined;
     if (requestedPath && grant.pathGlobs.length > 0 && !grant.pathGlobs.some((glob) => globMatch(requestedPath, resolve(workspacePath, glob)))) return false;
     const command = typeof input.command === "string" ? input.command.trim() : undefined;
-    if (command && grant.commandPrefixes.length > 0 && !grant.commandPrefixes.some((prefix) => command.startsWith(prefix))) return false;
+    if (command && grant.commandPrefixes.length > 0 && !grant.commandPrefixes.some((prefix) => commandMatchesGrant(command, prefix))) return false;
     const url = typeof input.url === "string" ? input.url : undefined;
     if (url && grant.networkDomains.length > 0) {
       let host = "";

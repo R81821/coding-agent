@@ -4,6 +4,7 @@ import { ModelRouter, type ModelProvider } from "@harness/providers";
 import { SkillInstaller, type SkillDocument } from "@harness/extensions";
 import type { ToolDefinition } from "@harness/tools";
 import { runWithPiAgent } from "./pi-agent-bridge.js";
+import { resolveMainOutputTokens } from "./generation-policy.js";
 
 export const SKILL_SEARCH_PROMPT = `你是技能搜索助手。根据用户需求推荐最多 5 个公开 GitHub 技能。
 只使用提供的检索与公开仓库读取工具，不进入代码修改流程，不运行终端，不安装技能。
@@ -34,6 +35,7 @@ export class SkillJobs {
     });
   }
   recommend(query: string, profile: Profile): SkillJob {
+    profile = structuredClone(profile);
     return this.start("recommend", async (job, signal) => {
       job.progress = this.search ? "使用已配置的网页搜索…" : "未配置网页搜索，使用公开 GitHub 检索…";
       const tools = new Map<string, ToolDefinition>();
@@ -110,7 +112,7 @@ export class SkillJobs {
       const result = await runWithPiAgent({
         runId: job.id, sessionId: job.id, provider: route.provider, model: route.model,
         initialMessages: [{ role: "system", content: [{ type: "text", text: SKILL_SEARCH_PROMPT, trust: "app_policy" }] }, { role: "user", content: [{ type: "text", text: query, trust: "user_request" }] }],
-        contracts: [...tools.values()].map(tool => tool.contract), resolveTool: name => tools.get(name), externalSignal: signal, maxOutputTokens: 393_216, parallelToolCalls: false,
+        contracts: [...tools.values()].map(tool => tool.contract), resolveTool: name => tools.get(name), externalSignal: signal, maxOutputTokens: resolveMainOutputTokens(profile.generationPolicy), parallelToolCalls: false,
         beforeModelRequest: () => { signal.throwIfAborted(); if (spent >= profile.budget.maxUsd || ++turns > 12) throw new Error("技能搜索达到预算或回合限制，请缩小需求后重试"); },
         beforeToolCall: async () => { signal.throwIfAborted(); if (++calls > 20) throw new Error("技能搜索达到工具调用限制"); return undefined; },
         executeTool: async (call, tool, toolSignal) => {

@@ -164,7 +164,7 @@ describe("1.4.0 modern analysis path end to end", () => {
       expect(request.maxOutputTokens).toBeLessThanOrEqual(393_216);
       const inputEstimate = Math.ceil(JSON.stringify({ messages: request.messages, tools: request.tools }).length / 4);
       expect(request.maxOutputTokens + inputEstimate).toBeLessThan(request.model.capabilities.maxContextTokens);
-      expect(request.tools.map((tool) => tool.name).sort()).toEqual(["probe", "read_evidence", "read_file", "run_verification", "terminal", "todo"]);
+      expect(request.tools.map((tool) => tool.name).sort()).toEqual(["check_requirements", "probe", "read_evidence", "read_file", "run_verification", "terminal", "todo", "workspace_diff"]);
       for (const tool of request.tools) {
         const schema = tool.inputSchema as { properties?: Record<string, { default?: unknown }>; required?: string[] };
         const defaulted = Object.keys(schema.properties ?? {}).filter(key => schema.properties?.[key]?.default !== undefined);

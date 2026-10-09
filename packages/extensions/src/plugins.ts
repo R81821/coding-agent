@@ -1,15 +1,15 @@
 import { createHash } from "node:crypto";
 import { spawn } from "node:child_process";
-import { readdir, readFile, stat } from "node:fs/promises";
-import { lookup } from "node:dns/promises";
-import { isIP } from "node:net";
+import { open, readdir, readFile, realpath, stat } from "node:fs/promises";
 import { isAbsolute, join, relative, resolve } from "node:path";
 import { PluginManifestSchema, nowIso, type PluginGrant, type PluginManifest, type PluginRecord } from "@harness/protocol";
 import type { HarnessDatabase } from "@harness/persistence";
 import type { ToolDefinition } from "@harness/tools";
+import { fetchPluginUrl } from "./plugin-network.js";
+export { isPrivateAddress } from "./plugin-network.js";
 
 export class PluginService {
-  constructor(private readonly database: HarnessDatabase, private readonly fetchImpl: typeof fetch = fetch) {}
+  constructor(private readonly database: HarnessDatabase, private readonly fetchImpl = fetchPluginUrl) {}
 
   list(): PluginRecord[] { return this.database.listPlugins(); }
 
@@ -104,23 +104,26 @@ export class PluginService {
   private async broker(request: Record<string, unknown>, grant: PluginGrant, workspacePath: string, signal: AbortSignal): Promise<unknown> {
     if (request.operation === "fs.read" && typeof request.path === "string") {
       const target = isAbsolute(request.path) ? resolve(request.path) : resolve(workspacePath, request.path);
-      const allowed = grant.pathGlobs.some((path) => target === resolve(workspacePath, path) || target.startsWith(`${resolve(workspacePath, path)}\\`) || target.startsWith(`${resolve(workspacePath, path)}/`));
-      if (!allowed) throw new Error("Plugin broker denied file access");
-      return { text: (await readFile(target, "utf8")).slice(0, 1_000_000) };
+      const roots = grant.pathGlobs.map(path => resolve(workspacePath, path)).filter(root => within(root, target));
+      if (!roots.length) throw new Error("Plugin broker denied file access");
+      const canonicalTarget = await realpath(target);
+      const canonicalRoots = await Promise.all(roots.map(root => realpath(root)));
+      if (!canonicalRoots.some(root => within(root, canonicalTarget))) throw new Error("Plugin broker denied file access through a directory link");
+      const handle = await open(canonicalTarget, "r");
+      try {
+        if (!(await handle.stat()).isFile()) throw new Error("Plugin broker denied non-file access");
+        const buffer = Buffer.alloc(1_000_000);
+        const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0);
+        return { text: buffer.subarray(0, bytesRead).toString("utf8") };
+      } finally { await handle.close(); }
     }
     if (request.operation === "net.fetch" && typeof request.url === "string") {
       const url = new URL(request.url);
       if (!["http:", "https:"].includes(url.protocol)) throw new Error("Plugin broker only allows http(s) URLs");
       if (!grant.networkDomains.includes(url.hostname)) throw new Error("Plugin broker denied network domain");
-      // DNS rebinding guard: a whitelisted hostname must not resolve to a private
-      // address. Explicit IP literals in the grant are exempt (the user granted that IP).
-      if (!isIP(url.hostname)) {
-        const records = await lookup(url.hostname, { all: true }).catch(() => []);
-        if (records.length === 0) throw new Error("Plugin broker could not resolve hostname");
-        if (records.some((record) => isPrivateAddress(record.address))) throw new Error("Plugin broker denied non-public address");
-      }
-      const response = await this.fetchImpl(url, { signal });
-      return { status: response.status, body: (await response.text()).slice(0, 1_000_000) };
+      // Explicit IP literals are allowed only by an exact domain grant. Hostname
+      // lookups are checked by the transport at connection time.
+      return this.fetchImpl(url, signal);
     }
     throw new Error("Unsupported plugin broker operation");
   }
@@ -159,25 +162,9 @@ async function fingerprintDirectory(root: string): Promise<string> {
   return hash.digest("hex");
 }
 
-/** True for private, loopback, link-local and reserved addresses (RFC 1918, 6598, 4193, 4291). */
-export function isPrivateAddress(address: string): boolean {
-  if (isIP(address) === 4) {
-    const parts = address.split(".").map(Number);
-    const first = parts[0] ?? 0;
-    const second = parts[1] ?? 0;
-    return first === 10
-      || first === 127
-      || (first === 172 && second >= 16 && second <= 31)
-      || (first === 192 && second === 168)
-      || first === 100 && second >= 64 && second <= 127
-      || first === 169 && second === 254
-      || first === 0;
-  }
-  if (isIP(address) === 6) {
-    const lower = address.toLowerCase();
-    return lower === "::" || lower === "::1" || lower.startsWith("fc") || lower.startsWith("fd") || lower.startsWith("fe80") || lower.startsWith("::ffff:127");
-  }
-  return false;
+function within(root: string, target: string): boolean {
+  const rel = relative(root, target);
+  return rel === "" || (rel !== ".." && !rel.startsWith("../") && !rel.startsWith("..\\") && !isAbsolute(rel));
 }
 
 async function dockerAvailable(): Promise<boolean> {

@@ -4,6 +4,7 @@ import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { dispatchMcp, isMcpRequest } from "./mcp-rpc.js";
+import { watchParentLifetime } from "./parent-lifetime.js";
 import { createRuntime, profileFor, validateSessionRunStart, type HarnessRuntime } from "@harness/core";
 import { FeishuConnector, PairingService, TelegramConnector, type MessageConnector, type RemoteMessage } from "@harness/extensions";
 import {
@@ -19,6 +20,14 @@ import {
 if (typeof process.loadEnvFile === "function") {
   try { process.loadEnvFile(); } catch { /* .env is optional */ }
 }
+
+let ownerExited = false;
+let shutdownAfterStartup: (() => void) | undefined = undefined;
+const stopParentWatch = watchParentLifetime(process.env.HARNESS_DESKTOP_PID, () => {
+  ownerExited = true;
+  shutdownAfterStartup?.();
+});
+if (ownerExited) process.exit(0);
 
 const passphrase = process.env.HARNESS_APP_PASSPHRASE ?? await readPassphrase();
 if (!passphrase) {
@@ -50,14 +59,24 @@ runtime.engine.on("event", (event: AgentEvent) => void notifyRemote(event));
 const server = createServer((socket) => handleSocket(socket));
 server.listen(pipePath, () => process.stdout.write(`Harness Agent daemon listening on ${pipePath}\n`));
 
-for (const signal of ["SIGINT", "SIGTERM"] as const) {
-  process.on(signal, () => void (async () => {
+let closing = false;
+function shutdown(): void {
+  if (closing) return;
+  closing = true;
+  stopParentWatch();
+  void (async () => {
     connectorController.abort();
     server.close();
     await runtime.close();
     process.exit(0);
-  })());
+  })().catch((error: unknown) => {
+    process.stderr.write(`Daemon shutdown failed: ${String(error)}\n`);
+    process.exit(1);
+  });
 }
+for (const signal of ["SIGINT", "SIGTERM"] as const) process.on(signal, shutdown);
+shutdownAfterStartup = shutdown;
+if (ownerExited) shutdown();
 
 function handleSocket(socket: Socket): void {
   socket.on("error", (error: Error) => {
@@ -93,13 +112,19 @@ async function dispatch(request: DaemonRequest, target: HarnessRuntime): Promise
   if (isMcpRequest(request)) return dispatchMcp(request, target);
   switch (request.method) {
     case "health":
-      return { status: "ok", version: "1.4.3", activeRuns: "available", providerIds: target.providerIds, connectors: [...connectors.keys()] };
+      return { status: "ok", version: "1.4.5", activeRuns: "available", providerIds: target.providerIds, connectors: [...connectors.keys()] };
     case "sessions.create":
       return target.database.createSession(request.params);
     case "sessions.list":
       return target.database.listSessions(request.params);
     case "session.get":
       return target.database.getSessionDetail(request.params.sessionId);
+    case "session.view":
+      return target.database.getSessionView(request.params.sessionId, request.params.limit, request.params.before);
+    case "run.eventPage":
+      return target.database.listEventPage(request.params.runId, request.params.afterSequence, request.params.limit);
+    case "run.output":
+      return target.database.getOutputPage(request.params.runId, request.params.callId, request.params.offset, request.params.limit);
     case "session.skills": {
       const session = target.database.getSessionDetail(request.params.sessionId)?.session;
       if (!session || session.deletedAt) throw new Error("会话不存在");
@@ -143,6 +168,11 @@ async function dispatch(request: DaemonRequest, target: HarnessRuntime): Promise
       return target.review.get(request.params.runId);
     case "review.undo":
       return target.review.undo(request.params.runId, request.params.path);
+    case "run.continue": {
+      const previous = target.database.getRun(request.params.runId);
+      if (!previous) throw new Error(`Unknown run: ${request.params.runId}`);
+      return { runId: target.engine.continueRun(previous.spec.id, profileFor(target, previous.spec.profileId), request.params.note) };
+    }
     case "run.resume": {
       const previous = target.database.getRun(request.params.runId);
       if (!previous) throw new Error(`Unknown run: ${request.params.runId}`);

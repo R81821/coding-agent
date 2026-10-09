@@ -1,5 +1,5 @@
 import { fileURLToPath } from "node:url";
-import { defineConfig } from "vitest/config";
+import { configDefaults, defineConfig } from "vitest/config";
 
 const root = fileURLToPath(new URL(".", import.meta.url));
 
@@ -17,6 +17,7 @@ export default defineConfig({
     }
   },
   test: {
+    exclude: [...configDefaults.exclude, "**/.cache/**", "**/dist/**", "**/dist-electron/**", "**/.harness-agent/**"],
     environment: "node",
     // Vault KDF and real SQLite/process fixtures contend heavily at machine-wide concurrency.
     maxWorkers: 4,

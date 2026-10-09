@@ -34,13 +34,7 @@ async function runScenario(mode: "pass" | "local-failure" | "broader-failure" | 
       async *stream(request): AsyncIterable<ProviderStreamEvent> {
         if (request.messages.some(message => message.content.some(part => part.type === "text" && part.text.startsWith("Independent read-only final review")))) {
           reviews += 1;
-          expect(request.tools).toEqual([]);
-          const supplied = JSON.parse(request.messages.find(message => message.role === "user")!.content.map(part => part.type === "text" ? part.text : "").join(""));
-          expect(supplied.verificationRuns).toEqual(expect.arrayContaining([expect.objectContaining({ stage: "local", outcome: "passed", results: expect.arrayContaining([expect.objectContaining({ output: "test output", exitCode: 0 })]) })]));
-          expect(supplied.observations).toEqual(expect.arrayContaining([expect.objectContaining({ output: { diff: "-old\n+new" } })]));
-          if (mode === "independent-tool-call") { yield workflowCall("forbidden", "apply_patch", { patch: "unwanted" }); return; }
-          yield { type: "text_delta", delta: mode === "independent-malformed" ? "invalid JSON" : JSON.stringify({ passed: mode !== "independent-fail" || reviews > 1, summary: reviews === 1 && mode === "independent-fail" ? "Missing edge case" : "Independent diff review passed" }) };
-          yield { type: "usage", usage: { inputTokens: 20, outputTokens: 10, estimatedUsd: 0 } }; return;
+          throw new DOMException("The operation was aborted due to timeout", "TimeoutError");
         }
         let runtimeState: unknown;
         for (const message of request.messages) for (const part of message.content) {
@@ -203,14 +197,14 @@ describe("real engine workflow", () => {
     expect(result.checkpoint?.toolCalls).toBeLessThanOrEqual(6);
     expect(result.result.stop?.code).toBe("tool_call_limit");
   });
-  it.each(["independent-pass", "independent-fail"] as const)("handles %s with a tool-free runtime review", async mode => {
+  it.each(["independent-pass", "independent-fail", "independent-malformed", "independent-tool-call"] as const)("ignores the retired reviewer in %s while preserving legacy requirements and review", async mode => {
     const result = await runScenario(mode); expect(result.result.status).toBe("completed");
-    expect(result.reviews).toBe(mode === "independent-pass" ? 1 : 2);
-    expect(result.mutations).toBe(mode === "independent-pass" ? 1 : 2);
-    expect(result.checkpoint?.workflow?.independentReview.status).toBe("passed");
-  });
-  it.each(["independent-malformed", "independent-tool-call"] as const)("leaves %s in review without executing extra tools", async mode => {
-    const result = await runScenario(mode); expect(result.result.status).toBe("review"); expect(result.mutations).toBe(1); expect(result.reviews).toBe(1);
+    expect(result.reviews).toBe(0);
+    expect(result.mutations).toBe(1);
+    expect(result.checkpoint?.workflow?.independentReview.status).toBe("skipped");
+    expect(result.checkpoint?.workflow?.requirementsRevision).toBe(result.checkpoint?.workflow?.revision);
+    expect(result.checkpoint?.workflow?.reviewedRevision).toBe(result.checkpoint?.workflow?.revision);
+    expect(result.checks).toEqual(["fixture local", "fixture broader"]);
   });
   it.each(["broader-optional", "broader-disabled"] as const)("records %s as skipped, never passed", async mode => {
     const result = await runScenario(mode); expect(result.result.status).toBe("completed"); expect(result.checks).toEqual(["fixture local"]);

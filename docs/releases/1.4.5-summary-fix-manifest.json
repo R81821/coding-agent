@@ -1,0 +1,50 @@
+{
+  "product": "Harness Agent",
+  "version": "1.4.5",
+  "variant": "summary-fix",
+  "target": "Windows x64 NSIS",
+  "sourceCommit": "5512bff5b1cf7f40ce5a99e946e2666b3ebdbdf7",
+  "includesUncommittedChanges": true,
+  "builtAt": "2026-10-08T11:48:17.6718031+08:00",
+  "installer": "Harness-Agent-1.4.5-x64.exe",
+  "bytes": 134301499,
+  "sha256": "55c908550d38fc8569e157e9329e167d2d8f0701a261789baf64ffecec03ac48",
+  "signatureStatus": "NotSigned",
+  "fix": "Expire runtime stop-summary instructions; sanitize legacy recovery and conversation history; preserve real user requests and evidence.",
+  "validation": {
+    "typecheck": "passed",
+    "changedFilesLint": "passed",
+    "productionBuild": "passed",
+    "desktopStartupSmoke": "passed",
+    "packagedSmoke": {
+      "version": "1.4.5",
+      "electron": "41.10.6",
+      "node": "24.18.0",
+      "arch": "x64",
+      "packagedFiles": "passed",
+      "rendererVersion": "1.4.5",
+      "sharpPngBytes": 95,
+      "sqliteRoundTrip": "passed",
+      "daemonHealth": {
+        "status": "ok",
+        "version": "1.4.5",
+        "activeRuns": "available",
+        "providerIds": [],
+        "connectors": []
+      }
+    },
+    "runtimeSummaryFixBundled": true,
+    "regressionTests": "14 passed (12 bridge/lifecycle tests and 2 engine recovery tests)",
+    "fullSuite": {
+      "totalFiles": 113,
+      "totalTests": 732,
+      "passed": 731,
+      "failed": 1,
+      "failure": "tests/run-review.test.ts: one test exceeded 5000ms and cleanup reported EBUSY",
+      "retry": "The entire run-review.test.ts file passed independently: 20/20 tests, no source changes required."
+    },
+    "actualIncidentSnapshot": "11 messages -> 10; removed only the expired runtime stop template; source database untouched",
+    "nsisPackage": "passed",
+    "interactiveInstall": "not run"
+  }
+}

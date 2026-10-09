@@ -2,6 +2,17 @@ import type { PermissionGrant, RiskLevel } from "@harness/protocol";
 
 const riskRank: Record<RiskLevel, number> = { read: 0, write: 1, high: 2, destructive: 3 };
 
+/** Prefix grants cover one simple command; shell programs require an exact grant. */
+export function commandMatchesGrant(command: string, prefix: string): boolean {
+  const approved = prefix.trim();
+  if (!approved) return false;
+  if (command === approved) return true;
+  if (!command.startsWith(approved) || !/^[ \t]/.test(command.slice(approved.length))) return false;
+  // Do not parse shell syntax here. Expansion, quoting, redirection and command
+  // composition can change what runs; send those requests through approval.
+  return /^[a-zA-Z0-9_ .\t/:\\=,+@%-]+$/.test(command);
+}
+
 /**
  * Tools-layer half of the permission model: the engine decides which calls are
  * authorized, and tools verify that the call stays inside the granted scope.
@@ -27,7 +38,7 @@ export function grantsAllow(
   const command = typeof input.command === "string" ? input.command.trim() : undefined;
   const url = typeof input.url === "string" ? input.url : undefined;
   for (const grant of relevant) {
-    if (command !== undefined && grant.commandPrefixes.length > 0 && !grant.commandPrefixes.some((prefix) => command.startsWith(prefix))) continue;
+    if (command !== undefined && grant.commandPrefixes.length > 0 && !grant.commandPrefixes.some((prefix) => commandMatchesGrant(command, prefix))) continue;
     if (url !== undefined && grant.networkDomains.length > 0) {
       let host = "";
       try {

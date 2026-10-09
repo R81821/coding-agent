@@ -97,15 +97,32 @@ describe("workflow audit hardening", () => {
     expect(value.state.riskFlags).toContain("sensitive_path");
     const unknown = new CodingWorkflow("patch", () => {}, undefined, { reviewPolicy: "risk_based" });
     unknown.starting({ id: "patch", name: "apply_patch", input: { patch: "unrecognized metadata" } }, writeTool);
-    expect(unknown.requiresIndependentReview).toBe(true);
+    expect(unknown.requiresIndependentReview).toBe(false);
   });
-  it("requires runtime-owned independent review on risky changes when enabled", () => {
+  it("disables independent model review on risky changes while preserving legacy acceptance gates", () => {
     const value = flow({ reviewPolicy: "risk_based" }); verified(value);
     value.update({ action: "requirements", passed: true, evidence: [receipt()] });
     value.update({ action: "review", passed: true, summary: "fine", evidenceIds: ["diff"], independentReview: { status: "passed" } });
-    expect(value.baseCanFinish()).toBe(true); expect(value.canFinish()).toBe(false);
-    value.recordIndependentReview(true, "independent evidence reviewed"); expect(value.canFinish()).toBe(true);
+    expect(value.baseCanFinish()).toBe(true); expect(value.canFinish()).toBe(true);
+    expect(value.requiresIndependentReview).toBe(false);
+    expect(value.state.independentReview.status).toBe("skipped");
+    expect(() => value.recordIndependentReview(true, "independent evidence reviewed")).toThrow(/disabled/);
     value.starting({ id: "patch2", name: "apply_patch", input: { patch: "+++ b/src/auth.ts\n-old\n+new" } }, writeTool);
-    expect(value.state.independentReview.status).toBe("pending"); expect(value.canFinish()).toBe(false);
+    expect(value.state.independentReview.status).toBe("skipped"); expect(value.canFinish()).toBe(false);
+  });
+  it("keeps legacy main workflow review rejection on the full invalidation path", () => {
+    const value = flow({ reviewPolicy: "risk_based" }); verified(value);
+    value.update({ action: "requirements", passed: true, evidence: [receipt()] });
+    value.update({ action: "review", passed: true, summary: "fine", evidenceIds: ["diff"] });
+    value.update({ action: "review", passed: false, summary: "Boundary behavior is unsupported" });
+    expect(value.state.independentReview.status).toBe("skipped");
+    expect(value.state.diagnosisRequired).toBe(true);
+    expect(value.state.localCheck.status).toBe("pending");
+    expect(value.state.broaderCheck.status).toBe("pending");
+    expect(value.state.diffRevision).toBe(-1);
+    expect(value.state.requirementReceipts).toEqual([]);
+    expect(value.checksCurrent()).toBe(false);
+    expect(value.canFinish()).toBe(false);
+    expect(value.state.failureChains).toContainEqual(expect.objectContaining({ source: "review", status: "open" }));
   });
 });

@@ -57,6 +57,25 @@ beforeEach(async () => {
 afterEach(async () => { host.close(); await rm(mock.root, { recursive: true, force: true }); });
 const request = (input: Parameters<typeof desktopBrowserRequest>[2], ctx = context) => desktopBrowserRequest(host.endpoint, host.token, input, ctx);
 
+it("opens local files manually and navigates to them through the agent bridge", async () => {
+  const opened = (await host.manual("a", { action: "new_tab", url: "file:///D:/项目/preview page.html" })).output as { tabId: string };
+  const view = mock.views[0] as View;
+  expect(view.webContents.getURL()).toBe("file:///D:/%E9%A1%B9%E7%9B%AE/preview%20page.html");
+  const result = await request({ action: "navigate", tabId: opened.tabId, url: "file:///D:/preview/next.html#details" });
+  expect(result.output).toMatchObject({ tabId: opened.tabId, url: "file:///D:/preview/next.html#details" });
+  expect(view.options.webPreferences).toMatchObject({ sandbox: true, contextIsolation: true, nodeIntegration: false, webSecurity: true });
+  for (const eventName of ["will-navigate", "will-redirect"]) {
+    const event = { preventDefault: vi.fn() };
+    view.webContents.emit(eventName, event, "file:///D:/preview/linked.html");
+    expect(event.preventDefault).not.toHaveBeenCalled();
+    view.webContents.emit(eventName, event, "javascript:alert(1)");
+    expect(event.preventDefault).toHaveBeenCalledOnce();
+  }
+  const popup = view.webContents.setWindowOpenHandler.mock.calls[0]![0]({ url: "file:///D:/preview/popup.html" });
+  expect(popup.action).toBe("allow");
+  expect(popup.createWindow({}).getURL()).toBe("file:///D:/preview/popup.html");
+});
+
 it("authenticates the real pipe and validates the run's owning conversation", async () => {
   await expect(desktopBrowserRequest(host.endpoint, "invalid", { action: "tabs" }, context)).rejects.toThrow("无效");
   await expect(request({ action: "tabs" }, { ...context, runId: "run-b" })).rejects.toThrow("does not belong");
@@ -137,5 +156,26 @@ it("removes pending download reservations when the desktop closes", async () => 
   const transfer = (await request({ action: "download", url: "https://example.com/fixture.txt" })).output as { path: string };
   host.close();
   await vi.waitFor(async () => { await expect(stat(join(mock.root, transfer.path))).rejects.toThrow(); });
+});
+
+it("closes once across the two before-quit passes after Electron releases view contents", async () => {
+  await request({ action: "new_tab", url: "https://example.com/first" });
+  await host.manual("b", { action: "new_tab", url: "https://example.com/second" });
+  const contents = mock.views.map(view => (view as View).webContents);
+  const closers = contents.map((item, index) => vi.spyOn(item as unknown as { close(): void }, "close").mockImplementation(() => {
+    // Closing an Electron view can clear its webContents getter before app.quit()
+    // emits the second before-quit. Reproduce that native lifetime explicitly.
+    Object.defineProperty(mock.views[index], "webContents", { configurable: true, value: undefined });
+  }));
+  expect(() => host.close()).not.toThrow();
+  expect(() => host.close()).not.toThrow();
+  for (const close of closers) expect(close).toHaveBeenCalledOnce();
+});
+
+it("can shut down when an Electron view has already released its contents", async () => {
+  await request({ action: "new_tab", url: "https://example.com" });
+  Object.defineProperty(mock.views[0], "webContents", { configurable: true, value: undefined });
+  expect(() => host.close()).not.toThrow();
+  expect(() => host.close()).not.toThrow();
 });
 

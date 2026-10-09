@@ -1,4 +1,7 @@
 export function daemonStartupError(stderr: string, exitCode: number | null): Error {
+  if (/Error:\s*Database is locked/i.test(stderr)) {
+    return new Error("数据库正被另一个 Daemon 占用。请从托盘退出旧的 Harness，或关闭旧的开发终端，再重试解锁。");
+  }
   if (/Invalid application passphrase or corrupted key envelope/i.test(stderr)) {
     return new Error("应用口令错误，或本地密钥文件已损坏。请使用创建此加密库时的口令。");
   }

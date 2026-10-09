@@ -20,6 +20,7 @@ export class DesktopBrowserHost {
   private readonly conversations = new Map<string, Conversation>();
   private readonly runTabs = new Map<string, string>();
   private readonly controllers = new Set<AbortController>();
+  private closed = false;
   private layout: BrowserLayout = { sessionId: null, visible: false, obscured: false, x: 0, y: 0, width: 0, height: 0 };
   constructor(private readonly resolveContext: Resolver) {}
 
@@ -297,8 +298,16 @@ export class DesktopBrowserHost {
     await rm(this.metadataPath(id), { force: true });
   }
   close(): void {
-    this.server?.close(); for (const controller of this.controllers) controller.abort();
-    for (const conversation of this.conversations.values()) {
+    // before-quit runs again after the daemon finishes stopping. Electron may have
+    // released a view's webContents by then, so never dispose the same host twice.
+    if (this.closed) return;
+    this.closed = true;
+    this.server?.close(); delete this.server;
+    for (const controller of this.controllers) controller.abort();
+    this.controllers.clear();
+    const conversations = [...this.conversations.values()];
+    this.conversations.clear(); this.runTabs.clear(); delete this.window;
+    for (const conversation of conversations) {
       for (const item of conversation.items.values()) item.cancel();
       for (const tab of conversation.tabs.values()) {
         if (tab.pendingDownload) {
@@ -306,7 +315,8 @@ export class DesktopBrowserHost {
           const record = tab.pendingDownload.state; delete tab.pendingDownload; record.status = "cancelled";
           if (record.path) void rm(record.path, { force: true });
         }
-        if (!tab.view.webContents.isDestroyed()) tab.view.webContents.close();
+        const contents = tab.view.webContents;
+        if (contents && !contents.isDestroyed()) contents.close();
       }
     }
     if (process.platform !== "win32") void rm(this.endpoint, { force: true });

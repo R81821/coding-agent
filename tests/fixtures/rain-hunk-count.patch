@@ -1,0 +1,42 @@
+--- a/pelican-bike.html
++++ b/pelican-bike.html
+@@ -87,2 +87,10 @@
+-.rainSheet{animation:rainfall .6s linear infinite}
+-@keyframes rainfall{0%{transform:translate(0,-46px)}100%{transform:translate(-18px,0)}}
++/* rain: three depth-graded sheets; each one travels exactly one tile of its own pattern, at the
++   same ~2.36:1 slant as the strokes drawn inside it, so a looped frame equals frame 0 */
++.wxRain{--rainFar:1.5s;--rainMid:.95s;--rainNear:.6s}
++.rainFar,.rainMid,.rainNear{will-change:transform}
++.rainFar{animation:rainfallFar var(--rainFar) linear infinite}
++.rainMid{animation:rainfallMid var(--rainMid) linear infinite}
++.rainNear{animation:rainfallNear var(--rainNear) linear infinite}
++@keyframes rainfallFar{0%{transform:translate(0,-33px)}100%{transform:translate(-14px,0)}}
++@keyframes rainfallMid{0%{transform:translate(0,-62px)}100%{transform:translate(-26px,0)}}
++@keyframes rainfallNear{0%{transform:translate(0,-78px)}100%{transform:translate(-33px,0)}}
+@@ -192,4 +200,15 @@
+-    <pattern id="rainPat" width="18" height="46" patternUnits="userSpaceOnUse">
+-      <line x1="5" y1="2" x2="-1" y2="18" stroke="#dff0ff" stroke-width="1.7" stroke-linecap="round" opacity=".8"/>
+-      <line x1="15" y1="26" x2="9" y2="42" stroke="#dff0ff" stroke-width="1.3" stroke-linecap="round" opacity=".62"/>
+-    </pattern>
++    <!-- rain tiles: each tile period is that sheet's own travel vector (dx = -0.424*dy) and the
++         strokes carry the same slant, so the sheet loops for ever without a seam or a chopped drop -->
++    <pattern id="rainFarP" width="14" height="33" patternUnits="userSpaceOnUse">
++      <line x1="4.8" y1="2" x2="1" y2="11" stroke="#e7f4ff" stroke-width=".9" stroke-linecap="round" opacity=".55"/>
++      <line x1="12" y1="13" x2="8.2" y2="22" stroke="#e7f4ff" stroke-width=".9" stroke-linecap="round" opacity=".42"/>
++      <line x1="5.4" y1="23" x2="1.6" y2="32" stroke="#e7f4ff" stroke-width=".8" stroke-linecap="round" opacity=".32"/>
++    </pattern>
++    <pattern id="rainMidP" width="26" height="62" patternUnits="userSpaceOnUse">
++      <line x1="9" y1="4" x2="1.2" y2="22.6" stroke="#e0f0ff" stroke-width="1.3" stroke-linecap="round" opacity=".66"/>
++      <line x1="21" y1="20" x2="13.2" y2="38.6" stroke="#e0f0ff" stroke-width="1.1" stroke-linecap="round" opacity=".5"/>
++      <line x1="14.6" y1="42" x2="6.8" y2="60.6" stroke="#e0f0ff" stroke-width="1" stroke-linecap="round" opacity=".38"/>
++    </pattern>
++    <pattern id="rainNearP" width="33" height="78" patternUnits="userSpaceOnUse">
++      <line x1="26" y1="6" x2="16.9" y2="27.5" stroke="#f2f9ff" stroke-width="2.1" stroke-linecap="round" opacity=".78"/>
++      <line x1="11.5" y1="45" x2="2.4" y2="66.5" stroke="#f2f9ff" stroke-width="1.8" stroke-linecap="round" opacity=".6"/>
++      <line x1="25" y1="52" x2="15.9" y2="73.5" stroke="#f2f9ff" stroke-width="1.9" stroke-linecap="round" opacity=".48"/>
++    </pattern>
+@@ -443,1 +462,3 @@
+-    <rect class="rainSheet" x="-40" y="-60" width="1040" height="660" fill="url(#rainPat)" opacity=".72"/>
++    <rect class="rainFar" x="-70" y="-90" width="1100" height="760" fill="url(#rainFarP)" opacity=".42"/>
++    <rect class="rainMid" x="-70" y="-90" width="1100" height="760" fill="url(#rainMidP)" opacity=".58"/>
++    <rect class="rainNear" x="-70" y="-90" width="1100" height="760" fill="url(#rainNearP)" opacity=".78"/>

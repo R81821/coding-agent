@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { createDefaultToolRegistry } from "@harness/tools";
+import { CodingWorkflow } from "../packages/core/src/coding-workflow.js";
+import { SequentialWorkflow } from "../packages/core/src/sequential-workflow.js";
+import { todoTool } from "../packages/core/src/runtime-tools.js";
 
 /**
  * Providers send a tool's `inputSchema` verbatim as the function `parameters` and OpenAI rejects the
@@ -8,7 +11,9 @@ import { createDefaultToolRegistry } from "@harness/tools";
  * rather than only for the one that happened to break.
  */
 describe("builtin tool input schemas", () => {
-  const contracts = createDefaultToolRegistry().contracts();
+  const workflow = new SequentialWorkflow("Implement a change", () => {});
+  const contracts = [...createDefaultToolRegistry().contracts(), workflow.planningTool().contract,
+    new CodingWorkflow("Implement a change", () => {}).tool().contract, todoTool(workflow).contract];
 
   it("registers the browser tool and at least one other tool", () => {
     expect(contracts.map((contract) => contract.name)).toContain("browser");

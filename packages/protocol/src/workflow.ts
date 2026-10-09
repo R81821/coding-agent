@@ -29,6 +29,10 @@ export const SequentialWorkflowSchema = z.object({
   understanding: z.string().default(""), understoodAt: z.number().default(0),
   architecture: z.string().default(""), architectureEpoch: z.string().default(""),
   evidenceIds: z.array(z.string()).default([]), generation: z.number().int().nonnegative().default(0),
+  patchRecovery: z.object({
+    callId: z.string(), kind: z.enum(["format", "conflict"]), paths: z.array(z.string()).max(20),
+    contextReadRequired: z.boolean(),
+  }).optional(),
   activeStepId: z.string().default(""),
   steps: z.array(SequentialPlanStepSchema.extend({
     status: z.enum(["pending", "in_progress", "verified"]).default("pending"),

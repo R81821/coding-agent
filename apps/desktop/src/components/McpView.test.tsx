@@ -11,7 +11,7 @@ test("secret edits preserve old values unless replace or clear was selected", ()
 });
 test("editing public configuration keeps the revision and uses distinct command arguments", () => {
   const config = McpServerConfigSchema.parse({ id: "server", name: "Local", revision: 3, transport: { type: "stdio", command: "node", args: ["C:/A path/server.mjs", "--flag"] }, projectPaths: ["C:/project"] });
-  const { env, headers, ...publicFields } = config;
+  const { env: _env, headers: _headers, ...publicFields } = config;
   const form = mcpForm({ ...publicFields, envKeys: ["TOKEN"], headerKeys: [] }, "C:/project");
   const draft = buildMcpDraft(form);
   expect(draft).toMatchObject({ id: "server", expectedRevision: 3, transport: config.transport, env: {} });
@@ -19,7 +19,7 @@ test("editing public configuration keeps the revision and uses distinct command 
 });
 test("management cards show project binding, connection and authentication states without stored values", () => {
   const config = McpServerConfigSchema.parse({ id: "server", name: "Research", revision: 1, enabled: true, transport: { type: "streamable_http", url: "https://mcp.example.test/mcp" }, projectPaths: ["C:/project"] });
-  const { env, headers, ...publicFields } = config;
+  const { env: _env, headers: _headers, ...publicFields } = config;
   const html = renderToStaticMarkup(<McpView workspacePath="C:/project" initialSnapshot={{ servers: [{ ...publicFields, envKeys: [], headerKeys: ["Authorization"] }], statuses: [{ serverId: "server", revision: 1, workspacePath: "C:/project", state: "connected", toolCount: 4 }], auth: { server: { state: "authorized" } } }} />);
   expect(html).toContain("Research"); expect(html).toContain("已连接"); expect(html).toContain("4 个工具"); expect(html).toContain("已登录"); expect(html).toContain("编辑"); expect(html).toContain("工具目录");
 });
@@ -30,7 +30,7 @@ test("no-project view tells users to select a project before connecting", () => 
 
 test("a connected public remote service tells the user OAuth is unnecessary", () => {
   const config = McpServerConfigSchema.parse({ id: "public", name: "Microsoft Learn", revision: 1, enabled: true, transport: { type: "streamable_http", url: "https://learn.microsoft.com/api/mcp" }, projectPaths: ["C:/project"] });
-  const { env, headers, ...publicFields } = config;
+  const { env: _env, headers: _headers, ...publicFields } = config;
   const html = renderToStaticMarkup(<McpView workspacePath="C:/project" initialSnapshot={{ servers: [{ ...publicFields, envKeys: [], headerKeys: [] }], statuses: [{ serverId: "public", revision: 1, workspacePath: "C:/project", state: "connected", toolCount: 3 }], auth: { public: { state: "signed_out" } } }} />);
   expect(html).toContain("当前连接无需 OAuth 登录");
   expect(html).toContain("3 个工具");

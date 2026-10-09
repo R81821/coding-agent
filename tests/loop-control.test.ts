@@ -10,6 +10,7 @@ import { descriptor, type ModelProvider, type ProviderStreamEvent } from "@harne
 import { DEFAULT_PROFILE, newId, nowIso, type AgentEvent, type ModelRequest, type PlanSpec } from "@harness/protocol";
 import { createDefaultToolRegistry, ToolRegistry } from "@harness/tools";
 import { sequentialPrelude } from "./sequential-fixture.js";
+import { runtimeStopSummary } from "../packages/core/src/runtime-messages.js";
 
 const temporary: string[] = [];
 afterEach(async () => {
@@ -144,6 +145,49 @@ function makeGate() {
 }
 
 describe("run control", { timeout: 20_000 }, () => {
+  it.each(["resume", "continue"] as const)("expires an old stop summary on %s and resumes real tool work", async mode => {
+    const stale = runtimeStopSummary("legacy verification configuration missing");
+    const requests: ModelRequest[] = [];
+    const h = await harness(async function* (request, turn) {
+      requests.push(request);
+      if (turn === 1) yield { type: "tool_call", toolCall: { id: "resumed-read", name: "read_file", input: { path: "a.txt" } } };
+      else yield { type: "text_delta", delta: "a.txt contains hello world; no source changes were made." };
+    });
+    const spec = { ...h.spec, taskMode: "analysis" as const };
+    const status = mode === "resume" ? "paused" : "review";
+    h.database.createSession({ id: spec.sessionId, title: "Inspect a.txt", workspacePath: h.root, profileId: h.profile.id, createdAt: nowIso(), updatedAt: nowIso() });
+    h.database.saveRun(spec, status);
+    h.database.appendEvent({ id: newId("event"), runId: spec.id, sequence: 0, at: nowIso(), type: "result", status, text: "Prior evidence collected.", stop: {
+      code: "verification_config_missing", message: "Legacy verification missing", phase: "inspect_result", pending: ["Inspect a.txt"],
+      usage: { toolCalls: { used: 1, limit: 128 }, modelTurns: { used: 1, limit: 64 }, repairs: { used: 0, limit: null }, usd: { used: 0, limit: 5 }, durationMs: { used: 1, limit: 1800000 } },
+    } });
+    h.database.saveCheckpoint({ id: newId("checkpoint"), runId: spec.id, sequence: 1, reason: "manual", status,
+      transcript: [
+        { role: "user", content: [{ type: "text", text: spec.request, trust: "user_request" }] },
+        { role: "user", content: [{ type: "text", text: stale, trust: "user_request" }] },
+        { role: "assistant", content: [{ type: "text", text: "Prior evidence collected.", trust: "untrusted_tool" }] },
+      ], usage: { inputTokens: 1, outputTokens: 1, estimatedUsd: 0, costKnown: true }, turns: 1, toolCalls: 1, pendingNonIdempotentToolCalls: [], createdAt: nowIso(),
+    });
+    let runId = spec.id;
+    try {
+      if (mode === "resume") h.engine.resume(runId, h.profile);
+      else runId = h.engine.continueRun(runId, h.profile, "Keep the original scope.");
+      const result = await waitForResult(h.engine, runId);
+      await h.engine.waitForSettlement(runId);
+      expect(result.status, result.text).toBe("completed");
+      expect(requests).toHaveLength(2);
+      expect(JSON.stringify(requests[0]!.messages)).not.toContain("Runtime stopping condition:");
+      expect(JSON.stringify(requests[0]!.messages)).toContain("Prior evidence collected.");
+      expect(requests[0]!.tools.some(tool => tool.name === "read_file")).toBe(true);
+      if (mode === "continue") expect(JSON.stringify(requests[0]!.messages)).toContain("Keep the original scope.");
+      expect(h.database.listEvents(runId)).toContainEqual(expect.objectContaining({ type: "tool_finished", callId: "resumed-read", isError: false }));
+      expect(JSON.stringify(h.database.getLatestCheckpoint(runId)?.transcript)).not.toContain("Runtime stopping condition:");
+    } finally {
+      await h.engine.close();
+      h.database.close();
+    }
+  });
+
   it("pauses at a turn boundary, keeps the checkpoint, and resumes the same task", async () => {
     const seen: string[] = [];
     const gate = makeGate();
@@ -197,6 +241,26 @@ describe("run control", { timeout: 20_000 }, () => {
     expect(delivered).toHaveLength(1);
     h.engine.cancel(h.spec.id);
     await done;
+  });
+
+  it("reports only the outstanding work when a paused run already streamed its report", async () => {
+    // The streamed report is already part of the process record. Repeating it inside the paused
+    // result printed the same conclusion twice as soon as that record was expanded.
+    const seen: string[] = [];
+    const gate = makeGate();
+    const h = await harness(gated(seen, 1, () => gate.wait(), 1));
+    const done = waitForResult(h.engine, h.spec.id);
+    h.engine.start(h.spec, h.profile);
+    await waitUntil(() => seen.length >= 2);
+    expect(h.engine.pause(h.spec.id)).toBe(true);
+    gate.open();
+
+    const paused = await done;
+    expect(paused.status).toBe("paused");
+    // The report stays where it streamed; the pause carries the remaining work instead.
+    expect(paused.text).not.toContain("answer 2");
+    expect(paused.text).toMatch(/^运行已暂停/);
+    expect(paused.text).toContain("未完成：");
   });
 
   it("unblocks a run that is paused while waiting for plan approval", async () => {

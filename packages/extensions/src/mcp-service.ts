@@ -125,29 +125,29 @@ export class McpService {
       const tools = await raw.listTools(entry.controller.signal);
       this.assertCurrent(entry);
       entry.status = { ...entry.status, state: "connected", toolCount: tools.length };
-      const service = this;
+      const current = () => this.current(entry);
       const handle: McpConnection = {
-        get closed() { return !service.current(entry) || raw.closed; },
-        async listTools(signal) {
-          service.assertCurrent(entry);
+        get closed() { return !current() || raw.closed; },
+        listTools: async (signal) => {
+          this.assertCurrent(entry);
           const result = await raw.listTools(AbortSignal.any([signal, entry.controller.signal]));
-          service.assertCurrent(entry);
+          this.assertCurrent(entry);
           entry.status.toolCount = result.length;
           return result;
         },
-        async callTool(name, input, signal) {
-          service.assertCurrent(entry);
+        callTool: async (name, input, signal) => {
+          this.assertCurrent(entry);
           try {
             const result = await raw.callTool(name, input, AbortSignal.any([signal, entry.controller.signal]));
-            service.assertCurrent(entry);
+            this.assertCurrent(entry);
             return result;
           } catch (error) {
-            if (!service.current(entry)) throw new McpConnectionError("closed");
+            if (!this.current(entry)) throw new McpConnectionError("closed");
             throw error;
           }
         },
-        async close() {
-          if (service.entries.get(entry.key) === entry) service.entries.delete(entry.key);
+        close: async () => {
+          if (this.entries.get(entry.key) === entry) this.entries.delete(entry.key);
           entry.controller.abort();
           await raw.close();
         },

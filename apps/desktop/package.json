@@ -1,13 +1,14 @@
 {
   "name": "@harness/desktop",
-  "version": "1.4.3",
+  "version": "1.4.5",
   "description": "Local-first software development agent for Windows",
   "author": "Harness Agent contributors",
   "type": "module",
   "main": "dist-electron/main.js",
   "scripts": {
-    "dev": "concurrently -k \"vite --host 127.0.0.1\" \"tsup --watch\" \"wait-on tcp:127.0.0.1:5173 file:./dist-electron/preload.cjs && cross-env VITE_DEV_SERVER_URL=http://127.0.0.1:5173 NODE_OPTIONS=--import=tsx electron src/main.ts\"",
+    "dev": "tsup && concurrently -k \"vite --host 127.0.0.1 --port 5173 --strictPort\" \"tsup --watch --no-clean\" \"wait-on tcp:127.0.0.1:5173 file:./dist-electron/main.js file:./dist-electron/preload.cjs && cross-env VITE_DEV_SERVER_URL=http://127.0.0.1:5173 NODE_OPTIONS= electron .\"",
     "build": "vite build && tsup",
+    "smoke": "pnpm build && cross-env NODE_OPTIONS= electron scripts/smoke.cjs --background",
     "package": "node scripts/package.mjs"
   },
   "dependencies": {
@@ -21,14 +22,15 @@
     "react-dom": "^19.1.1",
     "react-markdown": "^10.1.0",
     "remark-gfm": "^4.0.1",
-    "sharp": "^0.34.3"
+    "sharp": "^0.35.5",
+    "@harness/conversation-ui": "workspace:*"
   },
   "devDependencies": {
     "@electron/get": "5.1.0",
     "@tailwindcss/vite": "^4.3.3",
     "concurrently": "^9.2.1",
     "cross-env": "^10.0.0",
-    "electron": "^37.3.1",
+    "electron": "41.10.6",
     "electron-builder": "^26.0.12",
     "tailwindcss": "^4.3.3",
     "tsx": "^4.20.5",

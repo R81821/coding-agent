@@ -32,6 +32,6 @@ it("distinguishes unreported cache usage from a measured zero", () => {
 it("separates request purposes and distinguishes known zero from unknown prices", () => {
   const usages = [{ purpose: "main" as const, inputTokens: 10, outputTokens: 1, cachedInputTokens: 10, estimatedUsd: 0, costKnown: true }, { purpose: "compaction" as const, inputTokens: 20, outputTokens: 2, cachedInputTokens: 0, estimatedUsd: 0, costKnown: false }, { purpose: "review" as const, inputTokens: 30, outputTokens: 3, estimatedUsd: 0, costKnown: false }];
   const html = renderToStaticMarkup(<PromptCacheStats usages={usages} />);
-  for (const value of ["主调用", "上下文压缩", "独立评审", "费用未知", "$0.0000"]) expect(html).toContain(value);
+  for (const value of ["主调用", "上下文压缩", "历史独立评审", "费用未知", "$0.0000"]) expect(html).toContain(value);
   expect(html).toContain("1/1");
 });

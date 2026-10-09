@@ -109,5 +109,6 @@ it("does not mark requirements passed merely because a final answer exists", () 
  workflow.acceptFinalReport("I have completed the task");
  expect(workflow.state.requirementsRevision).toBe(-1);
  expect(workflow.canFinish()).toBe(false);
- expect(workflow.requiresIndependentReview).toBe(true);
+ expect(workflow.requiresIndependentReview).toBe(false);
+ expect(workflow.state.independentReview.status).toBe("skipped");
 });

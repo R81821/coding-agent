@@ -2,14 +2,14 @@ import { createReadStream } from "node:fs";
 import { createInterface } from "node:readline";
 import { readFile, stat, open } from "node:fs/promises";
 import { join } from "node:path";
-import fg from "fast-glob";
+import { glob } from "tinyglobby";
 import { z } from "zod";
 import { IsolatedBrowser } from "./browser-cdp.js";
 import { BrowserActionSchema, browserUrl } from "@harness/protocol";
 import { desktopBrowserRequest } from "./browser-bridge.js";
 import { grantsAllow } from "./grants.js";
-import { confinedPath } from "./paths.js";
-import { validatePatchPaths } from "./patch-validation.js";
+import { confinedPath, validateWorkspaceGlob } from "./paths.js";
+import { PatchFormatError, prepareUnifiedPatch } from "./patch-validation.js";
 import { runProcess } from "./process.js";
 import type { ToolDefinition } from "./types.js";
 
@@ -74,8 +74,8 @@ export const listFilesTool: ToolDefinition = {
   },
   async execute(input, context) {
     const parsed = listInput.parse(input);
-    if (parsed.glob.includes("..")) throw new Error("Parent traversal is not allowed in glob patterns");
-    const files = await fg(parsed.glob, { cwd: context.workspacePath, onlyFiles: true, dot: true, followSymbolicLinks: false, ignore: [".git/**", "node_modules/**"] });
+    validateWorkspaceGlob(parsed.glob);
+    const files = await glob(parsed.glob, { cwd: context.workspacePath, onlyFiles: true, dot: true, expandDirectories: false, followSymbolicLinks: false, ignore: [".git/**", "node_modules/**"], signal: context.signal });
     return { output: files.slice(0, parsed.limit), truncated: files.length > parsed.limit };
   }
 };
@@ -92,7 +92,7 @@ export const searchTextTool: ToolDefinition = {
   },
   async execute(input, context) {
     const parsed = searchInput.parse(input);
-    if (parsed.glob.includes("..")) throw new Error("Parent traversal is not allowed in glob patterns");
+    validateWorkspaceGlob(parsed.glob);
     const result = await runProcess("rg", ["--line-number", "--no-heading", "--color", "never", "-g", parsed.glob, "--", parsed.query, "."], {
       cwd: context.workspacePath,
       signal: context.signal,
@@ -108,7 +108,7 @@ const patchInput = z.object({ patch: z.string().min(1) });
 export const applyPatchTool: ToolDefinition = {
   contract: {
     name: "apply_patch",
-    description: "Apply a unified diff inside the workspace after validating it with git apply --check.",
+    description: "Apply a unified diff after atomic git validation. Hunk counts are recounted from supplied lines; headers, line positions and exact context remain required. Format errors reuse existing source evidence; context conflicts identify target ranges to refresh.",
     inputSchema: { type: "object", properties: { patch: { type: "string" } }, required: ["patch"], additionalProperties: false },
     risk: "write",
     idempotent: false,
@@ -116,12 +116,54 @@ export const applyPatchTool: ToolDefinition = {
   },
   async execute(input, context) {
     const parsed = patchInput.parse(input);
-    validatePatchPaths(parsed.patch);
-    const check = await runProcess("git", ["apply", "--check", "--whitespace=nowarn", "-"], { cwd: context.workspacePath, signal: context.signal, timeoutMs: 30_000, stdin: parsed.patch });
-    if (check.exitCode !== 0) throw new Error(`Patch validation failed: ${check.stderr || check.stdout}`);
-    const applied = await runProcess("git", ["apply", "--whitespace=nowarn", "-"], { cwd: context.workspacePath, signal: context.signal, timeoutMs: 30_000, stdin: parsed.patch });
-    if (applied.exitCode !== 0) throw new Error(`Patch apply failed: ${applied.stderr || applied.stdout}`);
-    return { output: { applied: true } };
+    let prepared: ReturnType<typeof prepareUnifiedPatch>;
+    try { prepared = prepareUnifiedPatch(parsed.patch); }
+    catch (error) {
+      if (!(error instanceof PatchFormatError)) throw error; // Unsafe paths retain the existing hard rejection.
+      return { isError: true, output: { applied: false, phase: "validation", error: `Patch validation failed: ${error.message}`, diagnostic: {
+        kind: "format", paths: error.paths, targets: error.targets, retry: "correct_patch", normalizedHunkCounts: false,
+        nextAction: "Correct only the patch format using the source already read, then retry apply_patch. Do not restart the plan or reread unchanged files."
+      } } };
+    }
+    const options = { cwd: context.workspacePath, signal: context.signal, timeoutMs: 30_000, stdin: prepared.patch };
+    // The same parser options are used in validation and application. --unidiff-zero
+    // accepts exact, context-free deletions; it does not ignore whitespace or fuzz context.
+    const flags = ["--verbose", "--unidiff-zero", "--whitespace=nowarn", "-"];
+    const check = await runProcess("git", ["apply", "--check", ...flags], options);
+    const failed = (phase: "validation" | "apply", result: typeof check, contextMismatch = false) => {
+      const detail = result.stderr || result.stdout;
+      const kind = contextMismatch || /patch failed|patch does not apply|does not exist|already exists|while searching for/i.test(detail)
+        ? "conflict" : /corrupt patch|patch fragment|no valid patches|invalid patch|unrecognized input|missing .*header/i.test(detail) ? "format" : "process";
+      return { isError: true, output: { applied: false, phase, error: `Patch ${phase === "validation" ? "validation" : "apply"} failed: ${contextMismatch ? "source does not match the exact original line range; update that range instead of relocating or weakening the patch. " : ""}${detail}`, diagnostic: {
+        kind, paths: prepared.paths, targets: prepared.targets,
+        retry: kind === "conflict" ? "refresh_changed_context" : kind === "format" ? "correct_patch" : "retry_process",
+        normalizedHunkCounts: prepared.correctedHunks > 0,
+        nextAction: kind === "conflict" ? "Refresh only the conflicting target range and correct the patch's line positions or exact source context."
+          : kind === "format" ? "Correct patch syntax using existing source evidence, then retry apply_patch; do not reread unchanged files."
+            : "Resolve the reported Git/process failure before retrying apply_patch."
+      } } };
+    };
+    if (check.exitCode !== 0) return failed("validation", check);
+    // Git can search nearby lines, and its verbose offset is also nonzero for a
+    // legitimate context-free deletion. Verify the original coordinates directly
+    // instead of accepting a relocated match or misclassifying that deletion.
+    const sources = new Map<string, string[]>();
+    for (const hunk of prepared.sourceHunks) {
+      if (hunk.newFile) continue;
+      let source = sources.get(hunk.path);
+      if (!source) {
+        const text = await readFile(await confinedPath(context.workspacePath, hunk.path), "utf8");
+        source = text.split(/\r?\n/);
+        if (source.at(-1) === "") source.pop();
+        sources.set(hunk.path, source);
+      }
+      const mismatch = hunk.lines.length === 0 ? hunk.startLine > source.length
+        : hunk.lines.some((line, index) => source[hunk.startLine - 1 + index] !== line);
+      if (mismatch) return failed("validation", { ...check, stdout: "", stderr: `${hunk.path}:${hunk.startLine}: exact source range mismatch` }, true);
+    }
+    const applied = await runProcess("git", ["apply", ...flags], options);
+    if (applied.exitCode !== 0) return failed("apply", applied);
+    return { output: { applied: true, paths: prepared.paths, normalizedHunkCounts: prepared.correctedHunks > 0 } };
   }
 };
 

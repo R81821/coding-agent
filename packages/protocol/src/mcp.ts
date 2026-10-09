@@ -81,5 +81,9 @@ export type McpRequest = z.infer<typeof McpRequestSchema>;
 export const McpToolSnapshotSchema = z.object({
   serverId, revision: z.number().int().positive(), toolName: z.string(), name: z.string(),
   contractHash: z.string(), risk: z.enum(["read", "high"]),
+  // Older checkpoints have only contractHash. They must not infer schema equivalence.
+  semanticContractHash: z.string().optional(),
+  description: z.string().optional(),
+  inputSchema: z.record(z.string(), z.unknown()).optional(),
 });
 export type McpToolSnapshot = z.infer<typeof McpToolSnapshotSchema>;

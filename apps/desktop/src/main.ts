@@ -32,6 +32,7 @@ import {
   saveProviderSettings,
 } from "./provider-settings.js";
 import { appendBounded, daemonStartupError, DaemonStartupMonitor } from "./daemon-startup.js";
+import { stopDaemonProcess } from "./daemon-process.js";
 import { sanitizeRendererRequest } from "./renderer-ipc.js";
 import { messageHttpUrl } from "./message-links.js";
 import { runDesktopCommand } from "./desktop-menu.js";
@@ -107,10 +108,17 @@ if (!ownsSingleInstance) {
 app.on("window-all-closed", () => {
   /* tray keeps the daemon alive */
 });
-app.on("before-quit", () => {
+app.on("before-quit", (event) => {
   quitting = true;
   browserHost?.close();
-  if (daemon) killDaemonTree(daemon);
+  if (daemon) {
+    event.preventDefault();
+    const previous = daemon;
+    daemon = undefined;
+    void stopDaemonProcess(previous)
+      .catch((error: unknown) => logLifecycle("daemon-stop-failed", { error: String(error) }))
+      .finally(() => app.quit());
+  }
 });
 
 ipcMain.handle(
@@ -141,7 +149,8 @@ ipcMain.handle(
       }
       return { ok: true };
     } catch (error) {
-      daemon?.kill();
+      if (daemon) await stopDaemonProcess(daemon).catch((stopError: unknown) =>
+        logLifecycle("daemon-stop-failed", { error: String(stopError) }));
       daemon = undefined;
       return {
         ok: false,
@@ -297,7 +306,7 @@ async function initializeDesktop(): Promise<void> {
   await ensureV2Storage(userDataPath, legacyRuntimePath === userDataPath ? [] : [legacyRuntimePath]);
   await logLifecycle("ready", { showWindowWhenReady });
   browserHost = new DesktopBrowserHost(async (sessionId, runId) => {
-    const detail = await daemonRequest<SessionDetail>({ id: newId("request"), method: "session.get", params: { sessionId } });
+    const detail = await daemonRequest<SessionDetail>({ id: newId("request"), method: "session.view", params: { sessionId, limit: 1 } });
     if (!detail?.session || detail.session.deletedAt) throw new Error("浏览器对话不存在或已被删除");
     if (runId) {
       const run = await daemonRequest<{ spec: RunSpec; status: string }>({ id: newId("request"), method: "run.get", params: { runId } });
@@ -452,6 +461,7 @@ async function startDaemon(passphrase: string): Promise<void> {
     ...settingsEnvironment,
     HARNESS_APP_DATA_PATH: app.getPath("userData"),
     HARNESS_DAEMON_INSTANCE: daemonInstanceId,
+    HARNESS_DESKTOP_PID: String(process.pid),
     ...(browserHost ? { HARNESS_BROWSER_BRIDGE: browserHost.endpoint, HARNESS_BROWSER_TOKEN: browserHost.token } : {}),
   };
   if (app.isPackaged)
@@ -513,43 +523,10 @@ async function restartDaemon(): Promise<void> {
   if (!currentPassphrase) return;
   if (daemon) {
     const previous = daemon;
-    const pid = previous.pid;
-    const stopped = new Promise<void>((resolveStop) =>
-      previous.once("exit", () => resolveStop()),
-    );
-    killDaemonTree(previous);
-    const exited = await Promise.race([
-      stopped.then(() => true),
-      new Promise<boolean>((resolveWait) =>
-        setTimeout(
-          () => resolveWait(pid !== undefined && !isProcessAlive(pid)),
-          2_000,
-        ),
-      ),
-    ]);
-    if (!exited) throw new Error("旧 daemon 进程未能在 2 秒内退出，请稍后重试");
+    await stopDaemonProcess(previous);
     daemon = undefined;
   }
   await ensureDaemon(currentPassphrase);
-}
-
-function killDaemonTree(child: ChildProcess): void {
-  if (!child.pid) return;
-  if (process.platform === "win32")
-    spawn("taskkill", ["/pid", String(child.pid), "/t", "/f"], {
-      windowsHide: true,
-      stdio: "ignore",
-    });
-  else child.kill();
-}
-
-function isProcessAlive(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch {
-    return false;
-  }
 }
 
 async function rememberPassphrase(passphrase: string): Promise<void> {
@@ -593,7 +570,7 @@ async function normalizeAndPut(
     throw new Error("仅支持 PNG、JPEG、GIF 和 WebP");
   if ((metadata.width ?? 0) * (metadata.height ?? 0) > 40_000_000)
     throw new Error("图片像素总量不能超过 4000 万");
-  const format = metadata.format === "jpg" ? "jpeg" : metadata.format;
+  const format = metadata.format;
   const normalized = await sharp(bytes, { animated: true })
     .rotate()
     .toFormat(format as "png" | "jpeg" | "gif" | "webp")

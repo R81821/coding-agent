@@ -1,7 +1,9 @@
-import React, { useState } from "react";
+import React, { lazy, Suspense, useMemo } from "react";
+import { useRowState } from "@harness/conversation-ui";
 import type { RunReview } from "@harness/protocol";
-import { CodeChanges } from "./CodeChanges.js";
 import { parseDiff, type DiffFile } from "../code-changes.js";
+
+const CodeChanges = lazy(() => import("./CodeChanges.js").then(module => ({ default: module.CodeChanges })));
 
 export type { RunReview };
 
@@ -45,13 +47,14 @@ export function InlineReview({
   review: RunReview | undefined;
   onUndo: (path: string) => Promise<void>;
 }) {
-  const [selectedPath, setSelectedPath] = useState<string | null>(null);
-  const [undoing, setUndoing] = useState<string | null>(null);
-  const [error, setError] = useState("");
-  const files = selectInlineReviewFiles(review);
+  const [selectedPath, setSelectedPath] = useRowState<string | null>("reviewPath", null);
+  const [undoing, setUndoing] = useRowState<string | null>("reviewUndoing", null);
+  const [error, setError] = useRowState("reviewError", "");
+  const files = useMemo(() => selectInlineReviewFiles(review), [review]);
   if (!files.length) return null;
   const selected = files.find((file) => file.path === selectedPath);
   async function undo(path: string) {
+    if (undoing !== null) return;
     if (!window.confirm(`撤销 ${path} 在本轮中的修改？`)) return;
     setUndoing(path);
     setError("");
@@ -111,7 +114,7 @@ export function InlineReview({
           {error}
         </p>
       )}
-      {selected && (
+      {selected && <Suspense fallback={<p role="status">正在加载差异…</p>}>
         <CodeChanges
           compact
           events={[]}
@@ -123,7 +126,7 @@ export function InlineReview({
             },
           ]}
         />
-      )}
+      </Suspense>}
     </section>
   );
 }

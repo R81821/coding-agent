@@ -28,8 +28,10 @@ export function SkillsView({ skills, profileId, refresh, decide }: {
   const downloadRef = useRef<HTMLElement>(null);
   const refreshRef = useRef(refresh); refreshRef.current = refresh;
   const jobRef = useRef(jobs); jobRef.current = jobs;
+  const hasRunningJobs = Object.values(jobs).some(job => job?.status === "running");
   useEffect(() => { void window.harness.request<{ globalPath: string }>({ method: "skills.location" }).then(value => setGlobalPath(value.globalPath)).catch(e => setError(String(e))); }, []);
   useEffect(() => {
+    if (!hasRunningJobs) return;
     let disposed = false;
     const poll = async () => {
       for (const previous of Object.values(jobRef.current)) {
@@ -49,7 +51,7 @@ export function SkillsView({ skills, profileId, refresh, decide }: {
     };
     let timer = setTimeout(() => void poll(), 300);
     return () => { disposed = true; clearTimeout(timer); };
-  }, []);
+  }, [hasRunningJobs]);
   const installedPath = useRef<string | undefined>(undefined);
   async function start(kind: SkillJob["kind"]) {
     setError(""); setStarting(true);

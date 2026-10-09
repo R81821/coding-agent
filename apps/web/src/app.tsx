@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import {
   ArrowUp,
   Check,
@@ -58,7 +58,7 @@ import {
 } from "./components/ui/tooltip";
 import { Sidebar, type Page } from "./components/sidebar";
 import { Conversation, Welcome } from "./components/conversation";
-import { WorkspacePanels } from "./components/workspace-panels";
+const WorkspacePanels = lazy(() => import("./components/workspace-panels").then(module => ({ default: module.WorkspacePanels })));
 
 type Inspection = {
   files: Array<{ path: string; sha256: string; content: string }>;
@@ -91,11 +91,13 @@ export default function App() {
   const [taskMode, setTaskMode] = useState<"auto" | "analysis" | "change">(
     "auto",
   );
+  const drafts = useRef(new Map<string, { prompt: string; taskMode: "auto" | "analysis" | "change" }>());
+  const navigation = useRef(0);
   const [pending, setPending] = useState(false);
   const [help, setHelp] = useState(false);
   const textarea = useRef<HTMLTextAreaElement>(null);
   const actionLock = useRef(false);
-  const currentPath = work.detail?.session.workspacePath ?? workspace;
+  const currentPath = work.detail?.session.workspacePath ?? work.sessions.items.find(item => item.id === work.activeId)?.workspacePath ?? workspace;
   const profile =
     work.profiles.find(
       (p) => p.id === (work.detail?.session.profileId ?? profileId),
@@ -121,6 +123,7 @@ export default function App() {
     return () => media.removeEventListener("change", apply);
   }, [theme]);
   useEffect(() => {
+    drafts.current.clear(); navigation.current++;
     setWorkspace("");
     setProfileId("");
     setPrompt("");
@@ -136,13 +139,18 @@ export default function App() {
     return () => window.removeEventListener("keydown", listener);
   }, []);
   function selectSession(id: string) {
+    if (work.activeId) drafts.current.set(work.activeId, { prompt, taskMode });
+    navigation.current++;
     work.setActiveId(id);
+    setTaskMode(drafts.current.get(id)?.taskMode ?? "auto");
     setPage("chat");
     setMobile(false);
     setSearch(false);
-    setPrompt("");
+    setPrompt(drafts.current.get(id)?.prompt ?? "");
   }
   function newTask() {
+    if (work.activeId) drafts.current.set(work.activeId, { prompt, taskMode });
+    navigation.current++;
     work.setActiveId(undefined);
     setPage("chat");
     setPrompt("");
@@ -156,12 +164,13 @@ export default function App() {
   async function action(callback: () => Promise<void>) {
     if (actionLock.current) return;
     actionLock.current = true;
+    const token = navigation.current;
     setPending(true);
     work.setError("");
     try {
       await callback();
     } catch (e) {
-      work.setError(errorMessage(e));
+      if (token === navigation.current) work.setError(errorMessage(e));
     } finally {
       setPending(false);
       actionLock.current = false;
@@ -169,6 +178,7 @@ export default function App() {
   }
   async function send() {
     if (
+      work.selectionLoading ||
       !prompt.trim() ||
       !profile ||
       busy ||
@@ -182,6 +192,7 @@ export default function App() {
       return;
     }
     const request = prompt.trim();
+    const token = navigation.current;
     await action(async () => {
       let session = work.detail?.session;
       if (!session) {
@@ -197,7 +208,7 @@ export default function App() {
             updatedAt: now,
           },
         });
-        work.setActiveId(session.id);
+        if (token === navigation.current) work.setActiveId(session.id);
       }
       const spec: RunSpec = {
         id: `run_${crypto.randomUUID()}`,
@@ -212,7 +223,8 @@ export default function App() {
         createdAt: new Date().toISOString(),
       };
       await work.request({ method: "run.start", params: spec });
-      setPrompt("");
+      drafts.current.delete(session.id);
+      if (token === navigation.current) setPrompt("");
       await work.reloadDetail(session.id);
     });
   }
@@ -236,8 +248,8 @@ export default function App() {
     });
   }
   function acceptProject() {
+    newTask();
     setWorkspace(pathInput.trim());
-    work.setActiveId(undefined);
     setPage("chat");
     setProjectOpen(false);
     setInspection(undefined);
@@ -429,7 +441,7 @@ export default function App() {
                         <Button
                           variant="ghost"
                           size="sm"
-                          disabled={pending || busy || paused}
+                          disabled={pending}
                           className="max-w-44 min-w-0 gap-1.5 text-xs text-muted-foreground"
                         >
                           <FolderClosed />
@@ -448,8 +460,8 @@ export default function App() {
                           <DropdownMenuItem
                             key={path}
                             onSelect={() => {
+                              newTask();
                               setWorkspace(path);
-                              work.setActiveId(undefined);
                             }}
                           >
                             <FolderClosed />
@@ -605,13 +617,13 @@ export default function App() {
               </div>
             </>
           ) : (
-            <WorkspacePanels
+            <Suspense fallback={<p role="status">正在加载页面…</p>}><WorkspacePanels
               page={page}
               work={work}
               onSession={selectSession}
               theme={theme}
               setTheme={setTheme}
-            />
+            /></Suspense>
           )}
         </main>
         <Dialog open={search} onOpenChange={setSearch}>

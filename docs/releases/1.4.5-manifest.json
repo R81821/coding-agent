@@ -1,0 +1,49 @@
+{
+  "product": "Harness Agent",
+  "version": "1.4.5",
+  "target": "Windows x64 NSIS",
+  "sourceCommit": "5512bff5b1cf7f40ce5a99e946e2666b3ebdbdf7",
+  "includesUncommittedChanges": true,
+  "builtAt": "2026-10-07T19:58:48.7832481+08:00",
+  "installer": "Harness-Agent-1.4.5-x64.exe",
+  "bytes": 134290329,
+  "sha256": "6c25606bb50cc68fffb89e0014a8aa7ebd4d4046a3b95329b6a94edb750cbda4",
+  "signatureStatus": "NotSigned",
+  "validation": {
+    "typecheck": "passed",
+    "tests": {
+      "filesPassed": 112,
+      "testsPassed": 718
+    },
+    "productionBuild": "passed",
+    "desktopStartupSmoke": "passed: main process, preload, renderer document",
+    "packagedSmoke": {
+      "version": "1.4.5",
+      "electron": "41.10.6",
+      "node": "24.18.0",
+      "arch": "x64",
+      "packagedFiles": "passed",
+      "rendererVersion": "1.4.5",
+      "sharpPngBytes": 95,
+      "sqliteRoundTrip": "passed",
+      "daemonHealth": {
+        "status": "ok",
+        "version": "1.4.5",
+        "activeRuns": "available",
+        "providerIds": [],
+        "connectors": []
+      }
+    },
+    "nsisPackage": "passed",
+    "lint": {
+      "status": "failed",
+      "errors": 8,
+      "details": [
+        "apps/daemon/src/main.ts:25 prefer-const",
+        "apps/desktop/src/components/McpView.test.tsx:14,22,33 unused env/headers (6 errors)",
+        "packages/extensions/src/mcp-service.ts:128 no-this-alias"
+      ]
+    },
+    "interactiveInstall": "not run"
+  }
+}

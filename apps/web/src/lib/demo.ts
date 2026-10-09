@@ -82,7 +82,7 @@ function restore(): SessionDetail[] {
 }
 
 export function createDemo() {
-  let sessions = restore();
+  const sessions = restore();
   const active = new Map<string, number>();
   const save = () => {
     try {
@@ -97,32 +97,33 @@ export function createDemo() {
         const started = active.get(run.spec.id);
         if (!started || !isActive(run.status)) continue;
         const elapsed = Date.now() - started;
-        run.events = [
+        const previousLength = run.events.filter(event => event.type === "text_delta").reduce((sum, event) => sum + event.delta.length, 0);
+        run.events.push(
           {
-            id: `${run.spec.id}-text`,
+            id: `${run.spec.id}-text-${run.events.length}`,
             runId: run.spec.id,
             at: stamp(),
-            sequence: 0,
+            sequence: run.events.length,
             type: "text_delta",
             delta: message.slice(
-              0,
+              previousLength,
               Math.floor(Math.max(0, elapsed - 700) / 12),
             ),
           },
-        ];
+        );
         if (elapsed > message.length * 12 + 1000) {
           run.status = "completed";
-          run.events = [
+          run.events.push(
             {
               id: `${run.spec.id}-result`,
               runId: run.spec.id,
               at: stamp(),
-              sequence: 1,
+              sequence: run.events.length,
               type: "result",
               text: message,
               status: "completed",
             },
-          ];
+          );
           active.delete(run.spec.id);
           save();
         }
@@ -163,6 +164,23 @@ export function createDemo() {
           hasMore: false,
         };
         break;
+      case "session.view": {
+        const detail = sessions.find(s => s.session.id === input.params.sessionId);
+        if (!detail) break;
+        const before = input.params.before;
+        const eligible = detail.runs.filter(run => !before || run.spec.createdAt < before.createdAt || (run.spec.createdAt === before.createdAt && run.spec.id < before.id));
+        const runs = eligible.slice(-input.params.limit).map(run => ({ ...run, view: { lastSequence: run.events.at(-1)?.sequence ?? -1, eventsComplete: true } }));
+        result = { session: detail.session, runs, hasMore: eligible.length > runs.length, ...(runs[0] ? { before: { createdAt: runs[0].spec.createdAt, id: runs[0].spec.id } } : {}) };
+        break;
+      }
+      case "run.eventPage": {
+        const run = sessions.flatMap(s => s.runs).find(run => run.spec.id === input.params.runId);
+        if (!run) throw new Error("运行不存在");
+        const eligible = run.events.filter(event => event.sequence > input.params.afterSequence);
+        const events = eligible.slice(0, input.params.limit);
+        result = { events, nextSequence: events.at(-1)?.sequence ?? input.params.afterSequence, hasMore: eligible.length > events.length, status: run.status };
+        break;
+      }
       case "session.get":
         result = sessions.find((s) => s.session.id === input.params.sessionId);
         break;

@@ -4,7 +4,7 @@ import { isAbsolute, join, relative } from "node:path";
 import { tmpdir } from "node:os";
 import { HarnessDatabase, VaultCrypto } from "@harness/persistence";
 import { DEFAULT_PROFILE, DaemonRequestSchema, type AgentEvent, type ProjectRecord, type RunHistoryItem, type RunSpec, type SessionDetail, type SessionSummary } from "@harness/protocol";
-import { groupRunHistory, groupSessionsByProject, isLiveRun, mergeRunEvents, mergeRunHistory, mergeSessionPages, sessionTurns, workspaceKey } from "../apps/desktop/src/run-history.js";
+import { createSessionTurnSelector, groupRunHistory, groupSessionsByProject, isLiveRun, mergeRunEvents, mergeRunHistory, mergeSessionPages, sessionTurns, workspaceKey } from "../apps/desktop/src/run-history.js";
 import { sanitizeRendererRequest } from "../apps/desktop/src/renderer-ipc.js";
 
 function spec(id: string, createdAt = "2026-09-01T00:00:00.000Z"): RunSpec {
@@ -61,6 +61,24 @@ describe("persistent run history", () => {
 });
 
 describe("history switching state", () => {
+  it("retains unaffected row identities during streaming and invalidates continuation totals", () => {
+    const select = createSessionTurnSelector();
+    const parent = { spec: spec("a"), status: "running" as const, events: [event("a", 0)] };
+    const child = { spec: { ...spec("b"), continuation: { runId: "a", checkpointId: "checkpoint" } }, status: "completed" as const, events: [event("b", 0)] };
+    const other = { spec: spec("c"), status: "completed" as const, events: [event("c", 0)] };
+    const detail: SessionDetail = { session: { id: "s", title: "s", workspacePath: "D:/fixture", profileId: "default", createdAt: parent.spec.createdAt, updatedAt: parent.spec.createdAt }, runs: [parent, child, other] };
+    const first = select(detail);
+    const second = select({ ...detail, runs: [{ ...parent, events: [...parent.events, event("a", 1)] }, child, other] });
+    expect(second[0]).not.toBe(first[0]);
+    expect(second[1]).toBe(first[1]);
+    expect(second[2]).toBe(first[2]);
+    const usage: AgentEvent = { id: "usage", runId: "a", sequence: 2, at: parent.spec.createdAt, type: "usage", usage: { inputTokens: 10, outputTokens: 5, estimatedUsd: 0.1 } };
+    const third = select({ ...detail, runs: [{ ...parent, events: [...parent.events, usage] }, child, other] });
+    expect(third[1]).not.toBe(second[1]);
+    expect(third[1]?.chainUsage?.inputTokens).toBe(10);
+    expect(third[2]).toBe(second[2]);
+    expect(mergeRunEvents(parent.events, [], "a")).toBe(parent.events);
+  });
   it("groups conversations under their project and puts the current project first", () => {
     const alpha = { ...item("alpha"), workspacePath: "D:\\Code\\Alpha" };
     const alphaOlder = { ...item("alpha-old"), workspacePath: "d:/code/alpha/" };
@@ -137,9 +155,10 @@ describe("Session-oriented renderer state", () => {
         { spec: secondSpec, status: "failed", events: [event(secondSpec.id, 0)] },
       ],
     };
+    const emptyUsage = { turns: 0, tools: 0, inputTokens: 0, outputTokens: 0, usd: 0, costKnown: true };
     expect(sessionTurns(detail)).toEqual([
-      { runId: firstSpec.id, request: "first prompt", status: "completed", events: [event(firstSpec.id, 0)] },
-      { runId: secondSpec.id, request: "second prompt", status: "failed", events: [event(secondSpec.id, 0)] },
+      { runId: firstSpec.id, request: "first prompt", status: "completed", events: [event(firstSpec.id, 0)], usage: emptyUsage, chainUsage: emptyUsage },
+      { runId: secondSpec.id, request: "second prompt", status: "failed", events: [event(secondSpec.id, 0)], usage: emptyUsage, chainUsage: emptyUsage },
     ]);
   });
 });

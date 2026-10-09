@@ -51,6 +51,7 @@ export class CodingWorkflow {
     this.state.broaderPolicy = policy.broaderPolicy ?? "optional";
     this.state.reviewPolicy = policy.reviewPolicy ?? "standard";
     this.state.requirementIds = this.state.requirements.map((_, i) => `req-${i + 1}`);
+    this.skipIndependentReview();
     // Files can change while the process is offline. Never reuse successful checks after restart.
     if (recovered) this.invalidate();
   }
@@ -58,7 +59,11 @@ export class CodingWorkflow {
   move(phase: WorkflowPhase, detail: string): void { this.state.phase = phase; this.publish(this.snapshot(), detail); }
   invalidate(): void {
     const pending = () => ({ status: "pending" as const, revision: -1, epoch: this.state.epoch, runId: "", reason: "" });
-    Object.assign(this.state, { localCheck: pending(), broaderCheck: pending(), independentReview: pending(), requirementReceipts: [], reviewEvidenceIds: [], localRevision: -1, broaderRevision: -1, diffRevision: -1, requirementsRevision: -1, reviewedRevision: -1, requirementEvidence: [], review: "" });
+    Object.assign(this.state, { localCheck: pending(), broaderCheck: pending(), requirementReceipts: [], reviewEvidenceIds: [], localRevision: -1, broaderRevision: -1, diffRevision: -1, requirementsRevision: -1, reviewedRevision: -1, requirementEvidence: [], review: "" });
+    this.skipIndependentReview();
+  }
+  protected skipIndependentReview(): void {
+    this.state.independentReview = { status: "skipped", revision: this.state.revision, epoch: this.state.epoch, runId: "", reason: "独立模型评审已关闭；由实际测试、当前 diff 和逐项需求证据完成验收。" };
   }
   get needsChange(): boolean { return this.state.intent === "change" || this.state.revision > 0; }
   tool(): ToolDefinition {
@@ -140,17 +145,21 @@ export class CodingWorkflow {
       // Early reads remain permitted, but do not pretend understanding has completed.
       if (this.state.requirements.length && !this.state.plan.length) this.move("repository_recon", "取得证据 " + call.id);
     }
-    if (call.name === "git_diff") this.state.diffRevision = !failed && !result.truncated ? this.state.revision : -1;
+    if (["git_diff", "workspace_diff"].includes(call.name)) this.state.diffRevision = !failed && !result.truncated ? this.state.revision : -1;
     const source = "tool:" + call.name + ":" + JSON.stringify({ path: call.input.path, cwd: call.input.cwd, command: call.input.command, stdinDigest: typeof call.input.stdin === "string" ? createHash("sha256").update(call.input.stdin).digest("hex") : undefined });
     if (failed && this.needsChange) this.fail(call.name + ": " + compactObservation(result.output, 1800), source, observation);
     else if (!failed) this.resolveSource(source);
     this.publish(this.snapshot(), "工具活动：" + call.name);
   }
   fail(reason: string, source = "workflow", origin?: WorkflowState["observations"][number]): void {
-    this.state.failures += 1;
     this.state.diagnosisRequired = true;
-    this.state.lastFailure = reason.slice(0, 3000);
     this.invalidate();
+    this.recordFailure(reason, source, origin);
+    this.move("diagnose", this.strategy());
+  }
+  protected recordFailure(reason: string, source: string, origin?: WorkflowState["observations"][number]): void {
+    this.state.failures += 1;
+    this.state.lastFailure = reason.slice(0, 3000);
     const signature = (reason.split(/\r?\n/).find(line => /error|fail|exception|timeout|ENOENT|EACCES/i.test(line)) ?? reason).toLowerCase().replace(/\b\d+\b/g, "#").slice(0, 300);
     const fingerprint = createHash("sha256").update(source + ":" + signature).digest("hex");
     let chain = this.state.failureChains.find(item => item.fingerprint === fingerprint && item.status === "open");
@@ -167,7 +176,6 @@ export class CodingWorkflow {
     if (origin) origin.failureId = chain.failureId;
     const observed = this.record(chain.failureId, source, source, reason, true, "failure");
     chain.lastSequence = observed.sequence;
-    this.move("diagnose", this.strategy());
   }
   get failureLevel(): number { return this.state.failureChains.find(chain => chain.id === this.state.activeChainId && chain.status === "open")?.count ?? 0; }
   strategy(): string {
@@ -189,16 +197,18 @@ export class CodingWorkflow {
       if (stage === "local") this.state.localCheck = current; else this.state.broaderCheck = current;
     }
   }
-  private freshEvidence(ids: string[], successful = true) {
+  protected freshEvidence(ids: string[], successful = true) {
     const entries = ids.map(id => this.state.observations.find(item => item.id === id));
     if (entries.some(item => !item || item.epoch !== this.state.epoch || item.revision !== this.state.revision || (successful && (item.failed || !item.complete)))) throw new Error("Evidence must be successful and belong to the current epoch and revision.");
     return entries as WorkflowState["observations"];
   }
-  get requiresIndependentReview(): boolean { return this.state.reviewPolicy === "risk_based" && this.state.riskFlags.length > 0; }
+  get requiresIndependentReview(): boolean { return false; }
+  protected rejectIndependentReview(summary: string): void { this.fail(summary, "independent-review"); }
   recordIndependentReview(passed: boolean, summary: string): void {
+    if (!this.requiresIndependentReview) throw new Error("Independent model review is disabled; use runtime test receipts and requirement acceptance.");
     if (!this.baseCanFinish()) throw new Error("Complete requirement and diff evidence before independent review.");
     const review = { status: passed ? "passed" as const : "failed" as const, epoch: this.state.epoch, revision: this.state.revision, runId: newId("independent-review"), reason: summary };
-    if (!passed) this.fail(summary, "independent-review");
+    if (!passed) this.rejectIndependentReview(summary);
     else this.resolveSource("independent-review");
     this.state.independentReview = review;
     this.move(passed ? "final_review" : "diagnose", "独立只读评审：" + summary);
@@ -287,7 +297,7 @@ export class CodingWorkflow {
       for (const item of value.evidence) {
         this.freshEvidence(item.observationIds);
         const diff = this.freshEvidence([item.diffObservationId])[0];
-        if (diff?.tool !== "git_diff") throw new Error("Requirement evidence must reference the current git_diff.");
+        if (!diff || !["git_diff", "workspace_diff"].includes(diff.tool)) throw new Error("Requirement evidence must reference the current git_diff.");
         for (const id of item.verificationIds) if (![this.state.localCheck, this.state.broaderCheck].some(check => check.runId === id && check.status === "passed" && check.epoch === this.state.epoch && check.revision === this.state.revision)) throw new Error("Unknown, failed, skipped or stale verification reference.");
       }
       this.state.requirementReceipts = value.evidence;
@@ -299,7 +309,7 @@ export class CodingWorkflow {
       if (this.state.requirementsRevision !== this.state.revision) throw new Error("Check each requirement before final review.");
       if (value.passed === false) { this.fail(value.summary ?? "Final review found unresolved issues.", "review"); return; }
       if (value.passed !== true || !value.summary) throw new Error("Final review requires passed and a summary of scope, regressions and edge cases.");
-      if (!value.evidenceIds?.length || !this.freshEvidence(value.evidenceIds).some(item => item.tool === "git_diff")) throw new Error("Final review must cite current successful diff evidence.");
+      if (!value.evidenceIds?.length || !this.freshEvidence(value.evidenceIds).some(item => ["git_diff", "workspace_diff"].includes(item.tool))) throw new Error("Final review must cite current successful diff evidence.");
       this.state.reviewEvidenceIds = value.evidenceIds;
       this.resolveSource("review");
       this.state.review = value.summary;

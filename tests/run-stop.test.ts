@@ -1,9 +1,16 @@
 import { describe, expect, it } from "vitest";
 import { AgentEventSchema, DEFAULT_PROFILE, RunBudgetSchema, RunStopInfoSchema } from "@harness/protocol";
-import { buildRunStop } from "../packages/core/src/run-stop.js";
+import { budgetStopMessage, buildRunStop } from "../packages/core/src/run-stop.js";
 import { CodingWorkflow } from "../packages/core/src/coding-workflow.js";
 
 describe("structured run stops", () => {
+  it("ignores historical independent review failures after automatic review is removed", () => {
+    const workflow = new CodingWorkflow("fix", () => {});
+    workflow.state.independentReview = { status: "failed", revision: 0, epoch: workflow.state.epoch, runId: "review", reason: "Browser evidence is missing" };
+    expect(budgetStopMessage("model_turn_limit", workflow.snapshot(), true)).toBe("模型轮次额度已用完；尚未完成：分析结论与未检查范围");
+    workflow.state.independentReview.revision = -1;
+    expect(budgetStopMessage("tool_call_limit", workflow.snapshot(), false)).toBe("工具调用额度已用完；尚未完成：分析结论与未检查范围");
+  });
   it("keeps legacy result events compatible", () => {
     expect(AgentEventSchema.parse({id:"e",runId:"r",at:new Date().toISOString(),sequence:0,type:"result",status:"review",text:"old"}).type).toBe("result");
   });
@@ -38,6 +45,8 @@ describe("structured run stops", () => {
     const stop = buildRunStop("model_turn_limit","模型轮次已用完",spec,{toolCalls:50,turns:64,repairAttemptsUsed:7,spentUsd:1,startedAt:Date.now()},workflow.snapshot());
     expect(RunStopInfoSchema.parse(stop).usage.repairs).toEqual({used:7,limit:null});
     expect(stop.pending).toContain("局部验证");
-    expect(stop.pending).toContain("最终评审");
+    expect(stop.pending).toContain("逐项需求验收");
+    expect(stop.pending).toContain("当前版本的最终报告");
+    expect(stop.pending).not.toContain("独立评审");
   });
 });

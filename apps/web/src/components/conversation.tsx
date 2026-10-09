@@ -1,6 +1,6 @@
-import { useEffect, useRef, useState } from "react";
+import { memo, useEffect, useMemo, useRef, useState } from "react";
+import { VirtualConversation, useRowState } from "@harness/conversation-ui";
 import {
-  ArrowDown,
   ArrowUpRight,
   Check,
   ChevronDown,
@@ -16,7 +16,8 @@ import {
 } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import type { PlanSpec, RunReview } from "@harness/protocol";
+import { isDeferredOutput } from "@harness/protocol";
+import type { AgentEvent, PlanSpec, RunReview } from "@harness/protocol";
 import { Button } from "./ui/button";
 import { Badge } from "./ui/badge";
 import {
@@ -140,21 +141,33 @@ export function Welcome({
   );
 }
 
-function TurnView({ turn, work }: { turn: Turn; work: Workbench }) {
+type TurnActions = Pick<Workbench, "mode" | "request" | "setError" | "reloadDetail">;
+const Answer = memo(function Answer({ text }: { text: string }) {
+  return <div className="prose-harness"><ReactMarkdown remarkPlugins={[remarkGfm]} components={{
+    a: props => <a {...props} target="_blank" rel="noopener noreferrer" />,
+  }}>{text}</ReactMarkdown></div>;
+});
+const TurnView = memo(function TurnView({ turn, work }: { turn: Turn; work: TurnActions }) {
   const [copied, setCopied] = useState(false);
-  const [review, setReview] = useState<RunReview>();
+  const [review, setReview] = useRowState<RunReview | undefined>("review", undefined);
   const [reviewOpen, setReviewOpen] = useState(false);
-  const [pending, setPending] = useState(false);
+  const [pending, setPending] = useRowState("planPending", false);
   const [plan, setPlan] = useState<PlanSpec>();
-  const answer = answerText(turn.events);
-  const activity = turn.events
+  const answer = useMemo(() => answerText(turn.events), [turn.events]);
+  const result = turn.events.findLast(event => event.type === "result");
+  const latestStatus = turn.events.findLast(event => event.type === "status");
+  const terminalResult = result && (!latestStatus || result.sequence >= latestStatus.sequence) ? result : undefined;
+  const displayStatus = terminalResult?.status ?? turn.status;
+  const [processOpen, setProcessOpen] = useRowState("processOpen", false);
+  const hasActivity = useMemo(() => turn.events.some(event => Boolean(activityText(event))), [turn.events]);
+  const activity = useMemo(() => processOpen ? turn.events
     .map((e) => ({
       id: e.id,
       text: activityText(e),
       error: e.type === "error",
     }))
-    .filter((e) => e.text);
-  const busy = isActive(turn.status);
+    .filter((e) => e.text) : [], [processOpen, turn.events]);
+  const busy = isActive(turn.status) && !terminalResult;
   useEffect(() => {
     let current = true;
     if (work.mode === "local" && turn.status === "waiting_approval")
@@ -175,7 +188,7 @@ function TurnView({ turn, work }: { turn: Turn; work: Workbench }) {
     };
   }, [turn.spec.id, turn.status, work.mode, work.request]);
   async function decide(approved: boolean) {
-    if (!plan) return;
+    if (!plan || pending) return;
     setPending(true);
     try {
       await work.request({
@@ -204,9 +217,9 @@ function TurnView({ turn, work }: { turn: Turn; work: Workbench }) {
       </div>
       <div className="mb-4 flex items-center gap-2">
         <span className="font-semibold tracking-tight">Harness</span>
-        <StatusMarker status={turn.status} />
+        <StatusMarker status={displayStatus} />
         <span className="text-xs text-muted-foreground">
-          {statusLabels[turn.status]}
+          {terminalResult?.status === "review" ? "待复核" : statusLabels[displayStatus]}
         </span>
         {work.mode === "demo" && (
           <Badge
@@ -217,8 +230,9 @@ function TurnView({ turn, work }: { turn: Turn; work: Workbench }) {
           </Badge>
         )}
       </div>
-      {activity.length > 0 && (
-        <Collapsible className="mb-5 rounded-xl border bg-secondary/30">
+      {turn.view && !turn.view.eventsComplete && <p role="status" className="text-xs text-muted-foreground">正在同步执行记录…</p>}
+      {hasActivity && (
+        <Collapsible open={processOpen} onOpenChange={setProcessOpen} className="mb-5 rounded-xl border bg-secondary/30">
           <CollapsibleTrigger asChild>
             <Button
               variant="ghost"
@@ -231,7 +245,7 @@ function TurnView({ turn, work }: { turn: Turn; work: Workbench }) {
               <ChevronDown className="size-3.5" />
             </Button>
           </CollapsibleTrigger>
-          <CollapsibleContent className="max-h-64 space-y-2 overflow-auto px-4 pb-4">
+          {processOpen && <CollapsibleContent className="max-h-64 space-y-2 overflow-auto px-4 pb-4">
             {activity.map((e) => (
               <p
                 key={e.id}
@@ -242,23 +256,12 @@ function TurnView({ turn, work }: { turn: Turn; work: Workbench }) {
                 {e.text}
               </p>
             ))}
-          </CollapsibleContent>
+            {turn.events.filter((event): event is Extract<AgentEvent, { type: "tool_finished" }> => event.type === "tool_finished").map(event => <ToolOutput key={event.id} event={event} />)}
+          </CollapsibleContent>}
         </Collapsible>
       )}
-      {answer && (
-        <div className="prose-harness">
-          <ReactMarkdown
-            remarkPlugins={[remarkGfm]}
-            components={{
-              a: (props) => (
-                <a {...props} target="_blank" rel="noopener noreferrer" />
-              ),
-            }}
-          >
-            {answer}
-          </ReactMarkdown>
-        </div>
-      )}
+      {terminalResult?.stop && terminalResult.status !== "paused" && <p role="status" className="mb-3 text-sm text-destructive">{terminalResult.stop.message}</p>}
+      {answer && <Answer text={answer} />}
       {plan?.status === "awaiting_approval" && (
         <div className="mt-4 rounded-xl border p-4">
           <p className="font-medium">确认执行计划</p>
@@ -365,71 +368,32 @@ function TurnView({ turn, work }: { turn: Turn; work: Workbench }) {
       </Dialog>
     </article>
   );
+});
+
+function ToolOutput({ event }: { event: Extract<AgentEvent, { type: "tool_finished" }> }) {
+  if (isDeferredOutput(event.output)) return <p role="status">正在同步工具输出…</p>;
+  return <pre className="max-h-64 overflow-auto whitespace-pre-wrap">{typeof event.output === "string" ? event.output : JSON.stringify(event.output, null, 2)}</pre>;
 }
 
+const turnKey = (turn: Turn) => turn.spec.id;
+
 export function Conversation({ work }: { work: Workbench }) {
-  const scroll = useRef<HTMLDivElement>(null);
-  const follow = useRef(true);
-  const [below, setBelow] = useState(false);
-  useEffect(() => {
-    follow.current = true;
-    setBelow(false);
-  }, [work.activeId]);
-  useEffect(() => {
-    if (follow.current && scroll.current)
-      scroll.current.scrollTop = scroll.current.scrollHeight;
-  }, [work.detail]);
-  return (
-    <div className="relative min-h-0 flex-1">
-      <div
-        ref={scroll}
-        onScroll={() => {
-          const el = scroll.current;
-          if (el) {
-            follow.current =
-              el.scrollHeight - el.scrollTop - el.clientHeight < 80;
-            setBelow(!follow.current);
-          }
-        }}
-        className="h-full overflow-y-auto [scrollbar-gutter:stable]"
-      >
-        <div className="mx-auto max-w-3xl px-6 py-8">
-          {!work.detail ? (
-            <div
-              role="status"
-              className="flex items-center gap-2 text-muted-foreground"
-            >
-              <LoaderCircle className="size-4 animate-spin" />
-              正在读取会话…
-            </div>
-          ) : work.detail.runs.length ? (
-            work.detail.runs.map((turn) => (
-              <TurnView key={turn.spec.id} turn={turn} work={work} />
-            ))
-          ) : (
-            <p className="py-16 text-center text-muted-foreground">
-              项目已就绪，发送一条消息开始。
-            </p>
-          )}
-        </div>
-      </div>
-      {below && (
-        <Button
-          variant="outline"
-          size="icon"
-          className="absolute bottom-4 left-1/2 rounded-full shadow-sm"
-          aria-label="滚动到最新消息"
-          onClick={() => {
-            follow.current = true;
-            scroll.current?.scrollTo({
-              top: scroll.current.scrollHeight,
-              behavior: "smooth",
-            });
-          }}
-        >
-          <ArrowDown />
-        </Button>
-      )}
-    </div>
-  );
+  const latest = useRef(work); latest.current = work;
+  const actions = useMemo<TurnActions>(() => ({ mode: work.mode, request: work.request, setError: work.setError,
+    reloadDetail: id => latest.current.reloadDetail(id) }), [work.mode, work.request, work.setError]);
+  return <div className="relative min-h-0 flex-1">
+    {work.content.error && <div role="alert">{work.content.error}<Button onClick={work.content.retry}>重试</Button></div>}
+    <VirtualConversation key={work.activeId ?? "none"} items={work.detail?.runs ?? []} itemKey={turnKey}
+      className="h-full overflow-y-auto [scrollbar-gutter:stable]" contentClassName="mx-auto max-w-3xl px-6"
+      initialPosition={work.scrollPositions.current.get(work.activeId ?? "")}
+      onPosition={position => { if (work.activeId) work.scrollPositions.current.set(work.activeId, position); }}
+      onVisibleItems={work.content.prioritize}
+      renderItem={turn => <TurnView turn={turn} work={actions} />}
+      header={<>
+        {work.detail?.hasMore && <p role="status">正在同步历史消息…</p>}
+        {!work.detail ? <div role="status" className="flex items-center gap-2 text-muted-foreground"><LoaderCircle className="size-4 animate-spin" />正在读取会话…</div>
+          : !work.detail.runs.length ? <p className="py-16 text-center text-muted-foreground">项目已就绪，发送一条消息开始。</p> : null}
+      </>}
+    />
+  </div>;
 }

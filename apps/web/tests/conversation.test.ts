@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import {
   DEFAULT_PROFILE,
+  type AgentEvent,
   type SessionDetail,
   type SessionRecord,
 } from "@harness/protocol";
@@ -34,6 +35,19 @@ it("keeps final text once instead of duplicating streamed output", () => {
       { ...base, type: "result", text: "你好，完成了。", status: "completed" },
     ]),
   ).toBe("你好，完成了。");
+});
+
+it("uses the authoritative report and pending-review suffix across preview and full history", () => {
+  const base = { runId: "run", at: new Date().toISOString() };
+  const result: AgentEvent = { ...base, id: "result", sequence: 3, type: "result", text: "修正后的报告\n\n独立审核未完成", status: "review", sourceAssistantTurnSequence: 1 };
+  const full: AgentEvent[] = [
+    { ...base, id: "turn", sequence: 1, type: "assistant_turn_started" },
+    { ...base, id: "delta", sequence: 2, type: "text_delta", delta: "过时的长报告，声称已经完成" },
+    result,
+  ];
+  expect(answerText(full)).toBe(result.text);
+  expect(answerText([result])).toBe(result.text);
+  expect(answerText(JSON.parse(JSON.stringify(full)) as AgentEvent[])).toBe(result.text);
 });
 
 it("supports a complete isolated demo conversation, pause/resume, and reload", async () => {

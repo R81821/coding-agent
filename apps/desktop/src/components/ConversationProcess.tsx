@@ -1,4 +1,5 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect } from "react";
+import { useRowState } from "@harness/conversation-ui";
 import type { AgentEvent } from "@harness/protocol";
 
 export function conversationDurationMs(events: AgentEvent[]): number {
@@ -45,11 +46,12 @@ export function formatConversationDuration(durationMs: number): string {
 
 export function terminalConversationStatus(
   events: AgentEvent[],
-): "completed" | "failed" | "cancelled" | undefined {
+): "completed" | "review" | "failed" | "cancelled" | undefined {
   const result = events.findLast((event) => event.type === "result");
+  // A review result ends this turn too, even though the task still has unresolved work.
   return result?.type === "result" &&
-    ["completed", "failed", "cancelled"].includes(result.status)
-    ? (result.status as "completed" | "failed" | "cancelled")
+    ["completed", "review", "failed", "cancelled"].includes(result.status)
+    ? (result.status as "completed" | "review" | "failed" | "cancelled")
     : undefined;
 }
 
@@ -57,18 +59,21 @@ export function ConversationProcessSummary({
   completed,
   durationMs,
   activeLabel = "运行中",
+  preview = false,
   children,
 }: {
   completed: boolean;
   durationMs: number;
   activeLabel?: string;
-  children: React.ReactNode;
+  preview?: boolean;
+  children: React.ReactNode | (() => React.ReactNode);
 }) {
-  const [open, setOpen] = useState(!completed);
+  const [open, setOpen] = useRowState("processOpen", !completed);
+  const [lastCompleted, setLastCompleted] = useRowState("processCompleted", completed);
 
   useEffect(() => {
-    setOpen(!completed);
-  }, [completed]);
+    if (lastCompleted !== completed) { setOpen(!completed); setLastCompleted(completed); }
+  }, [completed, lastCompleted, setOpen, setLastCompleted]);
 
   return (
     <details
@@ -78,10 +83,10 @@ export function ConversationProcessSummary({
     >
       <summary className="conversation-process-summary">
         <span>
-          {completed ? formatConversationDuration(durationMs) : activeLabel}
+          {completed ? preview ? "执行过程" : formatConversationDuration(durationMs) : activeLabel}
         </span>
       </summary>
-      <div className="conversation-process-body">{children}</div>
+      {open && <div className="conversation-process-body">{typeof children === "function" ? children() : children}</div>}
     </details>
   );
 }

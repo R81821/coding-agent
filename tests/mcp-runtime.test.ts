@@ -36,12 +36,17 @@ test("runtime namespaces remote names and classifies tools from local policy, no
     expect(lease.snapshot).toHaveLength(8);
   } finally { await lease.close(); }
 });
-test("recovery refuses changed server revisions before exposing any tool", async () => {
+test("recovery withholds changed server revisions and returns an availability diagnostic", async () => {
   const f = await fixture();
   const first = await prepareMcpCapabilities(f.mcp, f.spec, new AbortController().signal);
   f.spec.mcpSnapshot = first.snapshot; await first.close();
   await f.mcp.save({ ...f.server, expectedRevision: f.server.revision, name: "Changed" });
-  await expect(prepareMcpCapabilities(f.mcp, f.spec, new AbortController().signal)).rejects.toThrow(/MCP.*changed/);
+  const recovered = await prepareMcpCapabilities(f.mcp, f.spec, new AbortController().signal);
+  try {
+    expect(recovered.tools).toEqual([]);
+    expect(recovered.diagnostics).toHaveLength(1);
+    expect(recovered.diagnostics[0]?.error).toMatch(/MCP configuration changed.*withheld/);
+  } finally { await recovered.close(); }
 });
 test("large catalogs expose search and dispatch while retaining the actual permission metadata and schema", async () => {
   const f = await fixture();
@@ -184,12 +189,17 @@ test("read-only narrowing on recovery is not misreported as a catalog change", a
   } finally { await lease.close(); }
 });
 
-test("a frozen read tool that the server no longer provides still fails recovery", async () => {
+test("a frozen read tool that the server no longer provides is unavailable on recovery", async () => {
   const f = await fixture();
   // Hand-craft the frozen snapshot so the revision still matches while a read tool is missing.
   f.spec.mcpSnapshot = [{ serverId: f.server.id, revision: f.server.revision, toolName: "ghost", name: mcpToolName(f.server.id, "ghost"), contractHash: "ghost", risk: "read" }];
   f.spec.mcpReadOnly = true;
-  await expect(prepareMcpCapabilities(f.mcp, f.spec, new AbortController().signal)).rejects.toThrow(/MCP tool catalog changed/);
+  const recovered = await prepareMcpCapabilities(f.mcp, f.spec, new AbortController().signal);
+  try {
+    expect(recovered.tools).toEqual([]);
+    expect(recovered.resolve({ id: "ghost-call", name: mcpToolName(f.server.id, "ghost"), input: {} })).toBeUndefined();
+    expect(recovered.diagnostics[0]?.error).toMatch(/MCP tool catalog changed.*withheld/);
+  } finally { await recovered.close(); }
 });
 
 test("a delegated child inherits its parent catalog and cannot widen it", async () => {

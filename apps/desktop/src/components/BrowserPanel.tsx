@@ -28,6 +28,10 @@ export function BrowserPanel({ sessionId, open, onOpenChange }: { sessionId: str
     try { await window.harness.browserCommand(sessionId, input); } catch (error) { setError(error instanceof Error ? error.message : String(error)); }
   }, [sessionId]);
   useEffect(() => {
+    if (!open) {
+      void window.harness.browserLayout({ sessionId: sessionId ?? null, visible: false, obscured: false, x: 0, y: 0, width: 0, height: 0 }).catch(() => {});
+      return;
+    }
     let frame = 0;
     const update = () => {
       cancelAnimationFrame(frame);

@@ -12,7 +12,12 @@ export interface ProjectSessionGroup {
   items: SessionSummary[];
 }
 
+export interface TurnUsage { turns: number; tools: number; inputTokens: number; outputTokens: number; usd: number; costKnown: boolean }
 export interface SessionTurn {
+  view?: { lastSequence: number; eventsComplete: boolean };
+  continuation?: { runId: string; checkpointId: string; note?: string | undefined };
+  usage?: TurnUsage;
+  chainUsage?: TurnUsage;
   runId: string;
   request: string;
   status: RunStatus;
@@ -106,13 +111,49 @@ export function mergeSessionPages(current: SessionPage, incoming: SessionPage, a
 
 export function sessionTurns(detail: SessionDetail | undefined): SessionTurn[] {
   if (!detail) return [];
+  const byId = new Map(detail.runs.map(run => [run.spec.id, run]));
   return detail.runs
     .slice()
     .sort(compareRunSpec)
-    .map((run) => ({ runId: run.spec.id, request: run.spec.request, status: run.status, events: run.events }));
+    .map((run) => {
+      if (run.view && !run.view.eventsComplete) return { runId: run.spec.id, request: run.spec.request, status: run.status, events: run.events, view: run.view, ...(run.spec.continuation ? { continuation: run.spec.continuation } : {}) };
+      const usage = runUsage(run);
+      const chainUsage = { ...usage };
+      const seen = new Set([run.spec.id]);
+      let parent = run.spec.continuation?.runId;
+      while (parent && !seen.has(parent)) {
+        seen.add(parent);
+        const prior = byId.get(parent);
+        if (!prior) { chainUsage.costKnown = false; break; }
+        const previous = runUsage(prior);
+        for (const key of ["turns", "tools", "inputTokens", "outputTokens", "usd"] as const) chainUsage[key] += previous[key];
+        chainUsage.costKnown &&= previous.costKnown;
+        parent = prior.spec.continuation?.runId;
+      }
+      return { runId: run.spec.id, request: run.spec.request, status: run.status, events: run.events, ...(run.view ? { view: run.view } : {}), ...(run.view && !run.view.eventsComplete ? {} : { usage, chainUsage }), ...(run.spec.continuation ? { continuation: run.spec.continuation } : {}) };
+    });
+}
+
+/** Preserve row identity while other runs stream; scoped to one mounted workbench. */
+export function createSessionTurnSelector() {
+  let previous = new Map<string, SessionTurn>();
+  return (detail: SessionDetail | undefined): SessionTurn[] => {
+    const turns = sessionTurns(detail).map(turn => {
+      const old = previous.get(turn.runId);
+      return old && old.events === turn.events && old.status === turn.status && old.request === turn.request && old.view === turn.view && old.continuation === turn.continuation &&
+        sameUsage(old.usage, turn.usage) && sameUsage(old.chainUsage, turn.chainUsage) ? old : turn;
+    });
+    previous = new Map(turns.map(turn => [turn.runId, turn]));
+    return turns;
+  };
+}
+
+function sameUsage(a: TurnUsage | undefined, b: TurnUsage | undefined): boolean {
+  return a === b || Boolean(a && b && a.turns === b.turns && a.tools === b.tools && a.inputTokens === b.inputTokens && a.outputTokens === b.outputTokens && a.usd === b.usd && a.costKnown === b.costKnown);
 }
 
 export function mergeRunEvents(current: AgentEvent[], incoming: AgentEvent[], runId: string): AgentEvent[] {
+  if (!incoming.length && current.every(event => event.runId === runId)) return current;
   const events = new Map<number, AgentEvent>();
   for (const event of [...current, ...incoming]) if (event.runId === runId) events.set(event.sequence, event);
   return [...events.values()].sort((a, b) => a.sequence - b.sequence);
@@ -126,3 +167,17 @@ export const runStatusLabel: Record<RunStatus, string> = {
   queued: "排队中", planning: "规划中", running: "运行中", waiting_approval: "待审批",
   verifying: "验证中", paused: "已暂停", review: "待复核", completed: "已完成", failed: "失败", cancelled: "已取消",
 };
+
+const usageCache = new WeakMap<RunRecord, TurnUsage>();
+function runUsage(run: RunRecord): TurnUsage {
+  const cached = usageCache.get(run);
+  if (cached) return cached;
+  const stop = run.events.findLast(event => event.type === "result")?.stop;
+  const usages = run.events.flatMap(event => event.type === "usage" ? [event.usage] : []);
+  const usage = { turns: stop?.usage.modelTurns.used ?? run.events.filter(event => event.type === "model_request_finished").length,
+    tools: stop?.usage.toolCalls.used ?? run.events.filter(event => event.type === "tool_call").length,
+    inputTokens: usages.reduce((sum, item) => sum + item.inputTokens, 0), outputTokens: usages.reduce((sum, item) => sum + item.outputTokens, 0),
+    usd: stop?.usage.usd.used ?? usages.reduce((sum, item) => sum + item.estimatedUsd, 0), costKnown: stop?.usage.usd.costKnown ?? usages.every(item => item.costKnown !== false) };
+  usageCache.set(run, usage);
+  return usage;
+}

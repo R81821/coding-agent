@@ -17,6 +17,34 @@ function stable(value: unknown): string {
   return JSON.stringify(value) ?? "null";
 }
 const hash = (value: unknown) => createHash("sha256").update(stable(value)).digest("hex");
+const schemaPresentationKeys = new Set(["title", "description", "examples", "$comment"]);
+const schemaMaps = new Set(["properties", "patternProperties", "$defs", "definitions", "dependentSchemas"]);
+const schemaChildren = new Set(["items", "additionalItems", "additionalProperties", "unevaluatedItems", "unevaluatedProperties", "contains", "propertyNames", "not", "if", "then", "else"]);
+const schemaArrays = new Set(["allOf", "anyOf", "oneOf", "prefixItems"]);
+function hasSchemaReference(value: unknown): boolean {
+  if (!value || typeof value !== "object") return false;
+  if (Array.isArray(value)) return value.some(hasSchemaReference);
+  return Object.entries(value).some(([key, item]) => (["$ref", "$dynamicRef", "$recursiveRef"].includes(key) && typeof item === "string") || hasSchemaReference(item));
+}
+/** Strip annotations only at schema positions, never inside literal const/enum values. */
+function stripSchemaPresentation(value: unknown): unknown {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return value;
+  return Object.fromEntries(Object.entries(value).filter(([key]) => !schemaPresentationKeys.has(key)).map(([key, item]) => {
+    if (schemaMaps.has(key) && item && typeof item === "object" && !Array.isArray(item)) return [key, Object.fromEntries(Object.entries(item).map(([name, child]) => [name, stripSchemaPresentation(child)]))];
+    if (schemaChildren.has(key)) return [key, Array.isArray(item) ? item.map(stripSchemaPresentation) : stripSchemaPresentation(item)];
+    if (schemaArrays.has(key) && Array.isArray(item)) return [key, item.map(stripSchemaPresentation)];
+    if (key === "dependencies" && item && typeof item === "object" && !Array.isArray(item)) return [key, Object.fromEntries(Object.entries(item).map(([name, child]) => [name, Array.isArray(child) ? child : stripSchemaPresentation(child)]))];
+    return [key, item];
+  }));
+}
+function executionSchema(value: unknown): unknown {
+  // JSON pointers may target an annotation's object value. Without proving the
+  // reference target, keep the entire schema exact instead of stripping it.
+  return hasSchemaReference(value) ? value : stripSchemaPresentation(value);
+}
+function semanticHash(tool: { inputSchema: unknown; outputSchema?: unknown }, risk: "read" | "high"): string {
+  return hash({ input: executionSchema(tool.inputSchema), output: executionSchema(tool.outputSchema), risk });
+}
 export class McpUncertainCallError extends Error {
   readonly code = "mcp_outcome_unknown";
   constructor() { super("MCP write outcome is unknown and the call was not replayed. Inspect remote state before starting a new operation."); }
@@ -57,8 +85,14 @@ export async function prepareMcpCapabilities(service: McpService, spec: RunSpec,
   async function close() { if (closed) return; closed = true; await Promise.all(leases.map(lease => lease.close())); }
   try {
     const servers = service.store.list().filter(server => server.enabled && server.projectPaths.some(path => mcpProjectKey(path) === mcpProjectKey(project)) && (!allowed || allowed.some(tool => tool.serverId === server.id)));
-    if (prior?.some(tool => !servers.some(server => server.id === tool.serverId && server.revision === tool.revision))) throw new Error("MCP configuration changed since this run started; start a new task to use the new configuration");
+    const unavailableServers = new Set<string>();
+    for (const saved of prior ?? []) {
+      if (unavailableServers.has(saved.serverId) || servers.some(server => server.id === saved.serverId && server.revision === saved.revision)) continue;
+      unavailableServers.add(saved.serverId);
+      diagnostics.push({ serverId: saved.serverId, name: servers.find(server => server.id === saved.serverId)?.name ?? saved.serverId, error: "MCP configuration changed since this run started; this server was withheld. Other tools remain available. Start a new task to use the new configuration." });
+    }
     for (const server of servers) {
+      if (unavailableServers.has(server.id)) continue;
       let staleRevision = false;
       try {
         signal.throwIfAborted();
@@ -75,14 +109,16 @@ export async function prepareMcpCapabilities(service: McpService, spec: RunSpec,
           const risk = server.readOnlyTools.includes(remote.name) ? "read" : "high";
           if (readOnly && risk !== "read") continue;
           const contractHash = hash({ input: remote.inputSchema, output: remote.outputSchema, description: remote.description, risk });
+          const semanticContractHash = semanticHash(remote, risk);
           const saved = allowed?.find(tool => tool.name === name);
           if (allowed && !saved) continue;
-          if (saved && (saved.contractHash !== contractHash || saved.risk !== risk)) {
-            // Recovery must stay exact; a child silently narrows instead of failing.
-            if (prior) throw new Error("MCP tool contract changed since this run started");
+          if (saved && ((saved.semanticContractHash ? saved.semanticContractHash !== semanticContractHash : saved.contractHash !== contractHash) || saved.risk !== risk)) {
+            // Quarantine drift rather than terminating unrelated project work. A legacy
+            // hash cannot prove that a change is cosmetic, so it is withheld as well.
+            if (prior) diagnostics.push({ serverId: server.id, name: server.name, error: `MCP tool contract changed since this run started (${saved.toolName}); this frozen tool was withheld. Other tools remain available. Start a new task to refresh this tool.` });
             continue;
           }
-          const contract = { name, description: `[${server.name} / ${remote.name}] ${redact(remote.description ?? remote.name, secrets)}`, inputSchema: remote.inputSchema, risk, idempotent: risk === "read", timeoutMs: server.callTimeoutMs } as const;
+          const contract = { name, description: saved?.description ?? `[${server.name} / ${remote.name}] ${redact(remote.description ?? remote.name, secrets)}`, inputSchema: saved?.inputSchema ?? remote.inputSchema, risk, idempotent: risk === "read", timeoutMs: server.callTimeoutMs } as const;
           const definition: ToolDefinition = {
             contract, requiresApproval: true, handlesInputValidation: true,
             external: { serverId: server.id, serverName: server.name, toolName: remote.name, revision: server.revision, contractHash },
@@ -93,7 +129,7 @@ export async function prepareMcpCapabilities(service: McpService, spec: RunSpec,
               if (uncertain.some(item => item.fingerprint === fingerprint)) throw new McpUncertainCallError();
               // A changed or removed contract must never be silently called under the old approval.
               const live = (await lease.connection.listTools(context.signal)).find(tool => tool.name === remote.name);
-              if (!live || hash({ input: live.inputSchema, output: live.outputSchema, description: live.description, risk }) !== contractHash) throw new Error("MCP tool contract changed; start a new task to refresh tools");
+              if (!live || semanticHash(live, risk) !== semanticContractHash) throw new Error("MCP tool contract changed; this call was not sent. Start a new task to refresh this tool.");
               let result;
               try { result = await lease.connection.callTool(remote.name, input, context.signal); }
               catch (error) {
@@ -120,18 +156,22 @@ export async function prepareMcpCapabilities(service: McpService, spec: RunSpec,
           };
           if (definitions.has(name)) throw new Error("MCP tool namespace collision");
           definitions.set(name, definition);
-          snapshot.push({ serverId: server.id, revision: server.revision, toolName: remote.name, name, contractHash, risk });
+          snapshot.push({ serverId: server.id, revision: server.revision, toolName: remote.name, name, contractHash, semanticContractHash, description: contract.description, inputSchema: contract.inputSchema, risk });
         }
       } catch (error) {
-        if (prior || signal.aborted) throw error;
+        if (signal.aborted) throw error;
         for (const [name, tool] of definitions) if (tool.external?.serverId === server.id) definitions.delete(name);
         for (let index = snapshot.length - 1; index >= 0; index--) if (snapshot[index]!.serverId === server.id) snapshot.splice(index, 1);
         diagnostics.push({ serverId: server.id, name: server.name, error: staleRevision ? "MCP service revision changed since the parent run started; start a new task to use the new configuration" : "MCP service unavailable; check its connection and authentication in the plugin page" });
       }
     }
-    // Read-only narrowing is an intentional reduction and must not be reported as catalog drift.
+    // Read-only narrowing is intentional. Removed tools remain frozen but unavailable;
+    // additions never enter an existing run's catalog.
     const eligible = prior?.filter(tool => !readOnly || tool.risk === "read");
-    if (eligible && eligible.length !== snapshot.length) throw new Error("MCP tool catalog changed since this run started");
+    for (const saved of eligible ?? []) {
+      if (snapshot.some(tool => tool.name === saved.name) || diagnostics.some(item => item.serverId === saved.serverId)) continue;
+      diagnostics.push({ serverId: saved.serverId, name: servers.find(server => server.id === saved.serverId)?.name ?? saved.serverId, error: `MCP tool catalog changed since this run started (${saved.toolName}); the missing frozen tool was withheld. Other tools remain available. Start a new task to refresh this tool.` });
+    }
     // Large catalogs keep schemas on demand. All dispatches still resolve to their
     // original ToolDefinition before the engine's permission and execution gates.
     const tools = [...definitions.values()];

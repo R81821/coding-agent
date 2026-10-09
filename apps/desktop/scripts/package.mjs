@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { createReadStream } from "node:fs";
-import { copyFile, mkdir, stat } from "node:fs/promises";
+import { copyFile, mkdir, readFile, stat } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawn } from "node:child_process";
@@ -9,9 +9,12 @@ import { downloadArtifact, ElectronDownloadCacheMode } from "@electron/get";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const workspaceRoot = resolve(here, "..", "..", "..");
-const version = "37.3.1";
+const version = "41.10.6";
+const manifest = JSON.parse(await readFile(resolve(here, "..", "package.json"), "utf8"));
+if (manifest.devDependencies.electron !== version) throw new Error("Electron package and verified archive versions must match");
 const filename = `electron-v${version}-win32-x64.zip`;
-const expectedSha256 = "32ad7124107ffef2aa92abb03175c4a8a60133d50cda338c2ab2917c5efc8c32";
+// Official v41.10.6 SHASUMS256.txt, electron-v41.10.6-win32-x64.zip.
+const expectedSha256 = "5447c50d196c2227e396716ea969869c1e5baa12b6af7fb33f75ae897a6853aa";
 const distRoot = join(workspaceRoot, ".cache", "electron-dist");
 const target = join(distRoot, filename);
 

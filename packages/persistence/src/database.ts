@@ -17,6 +17,9 @@ import type {
   RunCheckpoint,
   RunHistoryPage,
   SessionDetail,
+  SessionView,
+  SessionCursor,
+  RunEventPage,
   SessionPage,
   SessionRecord,
   ProjectRecord,
@@ -87,6 +90,10 @@ export class HarnessDatabase {
   private eventTimer: ReturnType<typeof setTimeout> | undefined;
   private flushError?: unknown;
   private closed = false;
+  private outputPages = new Map<string, string>();
+  private outputCharacters = 0;
+
+  private clearOutputPages() { this.outputPages.clear(); this.outputCharacters = 0; }
 
   private constructor(
     database: SQLiteFile,
@@ -110,6 +117,7 @@ export class HarnessDatabase {
   close(): void {
     if (this.closed) return;
     this.flushEvents();
+    this.clearOutputPages();
     this.db.close();
     this.closed = true;
   }
@@ -298,33 +306,25 @@ export class HarnessDatabase {
       offset < 0
     )
       throw new Error("Invalid Session pagination");
-    const visibleProjects = new Set(
-      this.listProjects(false).map((project) => project.id),
-    );
-    const records = this.list<SessionRecord>("sessions")
-      .map((record) => SessionRecordSchema.parse(record))
-      .filter((record) => Boolean(record.deletedAt) === deleted)
-      .filter(
-        (record) =>
-          deleted || visibleProjects.has(projectId(record.workspacePath)),
-      )
-      .sort(
-        (a, b) =>
-          b.updatedAt.localeCompare(a.updatedAt) || b.id.localeCompare(a.id),
-      );
+    this.flushEvents();
+    const rows = this.db.prepare(`SELECT s.id,s.payload,
+      (SELECT count(*) FROM runs r WHERE r.session_id=s.id) AS run_count,
+      (SELECT id FROM runs r WHERE r.session_id=s.id ORDER BY created_at DESC,id DESC LIMIT 1) AS latest_id,
+      (SELECT status FROM runs r WHERE r.session_id=s.id ORDER BY created_at DESC,id DESC LIMIT 1) AS latest_status
+      FROM sessions s WHERE s.deleted=? AND (?=1 OR EXISTS(SELECT 1 FROM projects p WHERE p.id=s.project_id AND p.deleted=0))
+      ORDER BY s.sort_at DESC,s.id DESC LIMIT ? OFFSET ?`).all(Number(deleted), Number(deleted), limit + 1, offset) as unknown as Array<GenericRow & { run_count: number; latest_id: string | null; latest_status: RunStatus }>;
     return {
-      items: records.slice(offset, offset + limit).map((session) => {
-        const runs = this.runsForSession(session.id),
-          latest = runs.at(-1);
+      items: rows.slice(0, limit).map((row) => {
+        const session = SessionRecordSchema.parse(this.decode("sessions", row));
         return {
           ...session,
-          runCount: runs.length,
-          ...(latest
-            ? { latestRunId: latest.spec.id, latestStatus: latest.status }
+          runCount: row.run_count,
+          ...(row.latest_id
+            ? { latestRunId: row.latest_id, latestStatus: row.latest_status }
             : {}),
         };
       }),
-      hasMore: records.length > offset + limit,
+      hasMore: rows.length > limit,
     };
   }
 
@@ -341,7 +341,80 @@ export class HarnessDatabase {
       : undefined;
   }
 
+  getSessionView(id: string, limit = 20, before?: SessionCursor): SessionView | undefined {
+    this.flushEvents();
+    if (!Number.isInteger(limit) || limit < 1 || limit > 20) throw new Error("Invalid session view limit");
+    const session = this.visibleSession(id);
+    if (!session) return;
+    const rows = this.db.prepare(`SELECT id,status,payload FROM runs WHERE session_id=?
+      ${before ? "AND (created_at < ? OR (created_at = ? AND id < ?))" : ""}
+      ORDER BY created_at DESC,id DESC LIMIT ?`).all(id, ...(before ? [before.createdAt, before.createdAt, before.id] : []), limit + 1) as unknown as RunRow[];
+    const runs = rows.slice(0, limit).reverse().map(row => {
+      const spec = this.crypto.decryptJson<RunSpec>(row.payload, `run:${row.id}`);
+      const lastSequence = Number(this.db.prepare("SELECT COALESCE(max(sequence),-1) AS n FROM events WHERE run_id=?").get(row.id)?.n);
+      const latest = (type: string) => {
+        const event = this.db.prepare("SELECT sequence,payload FROM events WHERE run_id=? AND type=? ORDER BY sequence DESC LIMIT 1").get(row.id, type) as (EventRow & { sequence: number }) | undefined;
+        return event ? this.decodeEvent(event.payload, row.id, event.sequence) : undefined;
+      };
+      const result = latest("result");
+      const textRows = this.db.prepare("SELECT sequence,payload FROM events WHERE run_id=? AND type='text_delta' AND sequence>? ORDER BY sequence").all(row.id, result?.sequence ?? -1) as unknown as Array<EventRow & { sequence: number }>;
+      const deltas = textRows.map(event => this.decodeEvent(event.payload, row.id, event.sequence)).filter((event): event is Extract<AgentEvent, { type: "text_delta" }> => event.type === "text_delta");
+      const lastDelta = deltas.at(-1);
+      const events = [latest("route"), latest("status"), result, lastDelta ? { ...lastDelta, delta: deltas.map(event => event.delta).join("") } : undefined]
+        .filter((event): event is AgentEvent => Boolean(event)).sort((a, b) => a.sequence - b.sequence);
+      return { spec, status: row.status, events, view: { lastSequence, eventsComplete: lastSequence < 0 } };
+    });
+    const first = runs[0];
+    return { session, runs, hasMore: rows.length > limit, ...(first ? { before: { createdAt: first.spec.createdAt, id: first.spec.id } } : {}) };
+  }
+
+  private visibleSession(id: string): SessionRecord | undefined {
+    const session = this.get<SessionRecord>("sessions", id);
+    if (!session || session.deletedAt) return;
+    const project = this.get<ProjectRecord>("projects", projectId(session.workspacePath));
+    return project && !project.deletedAt ? session : undefined;
+  }
+
+  listEventPage(runId: string, afterSequence = -1, limit = 100): RunEventPage {
+    if (!Number.isInteger(limit) || limit < 1 || limit > 200) throw new Error("Invalid event page limit");
+    const run = this.getRun(runId);
+    if (!run || !this.visibleSession(run.spec.sessionId)) throw new Error("会话不存在或已删除");
+    const rows = this.db.prepare("SELECT sequence,payload FROM events WHERE run_id=? AND sequence>? ORDER BY sequence LIMIT ?").all(runId, afterSequence, limit + 1) as unknown as Array<EventRow & { sequence: number }>;
+    const events = rows.slice(0, limit).map(row => {
+      const event = this.crypto.decryptJson<AgentEvent & { __outputRef?: string }>(row.payload, `event:${runId}:${row.sequence}`);
+      if (event.type !== "tool_finished") return event;
+      // No content-object lookup on the display path, including legacy inline outputs.
+      const rest = { ...event };
+      delete rest.__outputRef;
+      return { ...rest, output: { deferred: true, runId, callId: event.callId } };
+    });
+    return { events, nextSequence: events.at(-1)?.sequence ?? afterSequence, hasMore: rows.length > limit, status: run.status };
+  }
+
+  getOutputPage(runId: string, callId: string, offset = 0, limit = 16000): { text: string; nextOffset: number; hasMore: boolean } {
+    const run = this.getRun(runId);
+    if (!run || !this.visibleSession(run.spec.sessionId)) throw new Error("会话不存在或已删除");
+    if (!Number.isInteger(offset) || offset < 0 || !Number.isInteger(limit) || limit < 1 || limit > 64000) throw new Error("Invalid output page");
+    // Validate visibility before cache lookup. Decode/format once across consecutive transport pages.
+    const key = JSON.stringify([runId, callId]);
+    let text = this.outputPages.get(key);
+    if (text === undefined) {
+      const event = this.getToolEvidence(runId, callId);
+      if (event?.type !== "tool_finished") throw new Error("工具输出不存在");
+      text = typeof event.output === "string" ? event.output : JSON.stringify(event.output, null, 2) ?? "";
+      if (text.length <= 8_000_000) {
+        while (this.outputPages.size && (this.outputCharacters + text.length > 8_000_000 || this.outputPages.size >= 16)) {
+          const oldest = this.outputPages.keys().next().value!;
+          this.outputCharacters -= this.outputPages.get(oldest)!.length; this.outputPages.delete(oldest);
+        }
+        this.outputPages.set(key, text); this.outputCharacters += text.length;
+      }
+    } else { this.outputPages.delete(key); this.outputPages.set(key, text); }
+    return { text: text.slice(offset, offset + limit), nextOffset: Math.min(offset + limit, text.length), hasMore: offset + limit < text.length };
+  }
+
   deleteSession(id: string): SessionRecord {
+    this.clearOutputPages();
     const session = this.get<SessionRecord>("sessions", id);
     if (!session) throw new Error(`Unknown Session: ${id}`);
     if (this.runsForSession(id).some((run) => liveStatuses.has(run.status)))
@@ -367,6 +440,7 @@ export class HarnessDatabase {
   }
 
   deleteProject(id: string): ProjectRecord {
+    this.clearOutputPages();
     const project = this.get<ProjectRecord>("projects", id);
     if (!project) throw new Error(`Unknown project: ${id}`);
     const sessionIds = new Set(
@@ -406,6 +480,7 @@ export class HarnessDatabase {
   }
 
   purgeSession(id: string): { sessionId: string; runs: number } {
+    this.clearOutputPages();
     const session = this.get<SessionRecord>("sessions", id);
     if (!session) throw new Error(`Unknown Session: ${id}`);
     if (!session.deletedAt)
@@ -486,6 +561,10 @@ export class HarnessDatabase {
 
   appendEvent(event: AgentEvent): void {
     if (this.closed) throw new Error("Database is closed");
+    if (event.type === "tool_finished") {
+      const key = JSON.stringify([event.runId, event.callId]);
+      this.outputCharacters -= this.outputPages.get(key)?.length ?? 0; this.outputPages.delete(key);
+    }
     if (this.flushError) this.flushEvents();
     if (event.type === "text_delta") {
       const bytes = Buffer.byteLength(JSON.stringify(event));
@@ -959,6 +1038,12 @@ export class HarnessDatabase {
   private upsert(table: GenericTable, id: string, value: unknown): void {
     this.flushEvents();
     const original = value as Record<string, unknown>;
+    if (table === "sessions" || table === "projects") {
+      this.db.prepare(`INSERT INTO ${table}(id,payload,updated_at,sort_at,deleted,project_id) VALUES(?,?,?,?,?,?)
+        ON CONFLICT(id) DO UPDATE SET payload=excluded.payload,updated_at=excluded.updated_at,sort_at=excluded.sort_at,deleted=excluded.deleted,project_id=excluded.project_id`)
+        .run(id, this.crypto.encryptJson(value, `${table}:${id}`), new Date().toISOString(), original.updatedAt, Number(Boolean(original.deletedAt)), table === "sessions" ? projectId(String(original.workspacePath)) : id);
+      return;
+    }
     if (table === "checkpoints") {
       const stored = { ...original },
         refs: Record<string, string | string[]> = {};
@@ -1105,6 +1190,22 @@ export class HarnessDatabase {
         throw error;
       }
     }
+    // Metadata only: titles, workspace paths and message bodies remain encrypted.
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      for (const table of ["sessions", "projects"] as const) {
+        const columns = this.db.prepare(`PRAGMA table_info(${table})`).all();
+        if (!columns.some(column => column.name === "sort_at")) {
+          this.db.exec(`ALTER TABLE ${table} ADD COLUMN sort_at TEXT; ALTER TABLE ${table} ADD COLUMN deleted INTEGER NOT NULL DEFAULT 0; ALTER TABLE ${table} ADD COLUMN project_id TEXT`);
+          const rows = this.db.prepare(`SELECT id,payload FROM ${table}`).all() as unknown as GenericRow[];
+          for (const row of rows) {
+            const record = this.decode<SessionRecord | ProjectRecord>(table, row);
+            this.db.prepare(`UPDATE ${table} SET sort_at=?,deleted=?,project_id=? WHERE id=?`).run(record.updatedAt, Number(Boolean(record.deletedAt)), table === "sessions" ? projectId(record.workspacePath) : row.id, row.id);
+          }
+        }
+      }
+      this.db.exec("CREATE INDEX IF NOT EXISTS sessions_page ON sessions(deleted,sort_at DESC,id DESC); CREATE INDEX IF NOT EXISTS events_display ON events(run_id,type,sequence DESC); COMMIT");
+    } catch (error) { this.db.exec("ROLLBACK"); throw error; }
     this.backfillSessions();
   }
 

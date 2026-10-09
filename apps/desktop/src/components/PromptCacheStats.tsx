@@ -31,7 +31,7 @@ export function PromptCacheStats({ usages, events }: { usages: Usage[]; events?:
       const summary = summarizeCacheUsage(group);
       const known = group.filter(usage => usage.costKnown === true || (usage.costKnown === undefined && usage.estimatedUsd > 0));
       const cost = known.reduce((total, usage) => total + usage.estimatedUsd, 0);
-      return <tr key={purpose}><th className="pt-2 font-normal">{{ main: "主调用", compaction: "上下文压缩", review: "独立评审" }[purpose]}</th><td>{summary.inputTokens.toLocaleString()} / {group.reduce((total, usage) => total + usage.outputTokens, 0).toLocaleString()}</td><td>{summary.hitRate === null ? "未知" : (summary.hitRate * 100).toFixed(1) + "%"}</td><td>{summary.measuredCalls}/{summary.totalCalls}</td><td>{known.length === group.length ? "$" + cost.toFixed(4) : known.length ? "已知 $" + cost.toFixed(4) + "；部分费用未知" : "费用未知"}</td></tr>;
+      return <tr key={purpose}><th className="pt-2 font-normal">{{ main: "主调用", compaction: "上下文压缩", review: "历史独立评审" }[purpose]}</th><td>{summary.inputTokens.toLocaleString()} / {group.reduce((total, usage) => total + usage.outputTokens, 0).toLocaleString()}</td><td>{summary.hitRate === null ? "未知" : (summary.hitRate * 100).toFixed(1) + "%"}</td><td>{summary.measuredCalls}/{summary.totalCalls}</td><td>{known.length === group.length ? "$" + cost.toFixed(4) : known.length ? "已知 $" + cost.toFixed(4) + "；部分费用未知" : "费用未知"}</td></tr>;
     })}</tbody></table></div>
   </section>;
 }

@@ -1,0 +1,63 @@
+{
+  "product": "Harness Agent",
+  "version": "1.4.5",
+  "variant": "review-output-fix",
+  "target": "Windows x64 NSIS",
+  "sourceCommit": "5512bff5b1cf7f40ce5a99e946e2666b3ebdbdf7",
+  "includesUncommittedChanges": true,
+  "builtAtUtc": "2026-10-09T03:34:43.0298837+00:00",
+  "installer": "Harness-Agent-1.4.5-x64.exe",
+  "bytes": 134335910,
+  "sha256": "45447b2d4c7af736df97ec1e94b2e2f291430d77ca5eb6a259baeedbc93af972",
+  "signatureStatus": "NotSigned",
+  "daemonSha256": "d495ea8f03eabbc018ce18e25dce197797e9f4856e5bc95b00726c24a49d0906",
+  "changes": [
+    "Keep workflow-owned review gates; no additional review when Profile optional review is unset",
+    "Editable per-Profile main/review output limits frozen in each new run",
+    "One larger retry for explicit reviewer truncation within one deadline and all hard limits",
+    "Reuse only a current report on review interruption; avoid stale reports on exhausted budget",
+    "Authoritative result replaces its streamed source and retains review status"
+  ],
+  "validation": {
+    "typecheck": "passed",
+    "changedFilesLint": "passed",
+    "fullSuite": {
+      "files": 117,
+      "tests": 780,
+      "passed": 780,
+      "failed": 0,
+      "log": ".review-output-fix-tests-final.log"
+    },
+    "sequentialReviewBoundary": {
+      "tests": 17,
+      "passed": 17,
+      "log": ".review-output-fix-review-boundary.log"
+    },
+    "independentReview": "passed; final review found one stale-report boundary, repaired and covered",
+    "productionBuild": "passed",
+    "desktopStartupSmoke": "passed",
+    "packagedDaemonMatchesBuild": true,
+    "packagedSmoke": {
+      "version": "1.4.5",
+      "electron": "41.10.6",
+      "node": "24.18.0",
+      "arch": "x64",
+      "packagedFiles": "passed",
+      "outputEditorsBundled": true,
+      "reviewSummaryFixBundled": true,
+      "profileRpcRoundTrip": "passed",
+      "invalidOutputRejected": true,
+      "sharpPngBytes": 95,
+      "sqliteRoundTrip": "passed",
+      "daemonHealth": {
+        "status": "ok",
+        "version": "1.4.5",
+        "activeRuns": "available",
+        "providerIds": [],
+        "connectors": []
+      }
+    },
+    "nsisPackage": "passed",
+    "interactiveInstall": "not run"
+  }
+}

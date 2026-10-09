@@ -11,6 +11,9 @@ it("reuses original evidence only while actual content is unchanged", async () =
  const cache=new ReadEvidenceCache(), call={id:"first",name:"read_file",input:{path:"a.ts"}};
  cache.remember(await cache.identify(call,root),call.id,{output:"one"});
  expect(cache.lookup(await cache.identify(call,root))?.output).toMatchObject({reusedEvidenceId:"first"});
+ expect(cache.lookup(await cache.identify(call,root),new Set())).toBeUndefined();
+ expect(cache.lookup(await cache.identify(call,root),new Set(["first"]))?.output).toMatchObject({reusedEvidenceId:"first"});
+ expect(cache.lookup(await cache.identify({...call,input:{path:"./a.ts"}},root))).toBeUndefined();
  await writeFile(path,"two"); await utimes(path,time.atime,time.mtime);
  expect(cache.lookup(await cache.identify(call,root))).toBeUndefined();
  } finally {await rm(root,{recursive:true,force:true,maxRetries:10});}

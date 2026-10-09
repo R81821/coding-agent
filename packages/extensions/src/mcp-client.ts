@@ -52,7 +52,7 @@ export async function connectMcp(raw: McpServerConfig, workspacePath: string, si
   const lifetime = new AbortController();
   let closed = false;
   let closing: Promise<void> | undefined;
-  const client = new Client({ name: "harness-agent", version: "1.4.3" }, { capabilities: { roots: { listChanged: true } } });
+  const client = new Client({ name: "harness-agent", version: "1.4.5" }, { capabilities: { roots: { listChanged: true } } });
   client.setRequestHandler(ListRootsRequestSchema, async () => ({ roots: [{ uri: pathToFileURL(project).href, name: basename(project) }] }));
   client.setNotificationHandler(ToolListChangedNotificationSchema, () => { if (!closed) callbacks.onToolsChanged?.(); });
   const markClosed = () => {

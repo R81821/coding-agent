@@ -73,6 +73,8 @@ export type ContentPart = z.infer<typeof ContentPartSchema>;
 
 export const ModelMessageSchema = z.object({
   reasoningContent: z.string().optional(),
+  // Internal control provenance; this instruction expires after its summary request.
+  runtimePrompt: z.literal("stop_summary").optional(),
   role: z.enum(["system", "developer", "user", "assistant", "tool"]),
   content: z.array(ContentPartSchema)
 });
@@ -82,6 +84,8 @@ export const ToolContractSchema = z.object({
   name: z.string().regex(/^[a-z][a-z0-9_]{1,63}$/),
   description: z.string(),
   inputSchema: z.record(z.string(), z.unknown()),
+  // Provider-side structured generation; runtime input validation is always independent.
+  strict: z.boolean().optional(),
   risk: RiskLevelSchema,
   idempotent: z.boolean(),
   timeoutMs: z.number().int().positive().max(3_600_000)
@@ -94,6 +98,7 @@ export const ProviderCapabilitiesSchema = z.object({
   parallelTools: z.boolean(),
   structuredOutput: z.boolean(),
   maxContextTokens: z.number().int().positive(),
+  maxOutputTokens: z.number().int().positive().optional(),
   dataPolicy: z.enum(["local", "cloud", "gateway"])
 });
 export type ProviderCapabilities = z.infer<typeof ProviderCapabilitiesSchema>;
@@ -199,6 +204,7 @@ export type VerificationMatrix = z.infer<typeof VerificationMatrixSchema>;
 
 export const VerificationResultSchema = z.object({
   fingerprint: z.string().optional(),
+  reusedFromItemId: z.string().optional(),
   itemId: z.string(),
   command: z.string(),
   cwd: z.string(),
@@ -240,6 +246,8 @@ export const ContextSnapshotSchema = z.object({
 export type ContextSnapshot = z.infer<typeof ContextSnapshotSchema>;
 
 export const RunCheckpointSchema = z.object({
+  workspaceFingerprint: z.string().optional(),
+  workspaceBaseline: AttachmentRefSchema.optional(),
   repairAttemptsUsed: z.number().int().nonnegative().optional(),
   workflow: WorkflowStateSchema.optional(),
   id: z.string(),
@@ -429,13 +437,13 @@ export const AgentEventSchema = z.discriminatedUnion("type", [
   z.object({ ...eventBase, type: z.literal("plugin_event"), pluginId: z.string(), action: z.string(), detail: z.string().optional() }),
   z.object({ ...eventBase, type: z.literal("search_usage"), providerId: z.string(), searchId: z.string(), resultCount: z.number().int().nonnegative(), usage: z.record(z.string(), z.unknown()).default({}) }),
   z.object({ ...eventBase, type: z.literal("recovery_event"), checkpointId: z.string().optional(), action: z.enum(["restored", "paused_non_idempotent", "failed"]), detail: z.string() }),
-  z.object({ ...eventBase, type: z.literal("model_request_finished"), purpose: z.enum(["main", "compaction", "review"]), durationMs: z.number().nonnegative(), succeeded: z.boolean() }),
+  z.object({ ...eventBase, type: z.literal("model_request_finished"), purpose: z.enum(["main", "compaction", "review"]), durationMs: z.number().nonnegative(), succeeded: z.boolean(), maxOutputTokens: z.number().int().positive().optional(), configuredMaxOutputTokens: z.number().int().positive().optional(), attempt: z.number().int().positive().optional(), errorCode: z.string().optional() }),
   z.object({ ...eventBase, type: z.literal("usage"), usage: UsageSchema }),
   // A steering message is user input injected mid-run. It is a user_request, never a grant, and the
   // event marks the exact point the model received it.
   z.object({ ...eventBase, type: z.literal("steering_delivered"), text: z.string() }),
   z.object({ ...eventBase, type: z.literal("error"), code: z.string(), message: z.string(), retryable: z.boolean() }),
-  z.object({ ...eventBase, type: z.literal("result"), text: z.string(), status: RunStatusSchema, stop: RunStopInfoSchema.optional() })
+  z.object({ ...eventBase, type: z.literal("result"), text: z.string(), status: RunStatusSchema, stop: RunStopInfoSchema.optional(), sourceAssistantTurnSequence: z.number().int().nonnegative().optional() })
 ]);
 export type AgentEvent = z.infer<typeof AgentEventSchema>;
 export type AgentEventInput = AgentEvent extends infer Event ? Event extends AgentEvent ? Omit<Event, "id" | "runId" | "at" | "sequence"> : never : never;
@@ -464,7 +472,14 @@ export const RunBudgetSchema = z.object({
 });
 export type RunBudget = z.infer<typeof RunBudgetSchema>;
 
+export const GenerationPolicySchema = z.object({
+  maxOutputTokens: z.number().int().positive().optional(),
+  reviewMaxOutputTokens: z.number().int().positive().optional(),
+});
+export type GenerationPolicy = z.infer<typeof GenerationPolicySchema>;
+
 export const RunSpecSchema = z.object({
+  continuation: z.object({ runId: z.string(), checkpointId: z.string(), note: z.string().max(4000).optional() }).optional(),
   mcpUncertainCalls: z.array(z.object({ name: z.string(), fingerprint: z.string() })).optional(),
   mcpSnapshot: z.array(McpToolSnapshotSchema).max(16384).optional(),
   mcpReadOnly: z.boolean().optional(),
@@ -480,6 +495,7 @@ export const RunSpecSchema = z.object({
   profileId: z.string(),
   attachments: z.array(AttachmentRefSchema).default([]),
   budget: RunBudgetSchema,
+  generationPolicy: GenerationPolicySchema.optional(),
   grants: z.array(PermissionGrantSchema).default([]),
   parentRunId: z.string().optional(),
   createdAt: z.string().datetime()
@@ -501,7 +517,10 @@ export const SessionRecordSchema = z.object({
 export type SessionRecord = z.infer<typeof SessionRecordSchema>;
 export type SessionSummary = SessionRecord & { runCount: number; latestRunId?: string; latestStatus?: RunStatus };
 export interface SessionPage { items: SessionSummary[]; hasMore: boolean }
-export interface SessionDetail { session: SessionRecord; runs: Array<{ spec: RunSpec; status: RunStatus; events: AgentEvent[] }> }
+export interface SessionDetail { session: SessionRecord; runs: Array<{ spec: RunSpec; status: RunStatus; events: AgentEvent[]; view?: { lastSequence: number; eventsComplete: boolean } }> }
+export interface SessionCursor { createdAt: string; id: string }
+export interface SessionView extends SessionDetail { hasMore: boolean; before?: SessionCursor }
+export interface RunEventPage { events: AgentEvent[]; nextSequence: number; hasMore: boolean; status: RunStatus }
 export const ProjectRecordSchema = z.object({
   id: z.string().min(1), workspacePath: z.string().min(1), createdAt: z.string().datetime(), updatedAt: z.string().datetime(), deletedAt: z.string().datetime().optional(),
 });
@@ -522,6 +541,7 @@ export const ProfileSchema = z.object({
   skillIds: z.array(z.string()),
   sandbox: z.enum(["local", "docker", "auto"]),
   budget: RunBudgetSchema,
+  generationPolicy: GenerationPolicySchema.optional(),
   responsesContinuation: z.boolean().optional(),
   contextPolicy: z.object({
     workingContextTokens: z.number().int().min(4096).max(2_000_000).optional(), compactAtRatio: z.number().min(0.5).max(0.9).default(0.8),
@@ -645,6 +665,9 @@ export const DaemonRequestSchema = z.discriminatedUnion("method", [
   z.object({ id: z.string(), method: z.literal("sessions.create"), params: SessionRecordSchema.omit({ deletedAt: true }) }),
   z.object({ id: z.string(), method: z.literal("sessions.list"), params: z.object({ deleted: z.boolean().default(false), limit: z.number().int().positive().max(200).default(50), offset: z.number().int().nonnegative().default(0) }).default({ deleted: false, limit: 50, offset: 0 }) }),
   z.object({ id: z.string(), method: z.literal("session.get"), params: z.object({ sessionId: z.string().min(1) }) }),
+  z.object({ id: z.string(), method: z.literal("session.view"), params: z.object({ sessionId: z.string().min(1), limit: z.number().int().min(1).max(20).default(20), before: z.object({ createdAt: z.string(), id: z.string() }).optional() }) }),
+  z.object({ id: z.string(), method: z.literal("run.eventPage"), params: z.object({ runId: z.string(), afterSequence: z.number().int().default(-1), limit: z.number().int().min(1).max(200).default(100) }) }),
+  z.object({ id: z.string(), method: z.literal("run.output"), params: z.object({ runId: z.string(), callId: z.string(), offset: z.number().int().nonnegative().default(0), limit: z.number().int().min(1).max(64000).default(16000) }) }),
   z.object({ id: z.string(), method: z.literal("session.delete"), params: z.object({ sessionId: z.string().min(1) }) }),
   z.object({ id: z.string(), method: z.literal("session.restore"), params: z.object({ sessionId: z.string().min(1) }) }),
   z.object({ id: z.string(), method: z.literal("session.purge"), params: z.object({ sessionId: z.string().min(1) }) }),
@@ -657,6 +680,7 @@ export const DaemonRequestSchema = z.discriminatedUnion("method", [
   z.object({ id: z.string(), method: z.literal("run.review"), params: z.object({ runId: z.string().min(1) }) }),
   z.object({ id: z.string(), method: z.literal("review.undo"), params: z.object({ runId: z.string().min(1), path: z.string().min(1) }) }),
   z.object({ id: z.string(), method: z.literal("run.resume"), params: z.object({ runId: z.string() }) }),
+  z.object({ id: z.string(), method: z.literal("run.continue"), params: z.object({ runId: z.string(), note: z.string().trim().max(4000).optional() }) }),
   z.object({ id: z.string(), method: z.literal("run.cancel"), params: z.object({ runId: z.string() }) }),
   z.object({ id: z.string(), method: z.literal("run.pause"), params: z.object({ runId: z.string() }) }),
   z.object({ id: z.string(), method: z.literal("run.steer"), params: z.object({ runId: z.string(), text: z.string().min(1).max(4_000) }) }),
@@ -747,3 +771,5 @@ export * from "./context-policy.js";
 export * from "./cache-diagnostics.js";
 export * from "./browser.js";
 export * from "./skills.js";
+export * from "./session-view.js";
+export * from "./session-content.js";
