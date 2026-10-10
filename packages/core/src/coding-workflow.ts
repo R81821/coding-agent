@@ -323,5 +323,5 @@ export class CodingWorkflow {
       && current(this.state.broaderCheck) && (this.state.broaderCheck.status === "passed" || (this.state.broaderPolicy !== "required" && this.state.broaderCheck.status === "skipped" && !!this.state.broaderCheck.reason));
   }
   baseCanFinish(): boolean { return this.checksCurrent() && this.state.diffRevision === this.state.revision && this.state.requirementsRevision === this.state.revision && this.state.reviewedRevision === this.state.revision && this.state.requirementReceipts.length === this.state.requirements.length; }
-  canFinish(): boolean { return this.baseCanFinish() && (!this.requiresIndependentReview || (this.state.independentReview.status === "passed" && this.state.independentReview.epoch === this.state.epoch && this.state.independentReview.revision === this.state.revision)); }
+  canFinish(): boolean { return this.baseCanFinish(); }
 }

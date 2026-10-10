@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
-import { ArrowLeft, ArrowRight, RefreshCw, Plus, X, Globe2, Download, Loader2 } from "lucide-react";
+import { ArrowLeft, ArrowRight, RefreshCw, Plus, X, Globe2, Download, Loader2, Camera } from "lucide-react";
 import type { BrowserState, BrowserAction } from "@harness/protocol";
+import { BrowserScreenshotCapture, type ScreenshotState } from "./browser-screenshot.js";
 import "./browser-panel.css";
 
 export function BrowserPanel({ sessionId, open, onOpenChange }: { sessionId: string | undefined; open: boolean; onOpenChange: (open: boolean) => void }) {
@@ -8,15 +9,27 @@ export function BrowserPanel({ sessionId, open, onOpenChange }: { sessionId: str
   const [address, setAddress] = useState("");
   const [error, setError] = useState("");
   const [transfers, setTransfers] = useState(false);
+  const [screenshot, setScreenshot] = useState<ScreenshotState>({ capturing: false });
   const [width, setWidth] = useState(() => { try { const value = Number(localStorage.getItem("harness.browser.width")); return value >= 340 && value <= 900 ? value : 440; } catch { return 440; } });
   const viewport = useRef<HTMLDivElement>(null);
+  const screenshotDialog = useRef<HTMLDialogElement>(null);
+  const screenshotCapture = useRef<BrowserScreenshotCapture | undefined>(undefined);
   const generation = useRef(0);
   const active = state?.tabs.find(tab => tab.id === state.activeTabId);
+  useEffect(() => {
+    const capture = new BrowserScreenshotCapture((id, input) => window.harness.browserCommand(id, input), setScreenshot);
+    screenshotCapture.current = capture;
+    return () => { capture.dispose(); screenshotCapture.current = undefined; };
+  }, []);
   useEffect(() => { setAddress(active?.url === "about:blank" ? "" : active?.url ?? ""); }, [active?.url, active?.id]);
   useEffect(() => {
-    const current = ++generation.current; setState(undefined); setError("");
+    const current = ++generation.current; screenshotCapture.current?.setPage(undefined); setState(undefined); setError("");
     let seenReveal = 0;
-    const receive = (value: BrowserState) => { if (generation.current === current && value.sessionId === sessionId) { setState(value); if (value.revealVersion > seenReveal && value.visible) onOpenChange(true); seenReveal = value.revealVersion; } };
+    const receive = (value: BrowserState) => { if (generation.current === current && value.sessionId === sessionId) {
+      const tab = value.tabs.find(tab => tab.id === value.activeTabId);
+      screenshotCapture.current?.setPage(tab && !tab.loading ? { sessionId: value.sessionId, tabId: tab.id, url: tab.url, title: tab.title } : undefined);
+      setState(value); if (value.revealVersion > seenReveal && value.visible) onOpenChange(true); seenReveal = value.revealVersion;
+    } };
     const remove = window.harness.onBrowserState(receive);
     if (sessionId) void window.harness.browserState(sessionId).then(receive).catch(error => { if (generation.current === current) setError(String(error)); });
     return () => { generation.current++; remove(); };
@@ -24,9 +37,15 @@ export function BrowserPanel({ sessionId, open, onOpenChange }: { sessionId: str
 
   const command = useCallback(async (input: BrowserAction) => {
     if (!sessionId) return;
+    if (["navigate", "reload", "back", "forward", "switch_tab", "close_tab", "new_tab"].includes(input.action)) screenshotCapture.current?.close();
     setError("");
     try { await window.harness.browserCommand(sessionId, input); } catch (error) { setError(error instanceof Error ? error.message : String(error)); }
   }, [sessionId]);
+  useEffect(() => {
+    if (!open) screenshotCapture.current?.close();
+    const dialog = screenshotDialog.current;
+    if (open && screenshot.preview && dialog && !dialog.open) dialog.showModal();
+  }, [open, screenshot.preview]);
   useEffect(() => {
     if (!open) {
       void window.harness.browserLayout({ sessionId: sessionId ?? null, visible: false, obscured: false, x: 0, y: 0, width: 0, height: 0 }).catch(() => {});
@@ -45,7 +64,7 @@ export function BrowserPanel({ sessionId, open, onOpenChange }: { sessionId: str
     const mutations = new MutationObserver(update); mutations.observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ["open", "class", "style"] });
     window.addEventListener("resize", update); update();
     return () => { cancelAnimationFrame(frame); resize.disconnect(); mutations.disconnect(); window.removeEventListener("resize", update); };
-  }, [sessionId, open, transfers, active?.id, error]);
+  }, [sessionId, open, transfers, active?.id, error, screenshot.preview, screenshot.error]);
   useEffect(() => {
     document.documentElement.style.setProperty("--browser-width", `${width}px`);
     try { localStorage.setItem("harness.browser.width", String(width)); } catch { /* Width is optional. */ }
@@ -58,7 +77,7 @@ export function BrowserPanel({ sessionId, open, onOpenChange }: { sessionId: str
       event.currentTarget.setPointerCapture(event.pointerId);
     }} onPointerMove={event => { if (event.currentTarget.hasPointerCapture(event.pointerId)) setWidth(Math.max(340, Math.min(Math.min(900, window.innerWidth - 350), window.innerWidth - event.clientX - 10))); }} onPointerUp={event => event.currentTarget.releasePointerCapture(event.pointerId)} />
     <aside className="browser-panel" aria-label="内置浏览器">
-      <header className="browser-panel-heading"><Globe2 size={16} /><strong>浏览器</strong><small>当前对话独立登录</small><button title="下载记录" aria-label="下载记录" onClick={() => setTransfers(value => !value)}><Download size={16} /></button><button aria-label="收起浏览器" title="收起浏览器" onClick={() => onOpenChange(false)}><X size={16} /></button></header>
+      <header className="browser-panel-heading"><Globe2 size={16} /><strong>浏览器</strong><small>当前对话独立登录</small><button title="截图当前网页可见区域" aria-label={screenshot.capturing ? "正在截图" : "截图当前网页"} disabled={!sessionId || !active || active.loading || screenshot.capturing} onClick={() => void screenshotCapture.current?.capture()}>{screenshot.capturing ? <Loader2 className="browser-spin" size={16} /> : <Camera size={16} />}</button><button title="下载记录" aria-label="下载记录" onClick={() => setTransfers(value => !value)}><Download size={16} /></button><button aria-label="收起浏览器" title="收起浏览器" onClick={() => onOpenChange(false)}><X size={16} /></button></header>
       <div className="browser-tab-strip" role="tablist" aria-label="网页标签">
         {state?.tabs.map(tab => <div className={`browser-tab${tab.id === active?.id ? " active" : ""}`} key={tab.id}><button role="tab" aria-selected={tab.id === active?.id} title={tab.title} onClick={() => void command({ action: "switch_tab", tabId: tab.id })}>{tab.loading ? <Loader2 className="browser-spin" size={13} /> : <Globe2 size={13} />}<span>{tab.title}</span></button><button aria-label={`关闭 ${tab.title}`} onClick={() => void command({ action: "close_tab", tabId: tab.id })}><X size={12} /></button></div>)}
         <button aria-label="新标签页" title="新标签页" disabled={!sessionId} onClick={() => void command({ action: "new_tab" })}><Plus size={16} /></button>
@@ -69,12 +88,17 @@ export function BrowserPanel({ sessionId, open, onOpenChange }: { sessionId: str
         <button type="button" aria-label="刷新网页" disabled={!active} onClick={() => active && void command({ action: "reload", tabId: active.id })}><RefreshCw size={15} /></button>
         <input aria-label="网页地址" placeholder="输入网址，按 Enter 打开" value={address} disabled={!sessionId} onChange={event => setAddress(event.target.value)} />
       </form>
-      {(error || active?.error) && <div role="alert" className="browser-error">{error || active?.error}</div>}
+      {(screenshot.error || error || active?.error) && <div role="alert" className="browser-error">{screenshot.error || error || active?.error}</div>}
       {transfers && <section className="browser-downloads" aria-label="下载列表">
         {!state?.downloads.length && <p>暂无下载</p>}
         {state?.downloads.map(item => <article key={item.id}><strong>{item.filename}</strong><small>{({ awaiting_confirmation: "等待确认保存", progressing: "下载中", completed: "已完成", cancelled: "已取消", interrupted: "下载失败" })[item.status]} · {Math.round(item.receivedBytes / 1024)} KB</small>{item.path && <small title={item.path}>{item.path}</small>}{item.error && <small>{item.error}</small>}{item.status === "awaiting_confirmation" && <button onClick={() => void command({ action: "download", tabId: item.tabId, url: item.url, filename: item.filename })}>保存到项目</button>}{item.status === "progressing" && <button onClick={() => void command({ action: "cancel_download", downloadId: item.id })}>取消</button>}</article>)}
       </section>}
       <div className="browser-viewport" ref={viewport}><div className="browser-empty"><Globe2 size={32} /><strong>{sessionId ? "在右侧浏览网页" : "先打开一个对话"}</strong><p>{sessionId ? "输入网址，或让 Agent 使用 browser 工具。" : "浏览器标签与网站登录状态按对话独立保存。"}</p></div></div>
+      {screenshot.preview && <dialog ref={screenshotDialog} className="browser-screenshot-dialog" aria-label="网页截图预览" onCancel={event => { event.preventDefault(); screenshotCapture.current?.close(); }}>
+        <header><div><strong>网页截图</strong><small>{screenshot.preview.width} × {screenshot.preview.height} · 当前可见区域</small></div><button aria-label="关闭截图预览" title="关闭截图预览" onClick={() => screenshotCapture.current?.close()}><X size={18} /></button></header>
+        <div className="browser-screenshot-image"><img src={screenshot.preview.objectUrl} alt={`${screenshot.preview.title || "当前网页"}的截图`} /></div>
+        <footer><span title={screenshot.preview.pageUrl}>{screenshot.preview.pageUrl}</span><a href={screenshot.preview.objectUrl} download={screenshot.preview.filename}><Download size={15} />保存 PNG</a></footer>
+      </dialog>}
     </aside>
   </>;
 }

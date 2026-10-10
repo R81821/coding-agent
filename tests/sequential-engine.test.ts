@@ -20,6 +20,8 @@ interface AcceptanceScenario {
   generationPolicy?: Profile["generationPolicy"];
   reviewPolicy?: "standard" | "risk_based";
   rejectInline?: boolean;
+  planCwd?: string;
+  emptyStdin?: string;
   maxTurns?: number;
   maxToolCalls?: number;
 }
@@ -65,7 +67,8 @@ async function scenario(mode: "pass" | "repair" | "repair-test" | "denied" | "bu
       } });
     tools.register({ contract: { name: "git_diff", description: "fixture complete diff", inputSchema: { type: "object", properties: {} }, risk: "read", idempotent: true, timeoutMs: 1000 }, async execute() { executed.push("diff"); return { output: { diff: "service.ts and caller.ts: -value=0 +value=1", complete: true } }; } });
     tools.register({ contract: { name: "browser", description: "fixture browser screenshot", inputSchema: { type: "object", properties: {} }, risk: "read", idempotent: true, timeoutMs: 1000 }, async execute() { return { output: { tabId: "built-in-tab", url: "file:///service.html", screenshot: { mimeType: "image/png", path: "fixture.png" } } }; } });
-    const steps = [ { id: "service", text: "Implement service", verification: [check(localCommand)] }, { id: "caller", text: "Wire caller", verification: [check(localCommand)] } ];
+    const plannedCheck = (command: string) => ({ ...check(command), ...(options.planCwd !== undefined ? { cwd: options.planCwd } : {}), ...(options.emptyStdin !== undefined ? { stdin: options.emptyStdin } : {}) });
+    const steps = [ { id: "service", text: "Implement service", verification: [plannedCheck(localCommand)] }, { id: "caller", text: "Wire caller", verification: [plannedCheck(localCommand)] } ];
     let turn = 0;
     let latest: WorkflowState | undefined;
     let phase = "initial";
@@ -94,7 +97,8 @@ async function scenario(mode: "pass" | "repair" | "repair-test" | "denied" | "bu
           yield action("understand", { action: "understand", summary: "Implement service and connect caller", requirements: options.acceptance === "partial-requirements" ? ["Service and caller work together", "Preserve the caller boundary"] : ["Service and caller work together"] });
           yield call("recon", "read_file", { path: "service.ts" });
           yield action("architecture", { action: "architecture", summary: "service owns logic and caller composes it", evidenceIds: ["recon"] });
-          yield action("plan", { action: "plan", steps, integration: [check(integrationCommand)] });
+          yield action("plan", { action: "plan", mode: "ordered", steps, integration: [plannedCheck(integrationCommand)] });
+          if (options.acceptance === "stale-diff") yield call("baseline-diff", "git_diff", {});
           yield action("skip-step", { action: "start_step", stepId: "caller" });
           yield action("start-service", { action: "start_step", stepId: "service" });
           phase = "service"; return;
@@ -121,6 +125,7 @@ async function scenario(mode: "pass" | "repair" | "repair-test" | "denied" | "bu
           if (options.rejectInline) {
             yield call("inline-node", "run_verification", { ...check('node -e "process.exit(0)"'), stage: "broader" });
             yield call("inline-stdin", "run_verification", { ...check("node -"), stage: "broader", stdin: "process.exit(0)" });
+            yield call("inline-planned-stdin", "run_verification", { ...check(integrationCommand), stage: "broader", stdin: "process.exit(0)" });
           }
           yield call("early-diff", "git_diff", {});
           yield call("foreign-check", "run_verification", { ...check("unplanned-integration"), stage: "broader" });
@@ -144,7 +149,7 @@ async function scenario(mode: "pass" | "repair" | "repair-test" | "denied" | "bu
             requirementId: latest.requirementIds[0], summary: "Both local tests and the integration suite pass; the complete diff connects service and caller.",
             observationIds: [diff.id],
             verificationIds: options.acceptance === "missing-verification" ? [] : [(options.acceptance === "stale-verification" || options.acceptance === "repair-stale-evidence" && acceptanceAttempts === 1) && previousLocal?.type === "verification_finished" ? previousLocal.verification.id : latest.localCheck.runId, latest.broaderCheck.runId],
-            diffObservationId: options.acceptance === "stale-diff" ? "early-diff" : diff.id,
+            diffObservationId: options.acceptance === "stale-diff" ? "baseline-diff" : diff.id,
             passed: options.acceptance !== "failed-requirement",
           };
           yield call("accept-requirements-" + turn, "check_requirements", { evidence: [receipt] });
@@ -239,10 +244,10 @@ describe("default sequential loop through the actual engine and bridge", { timeo
     if (acceptance !== "missing") expect(result.events.some(event => event.type === "tool_finished" && event.callId.startsWith("accept-requirements-") && event.isError)).toBe(true);
     expect(result.result.stop?.pending).not.toContain("独立评审");
   });
-  it("enforces ordered steps, cumulative checks, integration and final diff review", async () => {
+  it("enforces ordered steps, cumulative checks, integration and current fingerprint diff acceptance", async () => {
     const result = await scenario("pass");
     expect(result.result.status).toBe("completed");
-    expect(result.executed).toEqual(["edit:service", localCommand, "edit:caller", localCommand, "diff", integrationCommand, "diff"]);
+    expect(result.executed).toEqual(["edit:service", localCommand, "edit:caller", localCommand, "diff", integrationCommand]);
     expect(result.storedSpec?.workflowVersion).toBe(3);
     expect(result.latest?.sequential?.steps.map(step => step.status)).toEqual(["verified", "verified"]);
     expect(result.latest?.independentReview.status).toBe("skipped");
@@ -264,6 +269,28 @@ describe("default sequential loop through the actual engine and bridge", { timeo
     expect(result.executed.filter(command => command === localCommand)).toHaveLength(3);
     expect(result.latest?.requirementReceipts[0]?.verificationIds).toContain(result.latest?.broaderCheck.runId);
     expect(result.reviewAttempts).toBe(0);
+  });
+  it("returns the planned integration command and mismatch fields for an unplanned check", async () => {
+    const result = await scenario("pass");
+    const rejected = result.events.find(event => event.type === "tool_finished" && event.callId === "foreign-check");
+    expect(rejected).toMatchObject({ isError: true, output: {
+      code: "verification_not_planned",
+      expected: [{ command: integrationCommand, cwd: ".", hasStdin: false }],
+      mismatch: ["command"], expectedCount: 1, expectedTruncated: false,
+    } });
+    expect(result.executed).not.toContain("unplanned-integration");
+    expect(result.result.status).toBe("completed");
+  });
+  it("executes exact planned suites when cwd and empty stdin are written equivalently", async () => {
+    const result = await scenario("pass", { planCwd: "./", emptyStdin: "" });
+    expect(result.result.status, result.result.text).toBe("completed");
+    expect(result.latest?.sequential?.steps.map(step => step.status)).toEqual(["verified", "verified"]);
+    expect(result.executed.filter(command => command === localCommand)).toHaveLength(2);
+    expect(result.executed.filter(command => command === integrationCommand)).toHaveLength(1);
+    expect(result.events.filter(event => event.type === "tool_finished" && /^(verify-|integration-)/.test(event.callId) && event.isError)).toEqual([]);
+    const runs = result.events.filter(event => event.type === "verification_finished");
+    expect(runs).toHaveLength(3);
+    expect(runs.every(event => event.type === "verification_finished" && event.verification.passed)).toBe(true);
   });
   it("repairs a stale receipt with current evidence and keeps the actual passing suites", async () => {
     const result = await scenario("pass", { acceptance: "repair-stale-evidence" });
@@ -291,7 +318,7 @@ describe("default sequential loop through the actual engine and bridge", { timeo
   it("rejects inline assertions and stdin scripts then continues with the file based suites", async () => {
     const result = await scenario("pass", { rejectInline: true });
     expect(result.result.status).toBe("completed");
-    for (const callId of ["inline-node", "inline-stdin"]) {
+    for (const callId of ["inline-node", "inline-stdin", "inline-planned-stdin"]) {
       const event = result.events.find(item => item.type === "tool_finished" && item.callId === callId);
       expect(event).toMatchObject({ isError: true });
       expect(JSON.stringify(event)).toContain("verification_file_required");
@@ -301,6 +328,11 @@ describe("default sequential loop through the actual engine and bridge", { timeo
     expect(result.executed.some(command => command.includes("process.exit") || command === "node -")).toBe(false);
     expect(result.events.filter(event => event.type === "verification_finished")).toHaveLength(3);
     expect(result.latest?.requirementReceipts[0]?.verificationIds).toEqual([result.latest?.localCheck.runId, result.latest?.broaderCheck.runId]);
+    const tool = result.requests[0]?.tools.find(tool => tool.name === "run_verification");
+    expect(tool?.description).toMatch(/test files/);
+    expect(tool?.description).toMatch(/repository.*test entry point/i);
+    expect(tool?.description).toMatch(/stdin.*rejected/i);
+    expect(tool?.description).toMatch(/inline interpreter|interpreter.*eval/i);
   });
   it("keeps requesting repairs after failing integration tests until the model budget ends", async () => {
     const result = await scenario("failed-tests", { maxTurns: 9 });
@@ -347,7 +379,7 @@ describe("default sequential loop through the actual engine and bridge", { timeo
     expect(epochs.size).toBe(1);
     // Caller changes invalidate cumulative checks, so its local suite runs again; service itself
     // must not be rewritten/retested merely because this trusted unchanged checkpoint resumed.
-    expect(result.executed).toEqual(["edit:service", localCommand, "edit:caller", localCommand, "diff", integrationCommand, "diff"]);
+    expect(result.executed).toEqual(["edit:service", localCommand, "edit:caller", localCommand, "diff", integrationCommand]);
     expect(result.events.some(event => event.type === "tool_started" && event.call.id === "resume-recon")).toBe(false);
     expect(result.latest?.sequential?.steps.map(step => step.status)).toEqual(["verified", "verified"]);
     expect(result.latest?.requirementReceipts).toHaveLength(1);

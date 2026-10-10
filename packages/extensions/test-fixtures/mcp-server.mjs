@@ -12,6 +12,15 @@ const counts = { calls: 0, cancelled: 0 };
 let accessVersion = 1;
 let oauthOrigin = "";
 const codes = new Map();
+// Node's fetch follows the Fetch forbidden-port list. Windows may allocate listen(0)
+// inside a custom dynamic range that includes these ports, so do not publish them.
+const forbiddenHttpPorts = new Set([
+  1, 7, 9, 11, 13, 15, 17, 19, 20, 21, 22, 23, 25, 37, 42, 43, 53, 69, 77, 79, 87, 95,
+  101, 102, 103, 104, 109, 110, 111, 113, 115, 117, 119, 123, 135, 137, 139, 143, 161, 179,
+  389, 427, 465, 512, 513, 514, 515, 526, 530, 531, 532, 540, 548, 554, 556, 563, 587, 601,
+  636, 989, 990, 993, 995, 1719, 1720, 1723, 2049, 3659, 4045, 4190, 5060, 5061, 6000,
+  6566, 6665, 6666, 6667, 6668, 6669, 6679, 6697, 10080,
+]);
 function makeServer() {
   const server = new Server({ name: "harness-mcp-fixture", version: "1.0.0" }, { capabilities: { tools: { listChanged: true } } });
   const tool = name => ({ name, description: `Fixture ${name}`, annotations: { readOnlyHint: true }, inputSchema: { type: "object", properties: { value: { type: process.env.FIXTURE_BAD_SCHEMA ? 42 : "string" } } } });
@@ -99,5 +108,21 @@ if (mode === "stdio") {
       }
     } catch { if (!response.headersSent) response.writeHead(500); response.end(); }
   });
-  http.listen(0, "127.0.0.1", () => { oauthOrigin = `http://127.0.0.1:${http.address().port}`; process.stdout.write(JSON.stringify({ url: `${oauthOrigin}/${mode === "sse" ? "sse" : "mcp"}` }) + "\n"); });
+  function listenHttp(port = 0) {
+    // This fixture-only override makes forbidden candidate handling deterministic in tests.
+    // Filtering before bind also avoids claiming a fixed port that another app may own.
+    const candidate = forbiddenHttpPorts.has(port) ? 0 : port;
+    http.listen(candidate, "127.0.0.1", () => {
+      const actualPort = http.address().port;
+      if (forbiddenHttpPorts.has(actualPort)) {
+        http.close(() => listenHttp());
+        return;
+      }
+      oauthOrigin = `http://127.0.0.1:${actualPort}`;
+      process.stdout.write(JSON.stringify({ url: `${oauthOrigin}/${mode === "sse" ? "sse" : "mcp"}` }) + "\n");
+    });
+  }
+  const initialPort = Number(process.env.FIXTURE_HTTP_FIRST_PORT ?? 0);
+  if (!Number.isInteger(initialPort) || initialPort < 0 || initialPort > 65535) throw new Error("Invalid fixture HTTP port");
+  listenHttp(initialPort);
 }

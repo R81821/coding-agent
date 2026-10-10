@@ -99,12 +99,14 @@ async function runScenario(mode: "pass" | "local-failure" | "broader-failure" | 
         if (event.type === "workflow_updated") last = event.workflow;
         if (event.type === "plan_approval_required") setTimeout(() => engine.decidePlan(event.planId, event.version, true, "fixture"), 0);
         if (event.type === "approval_required") setTimeout(() => engine.approvals.decide(event.approvalId, false, "fixture"), 0);
+        if (mode === "resume-repairs" && event.type === "repair_started" && event.attempt === 5) engine.pause(run.id);
         if (event.type === "result") { clearTimeout(timer); done(event); }
       });
       engine.start(run, profile);
     });
-    await new Promise<void>(done => setImmediate(done));
+    await engine.waitForSettlement(run.id);
     if (mode === "resume-repairs") {
+      expect(result.status).toBe("paused");
       const prior = database.getLatestCheckpoint(run.id)!;
       expect(prior.repairAttemptsUsed).toBe(5);
       // Simulate a legacy checkpoint: recover the count from repair_started events.
@@ -117,7 +119,7 @@ async function runScenario(mode: "pass" | "local-failure" | "broader-failure" | 
       engine.resume(run.id, profile);
       const resumedResult = await resumed;
       expect(resumedResult.status, resumedResult.text).toBe("completed");
-      await new Promise<void>(done => setImmediate(done));
+      await engine.waitForSettlement(run.id);
     }
     return { result, checks, mutations, reviews, verificationRuns: database.listVerificationRuns(run.id), events: database.listEvents(run.id), checkpoint: database.getLatestCheckpoint(run.id) };
   } finally {

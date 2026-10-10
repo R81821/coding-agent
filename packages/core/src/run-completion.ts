@@ -1,7 +1,7 @@
 import type { AgentEvent } from "@harness/protocol";
 import type { EventEmitter } from "node:events";
 
-type RunEventSource = Pick<EventEmitter, "on" | "off"> & { cancel(runId: string): boolean; waitForSettlement?(runId: string): Promise<void> };
+type RunEventSource = Pick<EventEmitter, "on" | "off"> & { cancel(runId: string): boolean; isActive?(runId: string): boolean; waitForSettlement?(runId: string): Promise<void> };
 
 /** Keep the child workspace until the result and all run cleanup have completed. */
 export function waitForRunResult(engine: RunEventSource, runId: string, signal: AbortSignal, start: () => void): Promise<Extract<AgentEvent, { type: "result" }>> {
@@ -20,7 +20,13 @@ export function waitForRunResult(engine: RunEventSource, runId: string, signal: 
     engine.on("event", onEvent);
     signal.addEventListener("abort", onAbort, { once: true });
     try { start(); }
-    catch (error) { cleanup(); rejectResult(error); }
+    catch (error) {
+      cleanup();
+      // Starting may have created a child before its parent record failed validation. Settle it
+      // before returning control, so the caller can safely release its workspace.
+      if (engine.isActive?.(runId)) engine.cancel(runId);
+      Promise.resolve(engine.waitForSettlement?.(runId)).then(() => rejectResult(error), rejectResult);
+    }
   });
 }
 

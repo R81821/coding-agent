@@ -9,7 +9,7 @@ function prepare(w = new SequentialWorkflow("Add a service and its caller", () =
   w.advance({ action: "understand", summary: "Add the service and wire the caller", requirements: ["Service works", "Caller uses service"] });
   inspect(w);
   w.advance({ action: "architecture", summary: "service.ts owns logic; caller.ts composes it", evidenceIds: ["recon"] });
-  w.advance({ action: "plan", steps: [
+  w.advance({ action: "plan", mode: "ordered", steps: [
     { id: "service", text: "Implement service", verification: [check("unit-service")] },
     { id: "caller", text: "Wire caller", verification: [check("unit-caller")] },
   ], integration: [check("test-service-caller")] });
@@ -80,10 +80,11 @@ describe("sequential implementation gates", () => {
     const w = prepare();
     finishStep(w, "service"); finishStep(w, "caller");
     w.observe({ id: "early-diff", name: "git_diff", input: {} }, { output: "diff" });
-    expect(w.state.diffRevision).toBe(-1);
+    expect(w.state.diffRevision).toBe(w.state.revision);
     expect(w.checksCurrent()).toBe(false);
     w.recordVerification(receipt(w, "broader"));
     expect(w.checksCurrent()).toBe(true);
+    expect(() => accept(w)).toThrow(/after its passing test suites/);
     w.acceptFinalReport("Done");
     expect(w.baseCanFinish()).toBe(false);
     w.observe({ id: "final-diff", name: "git_diff", input: {} }, { output: "complete diff" });
@@ -97,6 +98,66 @@ describe("sequential implementation gates", () => {
     expect(w.canFinish()).toBe(true);
     expect(w.requiresIndependentReview).toBe(false);
     expect(w.state.independentReview.status).toBe("skipped");
+  });
+  it("names a missing planned check even when an unrelated command passed", () => {
+    const w = prepare();
+    w.advance({ action: "start_step", stepId: "service" });
+    const run = receipt(w);
+    run.results = run.results.map(result => ({ ...result, command: "different-test" }));
+    w.recordVerification(run);
+    expect(run.passed).toBe(false);
+    expect(run.outcome).toBe("failed");
+    expect(run.skipReason).toContain("unit-service");
+    expect(w.state.localCheck.status).toBe("failed");
+    expect(w.state.localCheck.reason).toContain("Planned verification evidence is missing");
+    expect(w.state.localCheck.reason).toContain("unit-service");
+    expect(w.state.sequential?.steps[0]?.status).toBe("in_progress");
+    expect(w.checksCurrent()).toBe(false);
+  });
+  it("accepts equivalent result cwd without changing the planned command or id", () => {
+    const w = prepare();
+    w.advance({ action: "start_step", stepId: "service" });
+    const run = receipt(w);
+    w.recordVerification({ ...run, results: run.results.map(result => ({ ...result, cwd: "./" })) });
+    expect(w.state.localCheck.status).toBe("passed");
+    expect(w.state.sequential?.steps[0]?.status).toBe("verified");
+    expect(w.plannedChecks().find(item => item.stage === "local")).toMatchObject({ command: "unit-service", cwd: "." });
+  });
+  it.each(["command", "itemId", "passed"] as const)("keeps a receipt failed when its %s does not satisfy the plan", field => {
+    const w = prepare();
+    w.advance({ action: "start_step", stepId: "service" });
+    const run = receipt(w);
+    const invalid = { command: "unit-service ", itemId: "invented-item", passed: false };
+    w.recordVerification({ ...run, results: run.results.map(result => ({ ...result, [field]: invalid[field] })) });
+    expect(w.state.localCheck.status).toBe("failed");
+    expect(w.state.localCheck.reason).toContain("unit-service");
+    expect(w.state.sequential?.steps[0]?.status).toBe("in_progress");
+  });
+  it("bounds missing-check feedback while keeping the actual pass downgraded", () => {
+    const w = prepare();
+    const commands = Array.from({ length: 10 }, (_, index) => `node --test test/missing-${index}-${"x".repeat(330)}.test.mjs`);
+    w.advance({ action: "plan", mode: "adaptive", reason: "Add per-boundary regression coverage", steps: commands.map((command, index) => ({ id: `bounded-${index}`, text: "Verify boundary " + index, verification: [check(command)] })), integration: [check("integration")] });
+    for (let index = 0; index < commands.length; index++) w.advance({ action: "start_step", stepId: `bounded-${index}` });
+    w.recordVerification({ ...receipt(w), results: [] });
+    expect(w.state.localCheck.status).toBe("failed");
+    expect(w.state.localCheck.reason).toContain("missing-0-");
+    expect(w.state.localCheck.reason).toContain("missing-7-");
+    expect(w.state.localCheck.reason).not.toContain("missing-8-");
+    expect(w.state.localCheck.reason).not.toContain(commands[0]);
+    expect(w.state.localCheck.reason.length).toBeLessThan(2700);
+  });
+
+  it("reruns tests after an integration failure without reopening code that needs no edit", () => {
+    const w = prepare();
+    finishStep(w, "service"); finishStep(w, "caller");
+    w.recordVerification(receipt(w, "broader", false));
+    expect(w.checksCurrent()).toBe(false);
+    expect(w.verificationGate("local")).toBeUndefined();
+    w.recordVerification(receipt(w, "local"));
+    w.recordVerification(receipt(w, "broader"));
+    expect(w.state.sequential?.steps.map(step => step.status)).toEqual(["verified", "verified"]);
+    expect(w.checksCurrent()).toBe(true);
+    expect(w.canFinish()).toBe(false);
   });
 
   it("reopens a failed integration/review and invalidates the chosen step and successors", () => {
@@ -161,21 +222,37 @@ describe("sequential implementation gates", () => {
     expect(w.canFinish()).toBe(true);
   });
 
-  it.each(["write", "tool-failure"])("invalidates passing verification and acceptance after %s", kind => {
+  it("invalidates passing verification and acceptance after an actual write", () => {
     const w = prepare();
     finishStep(w, "service"); finishStep(w, "caller");
     w.recordVerification(receipt(w, "broader"));
     w.observe({ id: "final-diff", name: "workspace_diff", input: {} }, { output: "complete diff" });
     accept(w); w.acceptFinalReport("Service and caller verified");
-    if (kind === "write") w.applyEffect({ kind: "repository_write", changedFiles: ["caller.ts"] });
-    else w.observe({ id: "broken-read", name: "read_file", input: { path: "caller.ts" } }, { output: "EACCES caller.ts", isError: true });
+    w.applyEffect({ kind: "repository_write", changedFiles: ["caller.ts"] });
     expect(w.checksCurrent()).toBe(false);
     expect(w.canFinish()).toBe(false);
     expect(w.state.localCheck.status).toBe("pending");
     expect(w.state.broaderCheck.status).toBe("pending");
     expect(w.state.diffRevision).toBe(-1);
     expect(w.state.independentReview.status).toBe("skipped");
-    if (kind === "write") expect(w.state.sequential?.steps[1]?.status).toBe("in_progress");
+    expect(w.state.sequential?.steps[1]?.status).toBe("in_progress");
+  });
+
+  it("preserves real passing checks after a failed read while requiring renewed acceptance", () => {
+    const w = prepare();
+    finishStep(w, "service"); finishStep(w, "caller");
+    w.recordVerification(receipt(w, "broader"));
+    w.observe({ id: "final-diff", name: "workspace_diff", input: {} }, { output: "complete diff" });
+    accept(w); w.acceptFinalReport("Service and caller verified");
+    const local = { ...w.state.localCheck }, broader = { ...w.state.broaderCheck };
+    w.observe({ id: "broken-read", name: "read_file", input: { path: "caller.ts" } }, { output: "EACCES caller.ts", isError: true });
+    expect(w.checksCurrent()).toBe(true);
+    expect(w.state.localCheck).toEqual(local);
+    expect(w.state.broaderCheck).toEqual(broader);
+    expect(w.canFinish()).toBe(false);
+    expect(w.state.requirementsRevision).toBe(-1);
+    accept(w); w.acceptFinalReport("Service and caller verified using existing current receipts");
+    expect(w.canFinish()).toBe(true);
   });
 
   it("preserves requirements and plan on recovery but invalidates architecture and all receipts", () => {

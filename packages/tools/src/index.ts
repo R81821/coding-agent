@@ -6,6 +6,7 @@ export * from "./paths.js";
 export * from "./process.js";
 export * from "./builtins.js";
 export * from "./browser-cdp.js";
+export * from "./browser-screenshot.js";
 export * from "./search.js";
 export * from "./grants.js";
 

@@ -5,6 +5,7 @@ import { basename, join, relative } from "node:path";
 import { app, BrowserWindow, WebContentsView, session, safeStorage, dialog, type DownloadItem, type WebContents } from "electron";
 import { BrowserActionSchema, BrowserBridgeRequestSchema, browserUrl, type BrowserAction, type BrowserState, type BrowserTabState, type BrowserDownloadState, type BrowserLayout } from "@harness/protocol";
 import type { ToolResult } from "@harness/tools";
+import { browserScreenshotResult, fullPageScreenshotClip } from "@harness/tools";
 import { browserPartition, browserUploadPaths, reserveBrowserDownload } from "./browser-files.js";
 
 interface Tab { state: BrowserTabState; view: WebContentsView; busy: boolean; pendingDownload?: { state: BrowserDownloadState; timer: NodeJS.Timeout } }
@@ -206,6 +207,38 @@ export class DesktopBrowserHost {
       if (signal.aborted) aborted();
     });
   }
+  private async screenshot(contents: WebContents, fullPage: boolean, signal: AbortSignal): Promise<ToolResult> {
+    const url = contents.getURL(), title = contents.getTitle();
+    const capture = async () => {
+      if (!fullPage) {
+        try {
+          const bytes = (await contents.capturePage(undefined, { stayHidden: true, stayAwake: true })).toPNG();
+          if (bytes.length) return bytes;
+        } catch {
+          // Chromium can lack a Viz surface while the native browser is hidden. CDP can
+          // render a screenshot without showing or resizing the user's window.
+          signal.throwIfAborted();
+        }
+      }
+      const debug = contents.debugger;
+      if (!debug.isAttached()) debug.attach("1.3");
+      const clip = fullPage ? fullPageScreenshotClip((await debug.sendCommand("Page.getLayoutMetrics")).cssContentSize) : undefined;
+      const result = await debug.sendCommand("Page.captureScreenshot", { format: "png", captureBeyondViewport: fullPage, ...(clip ? { clip } : {}) });
+      if (typeof result.data !== "string") throw new Error("浏览器未返回截图，请重新读取页面后重试");
+      return Buffer.from(result.data, "base64");
+    };
+    const bytes = await new Promise<Buffer>((resolve, reject) => {
+      const finish = () => { clearTimeout(timer); signal.removeEventListener("abort", abort); };
+      const abort = () => { finish(); reject(new Error("浏览器截图已取消")); };
+      const timer = setTimeout(() => { finish(); reject(new Error("浏览器截图超时，请等待页面显示后重试")); }, 30_000);
+      signal.addEventListener("abort", abort, { once: true });
+      if (signal.aborted) { abort(); return; }
+      void capture().then(bytes => { finish(); resolve(bytes); }, error => { finish(); reject(error); });
+    });
+    signal.throwIfAborted();
+    if (contents.isDestroyed() || contents.getURL() !== url) throw new Error("截图期间网页地址已改变，请重新截图");
+    return browserScreenshotResult(bytes, { url, title, fullPage });
+  }
   async execute(id: string, input: BrowserAction, context: Context, signal: AbortSignal, runId?: string): Promise<ToolResult> {
     signal.throwIfAborted();
     const conversation = await this.getConversation(id, context); signal.throwIfAborted();
@@ -235,14 +268,15 @@ export class DesktopBrowserHost {
       if (["snapshot", "screenshot", "click", "fill", "upload", "scroll", "press_key"].includes(input.action)) await this.waitForLoad(tab, signal);
       signal.throwIfAborted();
       let output: unknown;
+      let images: ToolResult["images"];
       switch (input.action) {
         case "navigate": await contents.loadURL(browserUrl(input.url)); break;
         case "back": if (contents.navigationHistory.canGoBack()) contents.navigationHistory.goBack(); break;
         case "forward": if (contents.navigationHistory.canGoForward()) contents.navigationHistory.goForward(); break;
         case "reload": contents.reload(); break;
         case "screenshot": {
-          const image = await contents.capturePage(undefined, { stayHidden: true, stayAwake: true });
-          output = { mimeType: "image/png", base64: image.toPNG().toString("base64") }; break;
+          const result = await this.screenshot(contents, input.fullPage === true, signal);
+          output = result.output; images = result.images; break;
         }
         case "snapshot": output = await this.evaluate(tab, `(() => {
           const nodes = [...document.querySelectorAll('a,button,input,textarea,select,[role="button"]')].filter(el => el.getClientRects().length).slice(0,200);
@@ -281,7 +315,7 @@ export class DesktopBrowserHost {
         }
       }
       signal.throwIfAborted(); this.save(conversation);
-      return { output: { tabId: tab.state.id, url: contents.getURL(), title: contents.getTitle(), ...(output && typeof output === "object" ? output : { success: true }) } };
+      return { output: { tabId: tab.state.id, url: contents.getURL(), title: contents.getTitle(), ...(output && typeof output === "object" ? output : { success: true }) }, ...(images ? { images } : {}) };
     } finally { signal.removeEventListener("abort", abort); tab.busy = false; this.publish(conversation); }
   }
   private closeTab(conversation: Conversation, tab: Tab): void {

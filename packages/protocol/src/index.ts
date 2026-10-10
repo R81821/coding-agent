@@ -183,6 +183,7 @@ export const PlanSpecSchema = z.object({
 export type PlanSpec = z.infer<typeof PlanSpecSchema>;
 
 export const VerificationItemSchema = z.object({
+  dependencyPaths: z.array(z.string().trim().min(1).max(500)).max(100).optional(),
   stdin: z.string().max(1_000_000).optional(),
   stage: z.enum(["local", "broader"]).optional(),
   id: z.string(),
@@ -203,6 +204,8 @@ export const VerificationMatrixSchema = z.object({
 export type VerificationMatrix = z.infer<typeof VerificationMatrixSchema>;
 
 export const VerificationResultSchema = z.object({
+  dependencyPaths: z.array(z.string()).optional(), dependencyFingerprint: z.string().optional(), dependencyComplete: z.boolean().optional(),
+  reusedFromRunId: z.string().optional(),
   fingerprint: z.string().optional(),
   reusedFromItemId: z.string().optional(),
   itemId: z.string(),
@@ -246,6 +249,8 @@ export const ContextSnapshotSchema = z.object({
 export type ContextSnapshot = z.infer<typeof ContextSnapshotSchema>;
 
 export const RunCheckpointSchema = z.object({
+  elapsedMs: z.number().int().nonnegative().optional(),
+  verificationProgress: z.object({ stage: z.enum(["local", "broader"]), epoch: z.string(), revision: z.number().int().nonnegative(), codeFingerprint: z.string(), startedAt: z.string().datetime(), results: z.array(VerificationResultSchema), pendingItemIds: z.array(z.string()) }).optional(),
   workspaceFingerprint: z.string().optional(),
   workspaceBaseline: AttachmentRefSchema.optional(),
   repairAttemptsUsed: z.number().int().nonnegative().optional(),
@@ -414,6 +419,14 @@ export const AgentEventSchema = z.discriminatedUnion("type", [
   z.object({ ...eventBase, type: z.literal("context_adjusted"), adjustment: ContextAdjustmentSchema }),
   z.object({ ...eventBase, type: z.literal("cache_diagnostic"), diagnostic: CacheDiagnosticSchema }),
   z.object({ ...eventBase, type: z.literal("verification_started"), verificationRunId: z.string(), attempt: z.number().int().nonnegative() }),
+  z.object({
+    ...eventBase,
+    type: z.literal("verification_cache_decision"),
+    verificationRunId: z.string(), itemId: z.string(), command: z.string(), cwd: z.string(),
+    cached: z.boolean(), source: z.enum(["saved_run", "checkpoint", "same_suite", "executed", "unavailable"]),
+    force: z.boolean(), reason: z.string().max(300),
+    reusedFromRunId: z.string().optional(), dependencyComplete: z.boolean().optional(),
+  }),
   z.object({ ...eventBase, type: z.literal("verification_finished"), verification: VerificationRunSchema }),
   z.object({ ...eventBase, type: z.literal("repair_started"), attempt: z.number().int().positive(), maxAttempts: z.number().int().positive().nullable() }),
   z.object({
@@ -498,6 +511,7 @@ export const RunSpecSchema = z.object({
   generationPolicy: GenerationPolicySchema.optional(),
   grants: z.array(PermissionGrantSchema).default([]),
   parentRunId: z.string().optional(),
+  parentStepId: z.string().optional(),
   createdAt: z.string().datetime()
 });
 export type RunSpec = z.infer<typeof RunSpecSchema>;

@@ -2,6 +2,7 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { createServer } from "node:net";
+import { fullPageScreenshotClip } from "./browser-screenshot.js";
 
 interface PendingCommand { resolve: (value: any) => void; reject: (error: Error) => void; timeout: NodeJS.Timeout }
 
@@ -65,10 +66,13 @@ export class IsolatedBrowser {
     await this.evaluate(expression, true);
   }
 
-  async screenshot(): Promise<string> {
-    const result = await this.send("Page.captureScreenshot", { format: "png", captureBeyondViewport: true });
+  async screenshot(fullPage = false): Promise<string> {
+    const clip = fullPage ? fullPageScreenshotClip((await this.send("Page.getLayoutMetrics")).cssContentSize) : undefined;
+    const result = await this.send("Page.captureScreenshot", { format: "png", captureBeyondViewport: fullPage, ...(clip ? { clip } : {}) });
     return String(result.data ?? "");
   }
+
+  metadata(): Promise<{ url: string; title: string }> { return this.snapshotMetadata(); }
 
   private async snapshotMetadata(): Promise<{ url: string; title: string }> {
     const result = await this.evaluate("({url: location.href, title: document.title})");

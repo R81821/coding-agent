@@ -1,10 +1,11 @@
 import type { RunSpec, RunStopInfo, WorkflowState } from "@harness/protocol";
+import { activeElapsedMs } from "./durable-recovery.js";
 
 export class BudgetExceededError extends Error {
   constructor(readonly code: RunStopInfo["code"], message: string) { super(message); }
 }
 
-interface StopUsage { toolCalls: number; turns: number; repairAttemptsUsed: number; spentUsd: number; costKnown?: boolean; startedAt: number }
+interface StopUsage { toolCalls: number; turns: number; repairAttemptsUsed: number; spentUsd: number; costKnown?: boolean; startedAt: number; elapsedBeforeStartMs?: number }
 
 /** Outstanding work at a stop or pause boundary, shared by the stop receipt and the pause notice. */
 export function pendingWork(workflow?: WorkflowState): string[] {
@@ -45,7 +46,7 @@ export function buildRunStop(code: RunStopInfo["code"], message: string, spec: R
       modelTurns: { used: usage.turns, limit: spec.budget.maxTurns },
       repairs: { used: usage.repairAttemptsUsed, limit: null },
       usd: { used: usage.spentUsd, limit: spec.budget.maxUsd, ...(usage.costKnown !== undefined ? { costKnown: usage.costKnown } : {}) },
-      durationMs: { used: Math.max(0, Date.now() - usage.startedAt), limit: spec.budget.maxDurationMs },
+      durationMs: { used: Math.floor(activeElapsedMs(usage)), limit: spec.budget.maxDurationMs },
     }, pending,
     ...(failureMessage ? { lastFailure: { message: failureMessage.slice(0, 1200), ...(lastFailure ? {tool: lastFailure.tool.slice(0, 120)} : {}) } } : {}),
     ...(summaryError ? { summaryError: summaryError.slice(0, 1200) } : {}),

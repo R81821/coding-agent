@@ -1,4 +1,4 @@
-import type { PermissionGrant, RiskLevel, ToolContract } from "@harness/protocol";
+import type { AttachmentRef, PermissionGrant, RiskLevel, ToolContract } from "@harness/protocol";
 
 export interface ToolContext {
   runId: string;
@@ -8,6 +8,10 @@ export interface ToolContext {
   signal: AbortSignal;
 }
 
+export type ToolImage =
+  | { mimeType: string; base64: string; width?: number; height?: number }
+  | { attachment: AttachmentRef; detail?: "auto" | "low" | "high" };
+
 export interface ToolResult {
   /** Set only by the runtime's trusted-skill loader, never by external tool payloads. */
   trustedInstruction?: boolean;
@@ -15,6 +19,8 @@ export interface ToolResult {
   isError?: boolean;
   truncated?: boolean;
   artifacts?: string[];
+  /** Inline pixels are persisted by the runtime before model dispatch; only attachment refs enter history. */
+  images?: ToolImage[];
 }
 
 export interface ToolDefinition {

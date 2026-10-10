@@ -8,6 +8,7 @@ import type { ToolContext } from "../../../packages/tools/src/types.js";
 import { desktopBrowserRequest } from "../../../packages/tools/src/browser-bridge.js";
 
 const mock = vi.hoisted(() => ({ views: [] as unknown[], partitions: new Map<string, unknown>(), root: "" }));
+const screenshotPng = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScLbtAAAAABJRU5ErkJggg==", "base64");
 vi.mock("electron", async () => {
   const { EventEmitter } = await import("node:events");
   class Contents extends EventEmitter {
@@ -23,6 +24,7 @@ vi.mock("electron", async () => {
     close() { this.destroyed = true; }
     setWindowOpenHandler = vi.fn();
     downloadURL = vi.fn();
+    capturePage = vi.fn(async () => ({ toPNG: () => Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScLbtAAAAABJRU5ErkJggg==", "base64") }));
   }
   class View {
     webContents: Contents; visible = false; bounds = {};
@@ -41,7 +43,7 @@ vi.mock("electron", async () => {
 });
 import { DesktopBrowserHost } from "./browser-host.js";
 
-type View = { visible: boolean; options: { webPreferences?: { partition: string } }; webContents: EventEmitter & { loading: boolean; stop: ReturnType<typeof vi.fn>; setWindowOpenHandler: ReturnType<typeof vi.fn>; debugger: { sendCommand: ReturnType<typeof vi.fn> }; getURL(): string } };
+type View = { visible: boolean; options: { webPreferences?: { partition: string } }; webContents: EventEmitter & { loading: boolean; capturePage: ReturnType<typeof vi.fn>; stop: ReturnType<typeof vi.fn>; setWindowOpenHandler: ReturnType<typeof vi.fn>; debugger: { sendCommand: ReturnType<typeof vi.fn> }; getURL(): string } };
 let host: DesktopBrowserHost;
 let context: ToolContext;
 beforeEach(async () => {
@@ -80,6 +82,70 @@ it("authenticates the real pipe and validates the run's owning conversation", as
   await expect(desktopBrowserRequest(host.endpoint, "invalid", { action: "tabs" }, context)).rejects.toThrow("无效");
   await expect(request({ action: "tabs" }, { ...context, runId: "run-b" })).rejects.toThrow("does not belong");
   expect((await request({ action: "tabs" })).output).toMatchObject({ sessionId: "a", tabs: [] });
+});
+
+it("returns screenshot pixels separately from provenance over the authenticated pipe", async () => {
+  const first = (await request({ action: "new_tab", url: "file:///D:/project/index.html" })).output as { tabId: string };
+  await host.manual("a", { action: "new_tab", url: "https://example.com/other" });
+  const view = mock.views[0] as View;
+  const result = await request({ action: "screenshot", tabId: first.tabId });
+  expect(view.webContents.capturePage).toHaveBeenCalledWith(undefined, { stayHidden: true, stayAwake: true });
+  expect((mock.views[1] as View).webContents.capturePage).not.toHaveBeenCalled();
+  expect(result.output).toMatchObject({ tabId: first.tabId, url: "file:///D:/project/index.html", mimeType: "image/png", width: 1, height: 1, scope: "viewport" });
+  expect(result.output).not.toHaveProperty("base64");
+  expect(result.images).toEqual([{ mimeType: "image/png", base64: screenshotPng.toString("base64"), width: 1, height: 1 }]);
+  await expect(request({ action: "screenshot", tabId: first.tabId }, { ...context, sessionId: "b", runId: "run-b" })).rejects.toThrow("标签页不存在");
+});
+
+it("captures a full page through CDP without resizing the visible viewport", async () => {
+  await request({ action: "new_tab", url: "https://example.com" });
+  const view = mock.views[0] as View;
+  view.webContents.debugger.sendCommand.mockImplementation(async (method: string) => method === "Page.getLayoutMetrics" ? { cssContentSize: { width: 900.2, height: 1200.4 } } : { data: screenshotPng.toString("base64") });
+  const result = await request({ action: "screenshot", fullPage: true });
+  expect(view.webContents.debugger.sendCommand).toHaveBeenCalledWith("Page.captureScreenshot", { format: "png", captureBeyondViewport: true, clip: { x: 0, y: 0, width: 901, height: 1201, scale: 1 } });
+  expect(view.webContents.capturePage).not.toHaveBeenCalled();
+  expect(result.output).toMatchObject({ scope: "full_page", width: 1, height: 1 });
+});
+
+it("rejects empty screenshots and permits retry on the same tab", async () => {
+  await request({ action: "new_tab", url: "https://example.com" });
+  const view = mock.views[0] as View;
+  view.webContents.capturePage.mockResolvedValueOnce({ toPNG: () => Buffer.alloc(0) });
+  await expect(request({ action: "screenshot" })).rejects.toThrow("未返回截图");
+  expect((await request({ action: "screenshot" })).images).toHaveLength(1);
+});
+
+it("falls back to viewport CDP rendering when the hidden native surface is unavailable", async () => {
+  await request({ action: "new_tab", url: "https://example.com" });
+  const view = mock.views[0] as View;
+  view.webContents.capturePage.mockRejectedValueOnce(new Error("UnknownVizError"));
+  view.webContents.debugger.sendCommand.mockResolvedValueOnce({ data: screenshotPng.toString("base64") });
+  expect((await request({ action: "screenshot" })).output).toMatchObject({ scope: "viewport", width: 1, height: 1 });
+  expect(view.webContents.debugger.sendCommand).toHaveBeenCalledWith("Page.captureScreenshot", { format: "png", captureBeyondViewport: false });
+});
+
+it("discards a capture if the page navigates while pixels are being acquired", async () => {
+  await request({ action: "new_tab", url: "https://example.com/first" });
+  const view = mock.views[0] as View;
+  view.webContents.capturePage.mockImplementationOnce(async () => {
+    Object.assign(view.webContents, { url: "https://example.com/changed" });
+    return { toPNG: () => screenshotPng };
+  });
+  await expect(request({ action: "screenshot" })).rejects.toThrow("网页地址已改变");
+});
+
+it("cancels an in-flight native capture promptly and releases the tab for retry", async () => {
+  const tab = (await request({ action: "new_tab", url: "https://example.com" })).output as { tabId: string };
+  const view = mock.views[0] as View;
+  let complete: (image: { toPNG(): Buffer }) => void = () => {};
+  view.webContents.capturePage.mockImplementationOnce(() => new Promise(resolve => { complete = resolve; }));
+  const controller = new AbortController();
+  const capture = host.execute("a", { action: "screenshot", tabId: tab.tabId }, { workspacePath: mock.root }, controller.signal);
+  const rejected = expect(capture).rejects.toThrow("取消");
+  await vi.waitFor(() => expect(view.webContents.capturePage).toHaveBeenCalledOnce());
+  controller.abort(); await rejected;
+  complete({ toPNG: () => screenshotPng });
+  expect((await request({ action: "screenshot", tabId: tab.tabId })).images).toHaveLength(1);
 });
 
 it("pins agent operations to their tab when the user selects another tab and isolates sessions", async () => {

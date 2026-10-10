@@ -9,7 +9,7 @@ export const BrowserActionSchema = z.discriminatedUnion("action", [
   z.object({ action: z.literal("close_tab"), tabId }).strict(),
   z.object({ action: z.literal("navigate"), ...page, url: z.string().max(8192) }).strict(),
   z.object({ action: z.literal("snapshot"), ...page }).strict(),
-  z.object({ action: z.literal("screenshot"), ...page }).strict(),
+  z.object({ action: z.literal("screenshot"), ...page, fullPage: z.boolean().optional() }).strict(),
   z.object({ action: z.literal("click"), ...page, selector: z.string().min(1).max(4000) }).strict(),
   z.object({ action: z.literal("fill"), ...page, selector: z.string().min(1).max(4000), value: z.string().max(100_000) }).strict(),
   z.object({ action: z.literal("press_key"), ...page, key: z.enum(["Enter", "Tab", "Escape", "ArrowDown", "ArrowUp", "ArrowLeft", "ArrowRight", "Backspace", "Delete", "Space"]) }).strict(),

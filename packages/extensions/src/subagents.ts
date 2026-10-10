@@ -1,6 +1,6 @@
-import { cp, mkdir, mkdtemp, rm } from "node:fs/promises";
+import { cp, mkdir, mkdtemp, realpath, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { spawn } from "node:child_process";
 
 export interface WorktreeLease {
@@ -13,31 +13,48 @@ export class WorktreeManager {
   constructor(private readonly managedRoot = join(tmpdir(), "harness-agent-worktrees")) {}
 
   async create(workspacePath: string, runId: string, taskId: string, signal: AbortSignal): Promise<WorktreeLease> {
+    signal.throwIfAborted();
     await mkdir(this.managedRoot, { recursive: true });
-    const root = await mkdtemp(join(this.managedRoot, "lease-"));
+    const managedRoot = await realpath(this.managedRoot);
+    const workspace = await realpath(workspacePath);
+    const root = await mkdtemp(join(managedRoot, "lease-"));
     const worktree = join(root, "workspace");
-    const branch = `harness/${sanitize(runId)}/${sanitize(taskId)}`;
-    await git(workspacePath, ["worktree", "add", "--detach", worktree, "HEAD"], signal);
-    const patch = await git(workspacePath, ["diff", "--binary", "HEAD"], signal);
-    if (patch.stdout.trim()) await git(worktree, ["apply", "--whitespace=nowarn", "-"], signal, patch.stdout);
-    const untracked = await git(workspacePath, ["ls-files", "--others", "--exclude-standard", "-z"], signal);
-    for (const relativePath of untracked.stdout.split("\0").filter(Boolean)) {
-      const source = resolve(workspacePath, relativePath);
-      const target = resolve(worktree, relativePath);
-      if (!source.startsWith(resolve(workspacePath)) || !target.startsWith(resolve(worktree))) continue;
-      await mkdir(dirname(target), { recursive: true });
-      await cp(source, target, { recursive: true, errorOnExist: true });
+    const branch = `harness/${sanitize(runId)}/${sanitize(taskId)}/${basename(root)}`;
+    let branchCreated = false;
+    const cleanup = async () => {
+      if (!within(managedRoot, root)) throw new Error("Refusing to remove an unmanaged worktree");
+      const cleanupSignal = AbortSignal.timeout(30000);
+      await git(workspace, ["worktree", "remove", "--force", worktree], cleanupSignal);
+      if (branchCreated) await git(workspace, ["branch", "--delete", "--force", branch], cleanupSignal);
+      await rm(root, { recursive: true, force: true });
+    };
+    try {
+      await git(workspace, ["worktree", "add", "--detach", worktree, "HEAD"], signal);
+      const patch = await git(workspace, ["diff", "--binary", "HEAD"], signal);
+      if (patch.stdout.trim()) await git(worktree, ["apply", "--whitespace=nowarn", "-"], signal, patch.stdout);
+      const untracked = await git(workspace, ["ls-files", "--others", "--exclude-standard", "-z"], signal);
+      for (const relativePath of untracked.stdout.split("\0").filter(Boolean)) {
+        signal.throwIfAborted();
+        const source = resolve(workspace, relativePath);
+        const target = resolve(worktree, relativePath);
+        if (!within(workspace, source) || !within(worktree, target) || !within(workspace, await realpath(source))) throw new Error("Untracked path escapes the parent workspace");
+        await mkdir(dirname(target), { recursive: true });
+        await cp(source, target, { recursive: true, errorOnExist: true });
+      }
+      branchCreated = true;
+      await git(worktree, ["switch", "-c", branch], signal);
+    } catch (error) {
+      // An interrupted add may not yet be registered. All removal stays inside our lease root.
+      await cleanup().catch(async () => {
+        if (!within(managedRoot, root)) throw new Error("Refusing to remove an unmanaged worktree");
+        await rm(root, { recursive: true, force: true });
+      });
+      throw error;
     }
-    await git(worktree, ["switch", "-c", branch], signal);
     return {
       path: worktree,
       branch,
-      cleanup: async () => {
-        const resolved = resolve(root);
-        if (!resolved.startsWith(resolve(this.managedRoot))) throw new Error("Refusing to remove an unmanaged worktree");
-        await git(workspacePath, ["worktree", "remove", "--force", worktree], AbortSignal.timeout(30_000));
-        await rm(root, { recursive: true, force: true });
-      }
+      cleanup,
     };
   }
 }
@@ -85,6 +102,7 @@ export class ConcurrencyPool {
 }
 
 async function git(cwd: string, args: string[], signal: AbortSignal, stdin?: string): Promise<{ stdout: string; stderr: string }> {
+  signal.throwIfAborted();
   return new Promise((resolveCommand, reject) => {
     const child = spawn("git", args, { cwd, windowsHide: true, stdio: "pipe" });
     let stdout = "";
@@ -93,10 +111,11 @@ async function git(cwd: string, args: string[], signal: AbortSignal, stdin?: str
     child.stderr.setEncoding("utf8").on("data", (value: string) => { stderr += value; });
     const onAbort = () => child.kill();
     signal.addEventListener("abort", onAbort, { once: true });
-    child.on("error", reject);
+    child.on("error", error => { signal.removeEventListener("abort", onAbort); reject(error); });
     child.on("close", (code) => {
       signal.removeEventListener("abort", onAbort);
-      if (code === 0) resolveCommand({ stdout, stderr });
+      if (signal.aborted) reject(signal.reason);
+      else if (code === 0) resolveCommand({ stdout, stderr });
       else reject(new Error(`git ${args.join(" ")} failed: ${stderr}`));
     });
     child.stdin.end(stdin);
@@ -104,3 +123,8 @@ async function git(cwd: string, args: string[], signal: AbortSignal, stdin?: str
 }
 
 function sanitize(value: string): string { return value.replace(/[^a-zA-Z0-9_-]+/g, "-").slice(0, 40); }
+
+function within(root: string, target: string): boolean {
+  const rel = relative(root, target);
+  return rel === "" || !rel.startsWith("..") && !isAbsolute(rel);
+}

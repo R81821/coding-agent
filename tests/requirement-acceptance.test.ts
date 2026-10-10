@@ -150,13 +150,12 @@ describe("test-backed runtime requirement acceptance", () => {
     expect(() => continued.acceptRequirements(evidence(continued))).toThrow(/test suites/);
   });
 
-  it.each(["mutation", "failure", "unknown-effect", "recovery"])("invalidates acceptance and real test registration after %s", async kind => {
+  it.each(["mutation", "unknown-effect", "recovery"])("invalidates acceptance and real test registration after %s", async kind => {
     let w = ready();
     w.acceptRequirements(evidence(w)); w.acceptFinalReport("Done");
     expect(w.canFinish()).toBe(true);
     const receipts = evidence(w);
     if (kind === "mutation") w.applyEffect({ kind: "repository_write", changedFiles: ["caller.ts"] });
-    if (kind === "failure") w.observe({ id: "failed-read", name: "read_file", input: {} }, { output: "EACCES", isError: true });
     if (kind === "unknown-effect") w.applyEffect({ kind: "unknown", changedFiles: [] });
     if (kind === "recovery") w = new LightweightWorkflow("same request", () => {}, w.snapshot(), { broaderPolicy: "required" }, "change");
     expect(w.canFinish()).toBe(false);

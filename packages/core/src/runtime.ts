@@ -1,11 +1,13 @@
-import { waitForAll, waitForRunResult } from "./run-completion.js";
+import { waitForRunResult } from "./run-completion.js";
+import { recoverTaskArtifacts } from "./task-artifact-recovery.js";
+import { captureGraphTaskBaseline, executeGraphTasks, graphTaskChanges, graphTaskScopeViolations, type GraphExecutionTask } from "./graph-task-execution.js";
 import { join } from "node:path";
 import { homedir } from "node:os";
 import { newId, nowIso, type AgentEvent, type Profile, type RunSpec, type TaskSpec } from "@harness/protocol";
 import { EncryptedBlobStore, ensureV2Storage, HarnessDatabase, VaultCrypto, type StorageProgress } from "@harness/persistence";
 import { createConfiguredProviders, ParallelSearchProvider } from "@harness/providers";
 import { createDefaultToolRegistry, createWebSearchTool, type ToolDefinition } from "@harness/tools";
-import { ConcurrencyPool, MemoryService, PluginService, SkillService, TaskScheduler, WorktreeManager } from "@harness/extensions";
+import { MemoryService, PluginService, SkillService, TaskScheduler, WorktreeManager } from "@harness/extensions";
 import { HarnessEngine } from "./engine.js";
 import { ProjectTrustService } from "./project-trust.js";
 import { configureTelemetry } from "./telemetry.js";
@@ -85,7 +87,10 @@ export async function createRuntime(options: { appDataPath?: string; passphrase:
             type: "array", minItems: 1, maxItems: 8,
             items: {
               type: "object", additionalProperties: false, required: ["id", "prompt", "mode"],
-              properties: { id: { type: "string" }, prompt: { type: "string" }, mode: { enum: ["read", "write"] } }
+              properties: {
+                id: { type: "string" }, prompt: { type: "string" }, mode: { enum: ["read", "write"] },
+                stepId: { type: "string" }, writePaths: { type: "array", maxItems: 100, items: { type: "string" } },
+              }
             }
           }
         }
@@ -101,35 +106,66 @@ export async function createRuntime(options: { appDataPath?: string; passphrase:
       if (!parent) throw new Error(`Parent run not found: ${context.runId}`);
       const profile = profiles.get(parent.profileId);
       if (!profile) throw new Error(`Unknown parent profile: ${parent.profileId}`);
-      const tasks = Array.isArray(input.tasks) ? input.tasks.filter(isDelegateTask).slice(0, 8) : [];
-      if (!tasks.length) throw new Error("delegate requires at least one valid task");
-      const maxParallel = Math.max(1, Math.min(8, Number(input.maxParallel ?? 4)));
-      const pool = new ConcurrencyPool(maxParallel);
+      const tasks = Array.isArray(input.tasks) ? input.tasks : [];
+      if (!tasks.length || tasks.length > 8 || !tasks.every(isDelegateTask)) throw new Error("delegate requires between 1 and 8 valid tasks");
+      const maxParallel = Number(input.maxParallel ?? 4);
       const gitWorkspace = await isGitWorkspace(parent.workspacePath, context.signal);
-      const reads = tasks.filter((task) => task.mode === "read");
-      const writes = tasks.filter((task) => task.mode === "write");
-      const results = await waitForAll(reads.map((task) => pool.run(() => runDelegatedTask(task, parent, profile, parent.workspacePath), context.signal)));
-      if (gitWorkspace) results.push(...await waitForAll(writes.map((task) => pool.run(async () => {
-        const lease = await worktrees.create(parent.workspacePath, parent.id, task.id, context.signal);
+      const childIds = new Map<string, string>();
+      const outcomes = await executeGraphTasks(tasks, maxParallel, context.signal, async task => {
+        const startedAt = nowIso();
+        let lease: Awaited<ReturnType<WorktreeManager["create"]>> | undefined;
+        let result: Awaited<ReturnType<typeof runDelegatedTask>> | undefined;
+        let baseline: string | undefined;
         try {
-          const result = await runDelegatedTask(task, parent, profile, lease.path);
-          const diff = await tools.get("git_diff")?.execute({}, { ...context, workspacePath: lease.path });
-          return { ...result, branch: lease.branch, patch: diff?.output };
-        } finally { await lease.cleanup(); }
-      }, context.signal))));
-      else {
-        for (const task of writes) results.push(await runDelegatedTask(task, parent, profile, parent.workspacePath));
-      }
+          if (task.mode === "write" && gitWorkspace) lease = await worktrees.create(parent.workspacePath, parent.id, task.id, context.signal);
+          const workspacePath = lease?.path ?? parent.workspacePath;
+          baseline = lease ? await captureGraphTaskBaseline(workspacePath, context.signal) : undefined;
+          result = await runDelegatedTask(task, parent, profile, workspacePath, startedAt, baseline);
+          const changes = baseline ? await graphTaskChanges(workspacePath, baseline, context.signal) : undefined;
+          const violations = changes ? graphTaskScopeViolations(task, changes.paths) : [];
+          const output = {
+            ...result, ...(lease ? { branch: lease.branch } : {}),
+            ...(changes && !violations.length ? { patch: changes.patch, changedPaths: changes.paths } : {}),
+            ...(violations.length ? { status: "failed" as const, scopeViolation: violations, text: `Child wrote outside its declared scope: ${violations.join(", ")}` } : {}),
+          };
+          if (task.stepId) engine.recordTaskExecution(parent.id, {
+            stepId: task.stepId, taskId: task.id, childRunId: result.runId, mode: task.mode, startedAt,
+            status: output.status === "completed" ? "completed" : output.status === "cancelled" || output.status === "paused" ? "interrupted" : "failed",
+            finishedAt: nowIso(), summary: output.text.slice(0, 6000), ...(changes && !violations.length ? { patch: changes.patch } : {}),
+          });
+          return output;
+        } catch (error) {
+          // The child has settled before waitForRunResult rejects. Retain its safe partial
+          // product for explicit recovery, using a cleanup signal rather than the aborted parent.
+          let partialPatch: string | undefined;
+          if (lease && baseline) {
+            try {
+              const partial = await graphTaskChanges(lease.path, baseline, AbortSignal.timeout(30000));
+              if (!graphTaskScopeViolations(task, partial.paths).length) partialPatch = partial.patch;
+            } catch { /* interruption remains explicit even if the partial product is unavailable */ }
+          }
+          if (task.stepId) engine.recordTaskExecution(parent.id, {
+            stepId: task.stepId, taskId: task.id, ...(childIds.has(task.id) ? { childRunId: childIds.get(task.id)! } : {}), mode: task.mode, startedAt,
+            status: context.signal.aborted ? "interrupted" : "failed", finishedAt: nowIso(), summary: String(error).slice(0, 6000),
+            ...(partialPatch !== undefined ? { patch: partialPatch } : {}),
+          });
+          throw error;
+        } finally { await lease?.cleanup(); }
+      }, { allowParallelWrites: gitWorkspace });
+      const results = outcomes.map((outcome, index) => outcome.status === "fulfilled" ? outcome.value : {
+        taskId: outcome.taskId, ...(tasks[index]!.stepId ? { stepId: tasks[index]!.stepId } : {}), mode: tasks[index]!.mode,
+        status: "failed", text: String(outcome.error),
+      });
       return { output: { parentRunId: parent.id, gitWorkspace, results } };
 
-      async function runDelegatedTask(task: DelegatedTask, parentRun: RunSpec, parentProfile: Profile, workspacePath: string) {
+      async function runDelegatedTask(task: DelegatedTask, parentRun: RunSpec, parentProfile: Profile, workspacePath: string, startedAt: string, baselineTree?: string) {
         const childId = newId("run_child");
         const divisor = Math.max(1, tasks.length);
-        const readTools = new Set(["read_file", "list_files", "search_text", "git_diff"]);
+        const readTools = new Set(["read_file", "read_range", "list_files", "search_text", "search_files", "git_diff"]);
         const childProfile: Profile = {
           ...parentProfile,
           id: `${parentProfile.id}:child`,
-          toolNames: parentProfile.toolNames.filter((name) => name !== "delegate" && (task.mode === "write" || readTools.has(name))),
+          toolNames: parentProfile.toolNames.filter((name) => !["delegate", "run_tasks"].includes(name) && (task.mode === "write" || readTools.has(name))),
           budget: engine.childBudget(parentRun.id, divisor)
         };
         const child: RunSpec = {
@@ -142,21 +178,33 @@ export async function createRuntime(options: { appDataPath?: string; passphrase:
           budget: childProfile.budget,
           grants: task.mode === "write" ? parentRun.grants : [],
           parentRunId: parentRun.id,
+          ...(task.stepId ? { parentStepId: task.stepId } : {}),
+          taskMode: task.mode === "read" ? "analysis" : "change",
+          ...(parentRun.workflowVersion !== undefined ? { workflowVersion: parentRun.workflowVersion } : {}),
           mcpReadOnly: task.mode === "read",
           ...(parentRun.mcpSnapshot ? { mcpInherited: parentRun.mcpSnapshot } : {}),
           createdAt: nowIso()
         };
-        const result = await waitForRunResult(engine, childId, context.signal, () => engine.start(child, childProfile));
-        const childUsage = database.listEvents(childId)
-          .filter((event): event is Extract<AgentEvent, { type: "usage" }> => event.type === "usage")
-          .reduce((total, event) => ({
-            inputTokens: total.inputTokens + event.usage.inputTokens,
-            outputTokens: total.outputTokens + event.usage.outputTokens,
-            estimatedUsd: total.estimatedUsd + event.usage.estimatedUsd,
-            costKnown: total.costKnown && event.usage.costKnown !== false,
-          }), { inputTokens: 0, outputTokens: 0, estimatedUsd: 0, costKnown: true });
-        engine.reportChildUsage(parentRun.id, childUsage);
-        return { taskId: task.id, runId: childId, mode: task.mode, status: result.status, text: result.text };
+        let result: Extract<AgentEvent, { type: "result" }>;
+        try { result = await waitForRunResult(engine, childId, context.signal, () => {
+          engine.start(child, childProfile);
+          childIds.set(task.id, childId);
+          if (task.stepId) engine.recordTaskExecution(parentRun.id, { stepId: task.stepId, taskId: task.id, childRunId: childId, status: "running", mode: task.mode, startedAt, ...(task.writePaths ? { writePaths: task.writePaths } : {}), ...(baselineTree ? { workspacePath, baselineTree } : {}) });
+        }); }
+        finally {
+          const childUsage = database.listEvents(childId)
+            .filter((event): event is Extract<AgentEvent, { type: "usage" }> => event.type === "usage")
+            .reduce((total, event) => ({
+              inputTokens: total.inputTokens + event.usage.inputTokens,
+              outputTokens: total.outputTokens + event.usage.outputTokens,
+              estimatedUsd: total.estimatedUsd + event.usage.estimatedUsd,
+              costKnown: total.costKnown && event.usage.costKnown !== false,
+            }), { inputTokens: 0, outputTokens: 0, estimatedUsd: 0, costKnown: true });
+          const childCheckpoint = database.getLatestCheckpoint(childId);
+          const usage = childCheckpoint?.usage ?? childUsage;
+          engine.reportChildUsage(parentRun.id, { inputTokens: usage.inputTokens, outputTokens: usage.outputTokens, estimatedUsd: usage.estimatedUsd, costKnown: usage.costKnown ?? false, turns: childCheckpoint?.turns ?? 0, toolCalls: childCheckpoint?.toolCalls ?? 0 }, childId);
+        }
+        return { taskId: task.id, runId: childId, ...(task.stepId ? { stepId: task.stepId } : {}), mode: task.mode, status: result.status, text: result.text };
       }
     }
   };
@@ -168,6 +216,7 @@ export async function createRuntime(options: { appDataPath?: string; passphrase:
   });
   const engine: HarnessEngine = new HarnessEngine({ database, providers, tools, memory, skills, projectTrust, review, mcp, blobs });
   engine.recoverInterrupted();
+  await recoverTaskArtifacts(database, join(appData, "worktrees"));
   const scheduler = new TaskScheduler(database, async (task: TaskSpec) => {
     const profile = profiles.get(task.run.profileId);
     if (!profile) throw new Error(`Unknown profile: ${task.run.profileId}`);
@@ -222,11 +271,13 @@ export async function createRuntime(options: { appDataPath?: string; passphrase:
   };
 }
 
-interface DelegatedTask { id: string; prompt: string; mode: "read" | "write" }
+type DelegatedTask = GraphExecutionTask;
 function isDelegateTask(value: unknown): value is DelegatedTask {
   if (!value || typeof value !== "object") return false;
   const task = value as Record<string, unknown>;
-  return typeof task.id === "string" && typeof task.prompt === "string" && (task.mode === "read" || task.mode === "write");
+  return typeof task.id === "string" && !!task.id.trim() && typeof task.prompt === "string" && !!task.prompt.trim()
+    && (task.mode === "read" || task.mode === "write") && (task.stepId === undefined || typeof task.stepId === "string" && !!task.stepId.trim())
+    && (task.writePaths === undefined || Array.isArray(task.writePaths) && task.writePaths.length <= 100 && task.writePaths.every(path => typeof path === "string"));
 }
 
 async function isGitWorkspace(workspacePath: string, signal: AbortSignal): Promise<boolean> {

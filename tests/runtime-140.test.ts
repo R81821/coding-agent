@@ -62,7 +62,8 @@ describe("1.4 runtime boundaries", () => {
     workflow.observe({ id: "diff", name: "git_diff", input: {} }, { output: "diff --git a/a.ts b/a.ts" });
     expect(workflow.state.effect).toBe("unknown");
     workflow.applyEffect({ kind: "read", changedFiles: [] });
-    expect(workflow.checksCurrent()).toBe(true);
+    expect(workflow.state.effect).toBe("unknown");
+    expect(workflow.checksCurrent()).toBe(false);
   });
   it("records an observed difference as a write even when the snapshot is incomplete", () => {
     const before = { files: { "a.ts": "one" }, complete: false, scanned: 2, skipped: 1, truncated: false };

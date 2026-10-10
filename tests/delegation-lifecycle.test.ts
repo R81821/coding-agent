@@ -57,6 +57,22 @@ it("handles synchronous completion and ignores other runs", async () => {
   expect(engine.listenerCount("event")).toBe(0);
 });
 
+it("settles an already-created child when its parent record fails during start", async () => {
+  let release!: () => void;
+  const cleanup = new Promise<void>(resolve => { release = resolve; });
+  const engine = Object.assign(new EngineFixture(), { isActive: () => true, waitForSettlement: () => cleanup });
+  let rejected = false;
+  const completion = waitForRunResult(engine, "child", new AbortController().signal, () => { throw new Error("child record rejected"); });
+  const observed = completion.catch(() => { rejected = true; });
+  await new Promise<void>(resolve => setImmediate(resolve));
+  expect(engine.cancelled).toEqual(["child"]);
+  expect(rejected).toBe(false);
+  expect(engine.listenerCount("event")).toBe(0);
+  release();
+  await expect(completion).rejects.toThrow("child record rejected");
+  await observed;
+});
+
 it("waits for sibling cleanup even when another delegated operation fails", async () => {
   let release!: () => void;
   const sibling = new Promise<string>(done => { release = () => done("cleaned up"); });

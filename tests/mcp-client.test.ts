@@ -24,8 +24,8 @@ afterEach(async () => {
 function config(extra: Record<string, unknown> = {}) {
   return McpServerConfigSchema.parse({ id: "fixture", name: "Fixture", revision: 1, enabled: true, projectPaths: [project], transport: { type: "stdio", command: process.execPath, args: [fixture] }, connectTimeoutMs: 5000, callTimeoutMs: 1000, ...extra });
 }
-async function remote(mode: string) {
-  const child = spawn(process.execPath, [fixture, mode], { cwd: project, windowsHide: true, stdio: ["ignore", "pipe", "pipe"] });
+async function remote(mode: string, env: NodeJS.ProcessEnv = {}) {
+  const child = spawn(process.execPath, [fixture, mode], { cwd: project, windowsHide: true, stdio: ["ignore", "pipe", "pipe"], env: { ...process.env, ...env } });
   processes.push(child);
   return await new Promise<string>((resolve, reject) => {
     let output = "";
@@ -47,6 +47,15 @@ test.each(["stdio", "streamable_http", "sse"])("%s enumerates all pages and call
   expect(result.structuredContent).toMatchObject({ arguments: { value: "hello" }, cwd: project, roots: [{ uri: pathToFileURL(project).href }], calls: 1 });
   if (mode === "stdio") expect(result.structuredContent?.inheritedSecret).toBeNull();
   expect(await connection.callTool("fail", {}, new AbortController().signal)).toMatchObject({ isError: true });
+}, 15_000);
+test.each(["streamable_http", "sse"])("%s fixture skips a fetch-forbidden initial port and remains reachable", async mode => {
+  const url = await remote(mode, { FIXTURE_HTTP_FIRST_PORT: "6666" });
+  expect(new URL(url).port).not.toBe("6666");
+  const connection = await open({ transport: { type: mode, url }, headers: { Authorization: "Bearer fixture-token" } });
+  expect((await connection.listTools(new AbortController().signal)).map(tool => tool.name)).toEqual(["echo", "slow", "fail", "notify"]);
+  expect((await connection.callTool("echo", { value: "safe-port" }, new AbortController().signal)).structuredContent).toMatchObject({
+    arguments: { value: "safe-port" }, roots: [{ uri: pathToFileURL(project).href }], calls: 1,
+  });
 }, 15_000);
 test("cancels timed-out tool requests without replaying writes or losing the connection", async () => {
   const connection = await open({ callTimeoutMs: 100 });

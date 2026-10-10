@@ -327,7 +327,10 @@ test("a resumed run does not re-emit capabilities_resolved", async () => {
     },
   };
   const engine = new HarnessEngine({ database: f.database, providers: [provider], tools: new ToolRegistry(), memory: new MemoryService(f.database), skills: new SkillService(join(f.root, "skills")), projectTrust: new ProjectTrustService(f.database), mcp: f.mcp });
-  engine.on("event", (event: AgentEvent) => { if (event.type === "approval_required") engine.approvals.decide(event.approvalId, true, "test:user"); });
+  engine.on("event", (event: AgentEvent) => {
+    if (event.type === "approval_required") engine.approvals.decide(event.approvalId, true, "test:user");
+    if (event.type === "tool_finished" && event.callId === "resume-echo") engine.pause(f.spec.id);
+  });
   const results: AgentEvent[] = [];
   engine.on("event", event => { if (event.type === "result") results.push(event); });
   const profile = { ...DEFAULT_PROFILE, allowedProviders: ["fake"], toolNames: [] };
@@ -335,11 +338,13 @@ test("a resumed run does not re-emit capabilities_resolved", async () => {
   try {
     while (results.length < 1) await new Promise(resolve => setTimeout(resolve, 10));
     while (engine.isActive(f.spec.id)) await new Promise(resolve => setTimeout(resolve, 10));
+    expect(results[0]).toMatchObject({ type: "result", status: "paused" });
     engine.resume(f.spec.id, profile);
     while (results.length < 2) await new Promise(resolve => setTimeout(resolve, 10));
     while (engine.isActive(f.spec.id)) await new Promise(resolve => setTimeout(resolve, 10));
     const events = f.database.listEvents(f.spec.id);
     expect(events.filter(event => event.type === "recovery_event")).toHaveLength(1);
     expect(events.filter(event => event.type === "capabilities_resolved")).toHaveLength(1);
-  } finally { engine.cancel(f.spec.id); }
+    expect(results[1]).toMatchObject({ type: "result", status: "completed" });
+  } finally { await engine.close(); }
 }, 20_000);

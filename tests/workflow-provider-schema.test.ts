@@ -3,11 +3,17 @@ import { OpenAIProvider, OpenAICompatibleProvider, descriptor } from "@harness/p
 import { ToolContractSchema, type ModelRequest } from "@harness/protocol";
 import { SequentialWorkflow } from "../packages/core/src/sequential-workflow.js";
 
-it.each(["responses", "chat_completions"] as const)("sends a provider-compatible workflow schema through %s and executes the returned action", async protocol => {
+const cases = (["responses", "chat_completions"] as const).flatMap(protocol => (["understand", "configure"] as const).map(action => ({ protocol, action })));
+it.each(cases)("sends a provider-compatible workflow schema through $protocol and executes $action", async ({ protocol, action }) => {
   const workflow = new SequentialWorkflow("Implement service", () => {});
   const tool = workflow.planningTool();
   const model = descriptor({ providerId: "fixture", modelId: "fixture", displayName: "fixture" });
-  const input = { action: "understand", summary: "Implement service", requirements: ["Service works"] };
+  workflow.observe({ id: "source", name: "read_file", input: { path: "service.ts" } }, { output: "export const service = 0;" });
+  const check = (command: string) => ({ command, cwd: ".", timeoutMs: 1000 });
+  const input = { action, summary: "Implement service", requirements: ["Service works"], ...(action === "configure" ? {
+    architecture: "service.ts owns service behavior", evidenceIds: ["source"], steps: [{ id: "service", text: "Implement service", dependsOn: [], verification: [check("node --test test/service.test.mjs")] }],
+    integration: [check("node --test test/integration.test.mjs")], startStepId: "service",
+  } : {}) };
   const fetchImpl: typeof fetch = async (_url, init) => {
     const body = JSON.parse(String(init?.body));
     const functions = body.tools.map((entry: Record<string, unknown>) => protocol === "responses" ? entry : entry.function);
@@ -15,8 +21,11 @@ it.each(["responses", "chat_completions"] as const)("sends a provider-compatible
     expect(definition.parameters.type).toBe("object");
     expect(definition.parameters.oneOf).toBeUndefined();
     expect(definition.parameters.anyOf).toBeUndefined();
-    expect(definition.parameters.properties.action.enum).toEqual(["understand", "architecture", "plan", "start_step", "reopen_step"]);
-    expect(Object.keys(definition.parameters.properties)).toEqual(expect.arrayContaining(["summary", "requirements", "evidenceIds", "steps", "integration", "stepId", "reason"]));
+    expect(definition.parameters.properties.action.enum).toEqual(["understand", "architecture", "configure", "plan", "update_plan", "select_next", "start_step", "reopen_step"]);
+    expect(Object.keys(definition.parameters.properties)).toEqual(expect.arrayContaining(["summary", "requirements", "intent", "architecture", "evidenceIds", "steps", "integration", "mode", "selectionPolicy", "stepId", "startStepId", "removeStepIds", "reason"]));
+    expect(definition.parameters.properties.steps.items.properties.dependsOn).toMatchObject({ type: "array", items: { type: "string" } });
+    expect(definition.parameters.properties.steps.items.properties.priority).toMatchObject({ type: "integer", minimum: 0, maximum: 100 });
+    expect(definition.parameters.properties.steps.items.properties.execution.properties.mode.enum).toEqual(["read", "write"]);
     expect(definition.parameters.required).toEqual(["action"]);
     expect(definition.strict).toBe(false);
     expect(functions.find((entry: { name: string }) => entry.name === "fixture_tool").strict).toBe(true);
@@ -41,6 +50,13 @@ it.each(["responses", "chat_completions"] as const)("sends a provider-compatible
   const result = await tool.execute(calls[0]!.input, { runId: "run", workspacePath: ".", grants: [], signal: new AbortController().signal });
   expect(result.isError).not.toBe(true);
   expect(workflow.state.sequential?.understanding).toBe("Implement service");
+  if (action === "configure") {
+    expect(workflow.state.sequential?.activeStepId).toBe("service");
+    expect(workflow.state.sequential?.mode).toBe("adaptive");
+    expect(workflow.state.sequential?.steps[0]?.status).toBe("in_progress");
+    expect(workflow.state.localCheck.status).toBe("pending");
+    expect(workflow.canFinish()).toBe(false);
+  }
   const invalid = await tool.execute({ action: "understand", summary: "Missing requirements" }, { runId: "run", workspacePath: ".", grants: [], signal: new AbortController().signal });
   expect(invalid.isError).toBe(true);
   expect(workflow.state.requirements).toEqual(["Service works"]);
