@@ -1,8 +1,8 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { ProjectTrustService } from "@harness/core";
+import { AGENTS_MD_TEMPLATE, ProjectTrustService } from "@harness/core";
 import { TaskScheduler } from "@harness/extensions";
 import { DEFAULT_PROFILE, nowIso, type TaskSpec } from "@harness/protocol";
 
@@ -54,7 +54,58 @@ describe("project instruction trust", () => {
     expect(await service.inspect(root)).toMatchObject({ trusted: true, changed: true });
     expect(() => service.trust(root, [{ path: "..\\outside.md", sha256: "x" }])).toThrow(/escapes workspace/);
   });
+
+  it("writes the built-in conventions into a project that has none, and reports their hash", async () => {
+    const root = await mkdtemp(join(tmpdir(), "harness-project-scaffold-"));
+    temporary.push(root);
+    const service = trustService();
+
+    const written = await service.scaffold(root);
+    expect(written.path).toBe("AGENTS.md");
+    const content = await readFile(join(root, "AGENTS.md"), "utf8");
+    expect(content).toBe(AGENTS_MD_TEMPLATE);
+    // The reported hash is what `inspect` will ask the user to trust.
+    expect(await service.inspect(root)).toMatchObject({ trusted: false, changed: false, files: [{ path: "AGENTS.md", sha256: written.sha256 }] });
+  });
+
+  it("never overwrites a project's own AGENTS.md", async () => {
+    const root = await mkdtemp(join(tmpdir(), "harness-project-scaffold-"));
+    temporary.push(root);
+    const service = trustService();
+    await writeFile(join(root, "AGENTS.md"), "Only touch src/.\n", "utf8");
+
+    await expect(service.scaffold(root)).rejects.toThrow(/已有 AGENTS.md/);
+    expect(await readFile(join(root, "AGENTS.md"), "utf8")).toBe("Only touch src/.\n");
+  });
+
+  it("does not grant instruction status until the written file is trusted", async () => {
+    const root = await mkdtemp(join(tmpdir(), "harness-project-scaffold-"));
+    temporary.push(root);
+    const service = trustService();
+    const written = await service.scaffold(root);
+
+    // Writing is not trusting: the agent must not receive the file yet.
+    expect(await service.loadInstructions(root)).toBeUndefined();
+    service.trust(root, [{ path: written.path, sha256: written.sha256 }]);
+    expect(await service.loadInstructions(root)).toContain("项目约定");
+  });
+
+  it("states what counts as evidence without granting any exemption", () => {
+    expect(AGENTS_MD_TEMPLATE).toMatch(/## 验证/);
+    expect(AGENTS_MD_TEMPLATE).toMatch(/测试文件/);
+    expect(AGENTS_MD_TEMPLATE).toMatch(/不可信数据/);
+    // A project file must never read as permission to skip verification.
+    expect(AGENTS_MD_TEMPLATE).not.toMatch(/可以跳过|无需验证|允许跳过|不必验证/);
+  });
 });
+
+function trustService() {
+  const records = new Map<string, unknown>();
+  return new ProjectTrustService({
+    saveProjectTrust: (workspacePath, value) => records.set(workspacePath, value),
+    getProjectTrust: <T>(workspacePath: string) => records.get(workspacePath) as T | undefined
+  });
+}
 
 function makeTask(overrides: Partial<TaskSpec>): TaskSpec {
   return {

@@ -21,7 +21,7 @@ test("management cards show project binding, connection and authentication state
   const config = McpServerConfigSchema.parse({ id: "server", name: "Research", revision: 1, enabled: true, transport: { type: "streamable_http", url: "https://mcp.example.test/mcp" }, projectPaths: ["C:/project"] });
   const { env: _env, headers: _headers, ...publicFields } = config;
   const html = renderToStaticMarkup(<McpView workspacePath="C:/project" initialSnapshot={{ servers: [{ ...publicFields, envKeys: [], headerKeys: ["Authorization"] }], statuses: [{ serverId: "server", revision: 1, workspacePath: "C:/project", state: "connected", toolCount: 4 }], auth: { server: { state: "authorized" } } }} />);
-  expect(html).toContain("Research"); expect(html).toContain("已连接"); expect(html).toContain("4 个工具"); expect(html).toContain("已登录"); expect(html).toContain("编辑"); expect(html).toContain("工具目录");
+  expect(html).toContain("Research"); expect(html).toContain("已连接"); expect(html).toContain("4 个工具"); expect(html).toContain("已登录"); expect(html).toContain("编辑"); expect(html).toContain("工具目录"); expect(html).toContain("资源目录"); expect(html).toContain("提示词目录");
 });
 test("no-project view tells users to select a project before connecting", () => {
   const html = renderToStaticMarkup(<McpView workspacePath="" />);

@@ -295,3 +295,84 @@ it("preserves pause semantics even when a source reference is supplied", () => {
   expect(textItems([turnStarted(0), textDelta(1, "已收集的证据。"), final]))
     .toMatchObject([{ text: "已收集的证据。", process: true }]);
 });
+
+const submitted = (sequence: number, messageId: string, text: string): AgentEvent =>
+  ({ ...base, id: `submitted-${sequence}`, sequence, type: "steering_submitted", messageId, text });
+const delivered = (sequence: number, text: string, messageId?: string): AgentEvent =>
+  ({ ...base, id: `delivered-${sequence}`, sequence, type: "steering_delivered", text, ...(messageId ? { messageId } : {}) });
+
+it("inserts submitted human messages between separate assistant paragraphs", () => {
+  expect(buildConversationStream([
+    turnStarted(0), textDelta(1, "原来的思路。"), submitted(2, "correction", "换个方向"),
+    turnStarted(3), textDelta(4, "重新考虑后的思路。"), resultEvent(5, "重新考虑后的思路。", 3),
+  ])).toMatchObject([
+    { kind: "text", text: "原来的思路。", process: true },
+    { kind: "user_message", id: "user-message-run-correction", text: "换个方向", sequence: 2 },
+    { kind: "text", text: "重新考虑后的思路。", process: false },
+  ]);
+});
+
+it("keeps the submitted bubble once while delivery occurs after resumed output", () => {
+  expect(buildConversationStream([
+    submitted(0, "correction", "换个方向"), turnStarted(1), textDelta(2, "正在重新考虑。"),
+    delivered(3, "换个方向", "correction"), textDelta(4, "已经调整。"),
+  ])).toMatchObject([
+    { kind: "user_message", text: "换个方向", sequence: 0 },
+    { kind: "text", text: "正在重新考虑。已经调整。" },
+  ]);
+});
+
+it("preserves distinct message IDs even when their text is identical", () => {
+  const stream = buildConversationStream([
+    submitted(0, "first", "继续"), delivered(1, "继续", "first"),
+    submitted(2, "second", "继续"), delivered(3, "继续", "second"),
+  ]);
+  expect(stream).toMatchObject([
+    { kind: "user_message", id: "user-message-run-first", sequence: 0 },
+    { kind: "user_message", id: "user-message-run-second", sequence: 2 },
+  ]);
+});
+
+it("renders a legacy delivery as a human reply and breaks tools and assistant text around it", () => {
+  const stream = buildConversationStream([
+    turnStarted(0), textDelta(1, "暂停前。"), toolStarted("before", 2),
+    delivered(3, "补充说明"), toolStarted("after", 4), turnStarted(5), textDelta(6, "重新开始。"),
+  ]);
+  expect(stream.map(item => item.kind)).toEqual(["text", "tool_group", "user_message", "tool_group", "text"]);
+  expect(stream[2]).toMatchObject({ text: "补充说明", id: "user-message-run-delivered-3", sequence: 3 });
+  expect(groupsIn(stream).map(group => group.tools.length)).toEqual([1, 1]);
+});
+
+it("does not replace an authoritative source report across a human reply", () => {
+  const stream = buildConversationStream([
+    turnStarted(0), textDelta(1, "需要保留的旧报告。"), submitted(2, "correction", "重新评估"),
+    turnStarted(3), textDelta(4, "重新评估的过程。"), resultEvent(5, "旧报告的晚到修订。", 0),
+  ]);
+  expect(stream).toMatchObject([
+    { kind: "text", text: "需要保留的旧报告。" },
+    { kind: "user_message", text: "重新评估" },
+    { kind: "text", text: "重新评估的过程。" },
+    { kind: "text", text: "旧报告的晚到修订。" },
+  ]);
+});
+
+it("retains the pre-reply paragraph with the legacy result fallback", () => {
+  expect(buildConversationStream([
+    textDelta(0, "相同正文"), delivered(1, "继续"), textDelta(2, "相同正文"), resultEvent(3, "相同正文\n\n最终段落"),
+  ])).toMatchObject([
+    { kind: "text", text: "相同正文" },
+    { kind: "user_message", text: "继续" },
+    { kind: "text", text: "相同正文\n\n最终段落", process: false },
+  ]);
+});
+
+it("keeps resumed progress provisional after a reply to an older final answer", () => {
+  const stream = buildConversationStream([
+    resultEvent(0, "先前回答"), submitted(1, "correction", "重新检查"), textDelta(2, "正在检查"),
+  ]);
+  expect(stream).toMatchObject([
+    { kind: "text", text: "先前回答", process: false },
+    { kind: "user_message", text: "重新检查" },
+    { kind: "text", text: "正在检查", process: true },
+  ]);
+});

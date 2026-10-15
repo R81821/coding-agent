@@ -63,7 +63,16 @@ function TrailingAction({ locked, runLocked, hasText, busy, onHold, holding, onR
   );
 }
 
-export function BuiPromptBar({ value, onChange, onSubmit, placeholder, disabled, busy, taskMode = "auto", onTaskModeChange, attachments, actions, skillChips, skillPicker, onHold, holding, onRelease, canRelease, runDisabled = false }: {
+function resizePromptTextarea(textarea: HTMLTextAreaElement) {
+  textarea.style.height = "0px";
+  const style = getComputedStyle(textarea);
+  const minHeight = parseFloat(style.minHeight);
+  const maxHeight = parseFloat(style.maxHeight);
+  const contentHeight = textarea.value ? textarea.scrollHeight : minHeight;
+  textarea.style.height = `${Math.min(Math.max(contentHeight, minHeight), maxHeight)}px`;
+}
+
+export function BuiPromptBar({ value, onChange, onSubmit, placeholder, disabled, busy, taskMode = "auto", onTaskModeChange, modelPicker, attachments, actions, skillChips, skillPicker, onHold, holding, onRelease, canRelease, withdrawing = false, runDisabled = false }: {
   value: string;
   onChange: (value: string) => void;
   onSubmit: () => void;
@@ -72,6 +81,8 @@ export function BuiPromptBar({ value, onChange, onSubmit, placeholder, disabled,
   busy: boolean;
   taskMode?: TaskMode;
   onTaskModeChange?: (mode: TaskMode) => void;
+  /** Model and reasoning control, placed directly before the task mode. */
+  modelPicker?: React.ReactNode;
   attachments?: React.ReactNode;
   actions?: React.ReactNode;
   skillChips?: React.ReactNode;
@@ -82,6 +93,7 @@ export function BuiPromptBar({ value, onChange, onSubmit, placeholder, disabled,
   holding?: boolean;
   onRelease?: () => void;
   canRelease?: boolean;
+  withdrawing?: boolean;
   /** Blocks the pause/continue control only. Defaults to `disabled`; never derived from `busy`. */
   runDisabled?: boolean;
 }) {
@@ -90,15 +102,34 @@ export function BuiPromptBar({ value, onChange, onSubmit, placeholder, disabled,
   const triggerRef = useRef<HTMLButtonElement>(null);
   const [open, setOpen] = useState(false);
   const menuId = useId();
-  const locked = disabled || busy;
+  const locked = disabled || busy || withdrawing;
   const current = modes.find(mode => mode.value === taskMode)!;
 
   useEffect(() => {
     const textarea = textareaRef.current;
     if (!textarea) return;
-    textarea.style.height = "0px";
-    textarea.style.height = `${Math.min(Math.max(textarea.scrollHeight, 40), 168)}px`;
+    resizePromptTextarea(textarea);
   }, [value]);
+  useEffect(() => {
+    const textarea = textareaRef.current;
+    if (!textarea) return;
+    let width = textarea.getBoundingClientRect().width;
+    let frame: number | undefined;
+    const observer = new ResizeObserver(([entry]) => {
+      if (!entry || entry.contentRect.width === width) return;
+      width = entry.contentRect.width;
+      if (frame !== undefined) cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(() => {
+        frame = undefined;
+        resizePromptTextarea(textarea);
+      });
+    });
+    observer.observe(textarea);
+    return () => {
+      observer.disconnect();
+      if (frame !== undefined) cancelAnimationFrame(frame);
+    };
+  }, []);
   useEffect(() => { if (disabled) setOpen(false); }, [disabled]);
   useEffect(() => {
     if (!open) return;
@@ -140,19 +171,22 @@ export function BuiPromptBar({ value, onChange, onSubmit, placeholder, disabled,
       </div>}
       <div className="prompt-compose-row">
         <button ref={triggerRef} type="button" className="prompt-add" aria-label="添加内容" aria-haspopup="dialog" aria-expanded={open && !disabled} aria-controls={open && !disabled ? menuId : undefined} disabled={disabled} onClick={() => setOpen(!open)}><Plus size={21} aria-hidden="true" /></button>
-        <textarea ref={textareaRef} rows={1} value={value} onChange={event => onChange(event.target.value)} placeholder={placeholder} disabled={disabled}
-          aria-label="向 Harness Agent 发送消息" className="prompt-textarea"
-          onKeyDown={event => {
-            if (shouldSubmitComposerKey({ key: event.key, shiftKey: event.shiftKey, isComposing: event.nativeEvent.isComposing })) {
-              event.preventDefault();
-              if (!locked && value.trim()) onSubmit();
-            }
-          }} />
+        <div className="prompt-input">
+          <textarea ref={textareaRef} rows={1} value={value} onChange={event => onChange(event.target.value)} placeholder={placeholder} disabled={disabled || withdrawing}
+            aria-label="向 Harness Agent 发送消息" className="prompt-textarea"
+            onKeyDown={event => {
+              if (shouldSubmitComposerKey({ key: event.key, shiftKey: event.shiftKey, isComposing: event.nativeEvent.isComposing })) {
+                event.preventDefault();
+                if (!locked && value.trim()) onSubmit();
+              }
+            }} />
+        </div>
         <div className="prompt-meta">
+          {modelPicker}
           {onTaskModeChange && <span className={`prompt-current-mode mode-${current.value}`} aria-live="polite">{current.label}</span>}
           <TrailingAction
             locked={locked}
-            runLocked={runDisabled || disabled}
+            runLocked={runDisabled || disabled || withdrawing}
             hasText={Boolean(value.trim())}
             busy={busy}
             onHold={onHold}

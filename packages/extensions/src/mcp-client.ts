@@ -5,7 +5,15 @@ import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js"
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { SSEClientTransport } from "@modelcontextprotocol/sdk/client/sse.js";
 import type { OAuthClientProvider } from "@modelcontextprotocol/sdk/client/auth.js";
-import { CallToolResultSchema, ListRootsRequestSchema, ToolListChangedNotificationSchema, type CallToolResult, type Tool } from "@modelcontextprotocol/sdk/types.js";
+import {
+  CallToolResultSchema, CancelledNotificationSchema, CompleteRequestSchema, CreateMessageRequestSchema, CreateMessageResultSchema,
+  ElicitRequestSchema, ElicitResultSchema, ErrorCode, GetPromptRequestSchema, ListRootsRequestSchema, McpError,
+  PromptListChangedNotificationSchema, ReadResourceRequestSchema, ResourceListChangedNotificationSchema,
+  ResourceUpdatedNotificationSchema, ToolListChangedNotificationSchema,
+  type CallToolResult, type CompleteRequest, type CompleteResult, type CreateMessageRequest, type CreateMessageResult,
+  type ElicitRequest, type ElicitResult, type GetPromptResult, type Prompt, type ReadResourceResult,
+  type RequestId, type Resource, type ResourceTemplate, type Tool,
+} from "@modelcontextprotocol/sdk/types.js";
 import type { Transport, FetchLike } from "@modelcontextprotocol/sdk/shared/transport.js";
 import { McpServerConfigSchema, type McpServerConfig } from "@harness/protocol";
 import { canonicalMcpProject, mcpProjectKey } from "./mcp-store.js";
@@ -25,13 +33,31 @@ export class McpConnectionError extends Error {
 }
 export interface McpConnection {
   readonly closed: boolean;
+  readonly capabilities: { tools: boolean; resources: boolean; prompts: boolean };
   listTools(signal: AbortSignal): Promise<Tool[]>;
   callTool(name: string, input: Record<string, unknown>, signal: AbortSignal): Promise<CallToolResult>;
+  listResources(signal: AbortSignal): Promise<Resource[]>;
+  listResourceTemplates(signal: AbortSignal): Promise<ResourceTemplate[]>;
+  readResource(uri: string, signal: AbortSignal): Promise<ReadResourceResult>;
+  listPrompts(signal: AbortSignal): Promise<Prompt[]>;
+  getPrompt(name: string, args: Record<string, string>, signal: AbortSignal): Promise<GetPromptResult>;
+  complete(params: CompleteRequest["params"], signal: AbortSignal): Promise<CompleteResult>;
+  subscribeResource(uri: string, signal: AbortSignal): Promise<void>;
+  unsubscribeResource(uri: string, signal: AbortSignal): Promise<void>;
   close(): Promise<void>;
+}
+export interface McpRequestSource { serverId: string; serverName: string; workspacePath: string }
+export interface McpRequestHandlers {
+  onSampling?(params: CreateMessageRequest["params"], signal: AbortSignal, source: McpRequestSource): Promise<CreateMessageResult>;
+  onElicitation?(params: ElicitRequest["params"], signal: AbortSignal, source: McpRequestSource): Promise<ElicitResult>;
 }
 export interface McpConnectionCallbacks {
   authProvider?: OAuthClientProvider;
+  requestHandlers?: McpRequestHandlers;
   onToolsChanged?: () => void;
+  onResourcesChanged?: () => void;
+  onPromptsChanged?: () => void;
+  onResourceUpdated?: (uri: string) => void;
   onClose?: () => void;
 }
 function sanitizedError(error: unknown): McpConnectionError {
@@ -40,6 +66,8 @@ function sanitizedError(error: unknown): McpConnectionError {
   if (code === 401 || (error as { name?: unknown })?.name === "UnauthorizedError") return new McpConnectionError("auth_required");
   if (code === -32001) return new McpConnectionError("timeout");
   if (code === -32000) return new McpConnectionError("closed");
+  const name = (error as { name?: unknown })?.name;
+  if (code === ErrorCode.InvalidParams || code === ErrorCode.InvalidRequest || name === "ZodError" || name === "$ZodError") return new McpConnectionError("protocol_error");
   return new McpConnectionError("connection_failed");
 }
 
@@ -52,9 +80,50 @@ export async function connectMcp(raw: McpServerConfig, workspacePath: string, si
   const lifetime = new AbortController();
   let closed = false;
   let closing: Promise<void> | undefined;
-  const client = new Client({ name: "harness-agent", version: "1.4.5" }, { capabilities: { roots: { listChanged: true } } });
+  const requestHandlers = callbacks.requestHandlers;
+  const reverseRequests = new Map<RequestId, AbortController>();
+  const source: McpRequestSource = { serverId: config.id, serverName: config.name, workspacePath: project };
+  const client = new Client({ name: "harness-agent", version: "1.4.51" }, { capabilities: {
+    roots: { listChanged: true },
+    ...(requestHandlers?.onSampling ? { sampling: {} } : {}),
+    ...(requestHandlers?.onElicitation ? { elicitation: { form: {}, url: {} } } : {}),
+  } });
   client.setRequestHandler(ListRootsRequestSchema, async () => ({ roots: [{ uri: pathToFileURL(project).href, name: basename(project) }] }));
   client.setNotificationHandler(ToolListChangedNotificationSchema, () => { if (!closed) callbacks.onToolsChanged?.(); });
+  client.setNotificationHandler(ResourceListChangedNotificationSchema, () => { if (!closed) callbacks.onResourcesChanged?.(); });
+  client.setNotificationHandler(PromptListChangedNotificationSchema, () => { if (!closed) callbacks.onPromptsChanged?.(); });
+  client.setNotificationHandler(ResourceUpdatedNotificationSchema, notification => { if (!closed) callbacks.onResourceUpdated?.(notification.params.uri); });
+  if (requestHandlers?.onSampling || requestHandlers?.onElicitation) client.setNotificationHandler(CancelledNotificationSchema, notification => {
+    // SDK 1.30 ignores cancellation of request ID 0. Track our reverse handlers explicitly;
+    // all other client-side handlers complete synchronously and no task capability is advertised.
+    if (notification.params.requestId !== undefined) reverseRequests.get(notification.params.requestId)?.abort(new McpConnectionError("cancelled"));
+  });
+  async function reverse<T>(requestId: RequestId, signal: AbortSignal, operation: (active: AbortSignal) => Promise<T>): Promise<T> {
+    const controller = new AbortController();
+    reverseRequests.set(requestId, controller);
+    try { return await bounded(AbortSignal.any([signal, controller.signal]), config.callTimeoutMs, operation); }
+    finally { if (reverseRequests.get(requestId) === controller) reverseRequests.delete(requestId); }
+  }
+  if (requestHandlers?.onSampling) client.setRequestHandler(CreateMessageRequestSchema, async (request, extra) => {
+    try {
+      return await reverse(extra.requestId, extra.signal, async active => {
+        const result = await requestHandlers.onSampling!(request.params, active, { ...source });
+        const validated = CreateMessageResultSchema.safeParse(result);
+        if (!validated.success) throw new McpConnectionError("protocol_error");
+        return validated.data;
+      });
+    } catch (error) { throw new McpError(ErrorCode.InternalError, sanitizedError(error).message); }
+  });
+  if (requestHandlers?.onElicitation) client.setRequestHandler(ElicitRequestSchema, async (request, extra) => {
+    try {
+      return await reverse(extra.requestId, extra.signal, async active => {
+        const result = await requestHandlers.onElicitation!(request.params, active, { ...source });
+        const validated = ElicitResultSchema.safeParse(result);
+        if (!validated.success) throw new McpConnectionError("protocol_error");
+        return validated.data;
+      });
+    } catch (error) { throw new McpError(ErrorCode.InternalError, sanitizedError(error).message); }
+  });
   const markClosed = () => {
     if (closed) return;
     closed = true;
@@ -116,31 +185,95 @@ export async function connectMcp(raw: McpServerConfig, workspacePath: string, si
     // SDK 1.x's sessionId getter includes undefined while Transport's optional member does not.
     await bounded(signal, config.connectTimeoutMs, active => client.connect(transport as Transport, { signal: active, timeout: config.connectTimeoutMs }), true);
   } catch (error) { await close(); throw error; }
+  const capabilities = {
+    tools: !!client.getServerCapabilities()?.tools,
+    resources: !!client.getServerCapabilities()?.resources,
+    prompts: !!client.getServerCapabilities()?.prompts,
+  };
+  // One deadline covers every page, with the same defensive limits for all catalogs.
+  async function list<T>(caller: AbortSignal, enabled: boolean, page: (cursor: string | undefined, active: AbortSignal) => Promise<{ items: T[]; nextCursor?: string }>, identity: (item: T) => string): Promise<T[]> {
+    return bounded(caller, config.callTimeoutMs, async active => {
+      if (!enabled) return [];
+      const items: T[] = [], names = new Set<string>(), cursors = new Set<string>();
+      let cursor: string | undefined, size = 0;
+      do {
+        const result = await page(cursor, active);
+        size += JSON.stringify(result).length;
+        if (size > 8_000_000 || items.length + result.items.length > 4096) throw new McpConnectionError("protocol_error");
+        for (const item of result.items) {
+          const name = identity(item);
+          if (names.has(name)) throw new McpConnectionError("protocol_error");
+          names.add(name); items.push(item);
+        }
+        cursor = result.nextCursor;
+        if (cursor !== undefined && (cursors.has(cursor) || cursors.size >= 256)) throw new McpConnectionError("protocol_error");
+        if (cursor !== undefined) cursors.add(cursor);
+      } while (cursor !== undefined);
+      return items;
+    });
+  }
+  function validated<T>(value: T, schema: { safeParse(value: unknown): { success: boolean } }): T {
+    if (!schema.safeParse(value).success) throw new McpConnectionError("protocol_error");
+    return value;
+  }
   return {
     get closed() { return closed; },
+    get capabilities() { return { ...capabilities }; },
     close,
-    async listTools(caller) {
-      return bounded(caller, config.callTimeoutMs, async active => {
-        if (!client.getServerCapabilities()?.tools) return [];
-        const tools: Tool[] = [];
-        const names = new Set<string>();
-        const cursors = new Set<string>();
-        let cursor: string | undefined;
-        let size = 0;
-        do {
-          const page = await client.listTools(cursor ? { cursor } : {}, { signal: active, timeout: config.callTimeoutMs });
-          size += JSON.stringify(page).length;
-          if (size > 8_000_000 || tools.length + page.tools.length > 4096) throw new McpConnectionError("protocol_error");
-          for (const tool of page.tools) {
-            if (names.has(tool.name)) throw new McpConnectionError("protocol_error");
-            names.add(tool.name); tools.push(tool);
-          }
-          cursor = page.nextCursor;
-          if (cursor !== undefined && (cursors.has(cursor) || cursors.size >= 256)) throw new McpConnectionError("protocol_error");
-          if (cursor !== undefined) cursors.add(cursor);
-        } while (cursor !== undefined);
-        return tools;
-      });
+    listTools(caller) {
+      return list(caller, capabilities.tools, async (cursor, active) => {
+        const page = await client.listTools(cursor !== undefined ? { cursor } : {}, { signal: active, timeout: config.callTimeoutMs });
+        return { items: page.tools, ...(page.nextCursor !== undefined ? { nextCursor: page.nextCursor } : {}) };
+      }, item => item.name);
+    },
+    listResources(caller) {
+      return list(caller, capabilities.resources, async (cursor, active) => {
+        try {
+          const page = await client.listResources(cursor !== undefined ? { cursor } : {}, { signal: active, timeout: config.callTimeoutMs });
+          return { items: page.resources, ...(page.nextCursor !== undefined ? { nextCursor: page.nextCursor } : {}) };
+        } catch (error) {
+          // Resource servers may expose templates or known URIs without a static resource catalog.
+          if (cursor === undefined && (error as { code?: unknown })?.code === ErrorCode.MethodNotFound) return { items: [] };
+          throw error;
+        }
+      }, item => item.uri);
+    },
+    listResourceTemplates(caller) {
+      return list(caller, capabilities.resources, async (cursor, active) => {
+        try {
+          const page = await client.listResourceTemplates(cursor !== undefined ? { cursor } : {}, { signal: active, timeout: config.callTimeoutMs });
+          return { items: page.resourceTemplates, ...(page.nextCursor !== undefined ? { nextCursor: page.nextCursor } : {}) };
+        } catch (error) {
+          if (cursor === undefined && (error as { code?: unknown })?.code === ErrorCode.MethodNotFound) return { items: [] };
+          throw error;
+        }
+      }, item => item.uriTemplate);
+    },
+    listPrompts(caller) {
+      return list(caller, capabilities.prompts, async (cursor, active) => {
+        const page = await client.listPrompts(cursor !== undefined ? { cursor } : {}, { signal: active, timeout: config.callTimeoutMs });
+        return { items: page.prompts, ...(page.nextCursor !== undefined ? { nextCursor: page.nextCursor } : {}) };
+      }, item => item.name);
+    },
+    readResource(uri, caller) {
+      const params = validated({ uri }, ReadResourceRequestSchema.shape.params);
+      return bounded(caller, config.callTimeoutMs, active => client.readResource(params, { signal: active, timeout: config.callTimeoutMs }));
+    },
+    getPrompt(name, args, caller) {
+      const params = validated({ name, arguments: args }, GetPromptRequestSchema.shape.params);
+      return bounded(caller, config.callTimeoutMs, active => client.getPrompt(params, { signal: active, timeout: config.callTimeoutMs }));
+    },
+    complete(params, caller) {
+      validated(params, CompleteRequestSchema.shape.params);
+      return bounded(caller, config.callTimeoutMs, active => client.complete(params, { signal: active, timeout: config.callTimeoutMs }));
+    },
+    async subscribeResource(uri, caller) {
+      const params = validated({ uri }, ReadResourceRequestSchema.shape.params);
+      await bounded(caller, config.callTimeoutMs, active => client.subscribeResource(params, { signal: active, timeout: config.callTimeoutMs }));
+    },
+    async unsubscribeResource(uri, caller) {
+      const params = validated({ uri }, ReadResourceRequestSchema.shape.params);
+      await bounded(caller, config.callTimeoutMs, active => client.unsubscribeResource(params, { signal: active, timeout: config.callTimeoutMs }));
     },
     callTool(name, input, caller) {
       // No automatic retry: a disconnected or timed-out write has an uncertain outcome.

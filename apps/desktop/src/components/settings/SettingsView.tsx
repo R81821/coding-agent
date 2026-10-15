@@ -165,7 +165,7 @@ export function SettingsView(props: {
             {category.id === "credentials" && (
               <CredentialsSettings active={selected === category.id} />
             )}
-            {category.id === "provider" && <ProviderSettings />}
+            {category.id === "provider" && <ProviderSettings refresh={props.refresh} />}
             {category.id === "gateway" && <GatewaySettings />}
             {category.id === "search" && (
               <SearchSettings active={selected === category.id} />

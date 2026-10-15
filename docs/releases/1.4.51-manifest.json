@@ -1,0 +1,62 @@
+{
+  "product": "Harness Agent",
+  "version": "1.4.51",
+  "target": "Windows x64 NSIS",
+  "sourceCommit": "5a0a6536a0e1a7e7858392dc1d2b14ce82bad732",
+  "includesUncommittedChanges": true,
+  "builtAtUtc": "2026-10-10T08:05:45.4981030Z",
+  "installer": "Harness-Agent-1.4.51-x64.exe",
+  "installerPath": "apps/desktop/release/1.4.51/Harness-Agent-1.4.51-x64.exe",
+  "bytes": 134447643,
+  "sha256": "7a6e8d00cf9ed7ce80cfa20edbb1efdc53499e46221fbac79c5d0ff57bdb0174",
+  "signatureStatus": "NotSigned",
+  "fileVersion": "1.4.51",
+  "productVersion": "1.4.51",
+  "electronArchiveSha256": "5447c50d196c2227e396716ea969869c1e5baa12b6af7fb33f75ae897a6853aa",
+  "packaging": {
+    "outputDirectory": "release/1.4.51",
+    "electronDist": ".cache/electron-dist/41.10.6-win32-x64-unpacked",
+    "reason": "Use checksum-verified unpacked Electron after builder ZIP staging rename returned EPERM."
+  },
+  "changes": [
+    "Verification stage expected/missing check feedback, equivalent cwd comparison, consistent accepted receipts and saved cache measurements",
+    "Dynamic task graphs, parallel task execution, test dependencies, durable recovery and autonomous step selection",
+    "Built-in browser screenshots, PNG preview/download and retrievable image evidence"
+  ],
+  "validation": {
+    "typecheck": "passed",
+    "changedFilesLint": "passed",
+    "productionBuild": "passed",
+    "desktopStartupSmoke": "passed: main, preload and renderer document",
+    "functionalBaseline": {
+      "scope": "Latest full functional suite before the 1.4.51 version metadata bump",
+      "filesPassed": 147,
+      "testsPassed": 1225,
+      "failed": 0,
+      "log": ".test-verification-stage-full.log"
+    },
+    "packagedSmoke": {
+      "version": "1.4.51",
+      "electron": "41.10.6",
+      "node": "24.18.0",
+      "arch": "x64",
+      "packagedFiles": "passed",
+      "rendererVersion": "1.4.51",
+      "packagedBuildHashes": {
+        "daemonSha256": "fc5e87a6b839e827b8430da645f6db9644c958d2096ed9075e9b64dec5e89a3e",
+        "mainSha256": "d1b4dc3e121e19f5d5ea597a474548577a39c14887d03a9703aa45e728e90e28",
+        "preloadSha256": "7080ef8e8cd1fb95333fab63090148bac05b6b948d63ca45f4bbc8ce69be0689"
+      },
+      "sharpPngBytes": 95,
+      "sqliteRoundTrip": "passed",
+      "daemonHealth": {
+        "status": "ok",
+        "version": "1.4.51",
+        "providerIds": [],
+        "connectors": []
+      }
+    },
+    "nsisPackage": "passed",
+    "interactiveInstall": "not run"
+  }
+}

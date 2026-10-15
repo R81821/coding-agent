@@ -32,6 +32,16 @@ async function runScenario(mode: "pass" | "local-failure" | "broader-failure" | 
     const provider: ModelProvider = {
       id: "fake", async listModels() { return [model]; }, async health() { return true; }, estimateCost() { return 0; },
       async *stream(request): AsyncIterable<ProviderStreamEvent> {
+        if (request.purpose === "compaction") {
+          const part = request.messages.find(message => message.role === "user")?.content.find(part => part.type === "text");
+          const state = part?.type === "text" ? JSON.parse(part.text).state : undefined;
+          const facts = (value: unknown) => (Array.isArray(value) ? value : [value]).map(item => typeof item === "string" ? item : JSON.stringify(item));
+          yield { type: "text_delta", delta: JSON.stringify({
+            goal: state.goal, constraints: facts(state.constraints), decisions: facts(state.decisions),
+            evidence: facts(state.evidence), completed: facts(state.completed), pending: facts(state.pending),
+          }) };
+          return;
+        }
         if (request.messages.some(message => message.content.some(part => part.type === "text" && part.text.startsWith("Independent read-only final review")))) {
           reviews += 1;
           throw new DOMException("The operation was aborted due to timeout", "TimeoutError");
@@ -192,7 +202,8 @@ describe("real engine workflow", () => {
     expect(result.checkpoint?.workflow?.verification).toHaveLength(2);
   });
   it.each(["denied-verification", "outside-check"] as const)("never executes %s commands", async mode => {
-    const result = await runScenario(mode); expect(result.result.status).toBe("review"); expect(result.checks).toEqual([]);
+    const result = await runScenario(mode); expect(result.result.status, result.result.text).toBe("review"); expect(result.checks).toEqual([]);
+    if (mode === "outside-check") expect(result.result.stop?.code).toBe("model_turn_limit");
   });
   it("charges verification against tool budget and leaves incomplete work in review", async () => {
     const result = await runScenario("check-budget"); expect(result.result.status).toBe("review"); expect(result.checks).toEqual(["fixture local"]);

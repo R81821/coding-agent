@@ -77,16 +77,21 @@ button:focus-visible, summary:focus-visible, select:focus-visible, input:focus-v
 .sidebar-connection { display: flex; align-items: center; padding: 9px 12px 4px; font-size: 10px; color: var(--muted); }
 .workbench .sidebar :is(button, summary, small, p, em, .project-folder, .sidebar-section-label, .sidebar-connection, .project-folder-tag) { font-size: 14px; font-weight: 700; }
 .workbench .status-dot { width: 5px; height: 5px; background: #79b499; box-shadow: none; }
-.workbench main { grid-template-rows: 58px minmax(0, 1fr); border: 1px solid #38343d; border-radius: 20px; background: #191919; overflow: hidden; }
+.workbench main { grid-template-columns: minmax(0, 1fr); grid-template-rows: 58px minmax(0, 1fr); border: 1px solid #38343d; border-radius: 20px; background: #191919; overflow: hidden; }
 .workbench .topbar { padding: 8px 22px; background: #191919; border: 0; backdrop-filter: none; }
 .workbench-heading { display: flex; align-items: center; gap: 12px; min-width: 0; }
 .workbench .topbar h1 { font-size: 13px; font-weight: 500; margin: 0; color: #b6b0bc; }
 .workbench .topbar select { font-size: 12px; max-width: 190px; padding: 6px 10px; border: 1px solid #37343b; background: #232125; border-radius: 9px; }
 .workbench .secure { display: inline-flex; align-items: center; gap: 5px; padding: 6px 9px; border: 0; color: #9c97a2; font-size: 11px; background: transparent; }
 .workbench .content { background: transparent; }
-.workbench .conversation { padding: 30px max(28px, calc((100% - 940px) / 2)) 28px; }
+.workbench .chat-content { min-width: 0; }
+.workbench .chat-layout { --chat-content-max: 940px; --chat-gutter: 28px; min-width: 0; grid-template-columns: minmax(0, 1fr); container-type: inline-size; }
+.workbench .conversation { padding: 30px 0 20px; }
+.workbench .conversation-content { max-width: min(var(--chat-content-max), calc(100cqw - 2 * var(--chat-gutter))); margin-inline-start: max(var(--chat-gutter), calc((100cqw - var(--chat-content-max)) / 2)); }
 .workbench .conversation > * { min-width: 0; }
-.workbench .conversation-empty { display: flex; align-items: center; justify-content: center; padding-top: 22px; padding-bottom: 28px; }
+.workbench :is(.conversation-process, .conversation-final-stream, .conversation-inline-review) { width: 100%; }
+.workbench :is(.conversation-process-summary, .conversation-process-body, .conversation-final-stream) { padding-inline: 0; }
+.workbench .conversation-empty { display: flex; align-items: center; justify-content: flex-start; padding-top: 22px; padding-bottom: 20px; }
 .workspace-welcome { width: 100%; max-width: 960px; margin: auto; text-align: center; padding: 18px 0; }
 .welcome-symbol { margin: 0 auto 30px; color: #655f6a; }
 .workspace-welcome h2 { margin: 0; font-size: clamp(24px, 2.3vw, 36px); line-height: 1.45; font-weight: 500; letter-spacing: -.8px; overflow-wrap: anywhere; }
@@ -100,7 +105,8 @@ button:focus-visible, summary:focus-visible, select:focus-visible, input:focus-v
 .starter-purple svg { color: #b68bec; }
 .starter-green svg { color: #6bbb92; }
 .starter-orange svg { color: #df9461; }
-.workbench .composer-wrap { width: min(calc(100% - 36px), 720px); min-height: 0; max-height: none; overflow: visible; margin: 0 auto; padding: 0 0 18px; background: #191919; }
+.workbench .composer-wrap { width: min(calc(100% - 2 * var(--chat-gutter)), var(--chat-content-max)); min-height: 0; max-height: none; overflow: visible; margin: 0 auto; padding: 0 0 8px; background: #191919; }
+.workbench .composer-wrap > .prompt-cache-stats { margin-top: 6px; }
 .composer-project-bar { margin: 0 14px; min-height: 42px; border-radius: 18px 18px 0 0; padding: 8px 18px; display: flex; align-items: center; gap: 22px; background: #222124; color: #b5afb9; font-size: 12px; }
 .composer-project-bar > span, .composer-project-bar > button { display: flex; align-items: center; gap: 8px; min-width: 0; }
 .composer-project-bar button { border: 0; background: transparent; padding: 0; cursor: pointer; color: #ddd8e1; max-width: 45%; }
@@ -122,6 +128,14 @@ button:focus-visible, summary:focus-visible, select:focus-visible, input:focus-v
 .prompt-key-hint { margin-top: 4px; text-align: right; color: var(--muted); font-size: 9px; }
 .prompt-attachments { max-height: 100px; overflow-y: auto; margin-bottom: 10px; }
 .user-message { max-width: 78%; width: fit-content; margin: 0 0 30px auto; padding: 13px 18px; border: 1px solid #363139; border-radius: 18px 18px 5px 18px; background: #2b272f; color: #e3dde9; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 14px; line-height: 1.7; }
+.conversation-user-turn { position: relative; max-width: 78%; width: fit-content; margin: 0 0 30px auto; }
+.conversation-user-turn > .user-message { max-width: 100%; margin: 0; }
+.conversation-user-actions { position: absolute; top: 100%; right: 0; display: flex; padding-top: 2px; opacity: 0; pointer-events: none; transition: opacity .12s ease; }
+.conversation-user-turn:is(:hover, :focus-within) > .conversation-user-actions { opacity: 1; pointer-events: auto; }
+.conversation-withdraw { display: grid; place-items: center; width: 28px; height: 28px; padding: 0; border: 0; border-radius: 6px; background: transparent; color: var(--muted); cursor: pointer; }
+.conversation-withdraw:hover:not(:disabled) { background: var(--color-surface-strong); color: var(--color-text); }
+.conversation-withdraw:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.conversation-withdraw:disabled { cursor: default; }
 .workbench .assistant-message pre { font-family: inherit; font-size: 14px; color: #dedbe1; line-height: 1.85; }
 .workbench .assistant-message { max-width: none; }
 .workbench select, .workbench input, .workbench textarea { color: #e5dfeb; }
@@ -145,8 +159,7 @@ button:focus-visible, summary:focus-visible, select:focus-visible, input:focus-v
   .task-starter { min-height: 100px; }
   .prompt-model { max-width: 130px; }
   .composer-profile, .workbench .secure { display: none; }
-  .workbench .conversation { padding-left: 18px; padding-right: 18px; }
-  .workbench .composer-wrap { width: calc(100% - 36px); }
+  .workbench .chat-layout { --chat-gutter: 18px; }
 }
 @media (max-height: 760px) {
   .welcome-symbol { margin-bottom: 16px; width: 40px; height: 40px; }

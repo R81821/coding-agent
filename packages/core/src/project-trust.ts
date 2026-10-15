@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
-import { readFile } from "node:fs/promises";
+import { readFile, writeFile } from "node:fs/promises";
 import { isAbsolute, relative, resolve } from "node:path";
+import { AGENTS_MD_TEMPLATE } from "./context.js";
 
 export interface ProjectTrustFile {
   path: string;
@@ -49,6 +50,26 @@ export class ProjectTrustService {
     const record = { workspacePath: root, files, trustedAt: new Date().toISOString() };
     this.repository.saveProjectTrust(root, record);
     return record;
+  }
+
+  /**
+   * Write the built-in project conventions as `AGENTS.md`, and nothing else: trusting stays a
+   * separate, explicit step so the user still reads the content before it gains instruction status.
+   *
+   * The path is fixed, so no caller-supplied name can escape the workspace, and the file is created
+   * with `wx` — a project that already has its own AGENTS.md is never overwritten.
+   */
+  async scaffold(workspacePath: string): Promise<{ path: string; sha256: string }> {
+    const root = resolve(workspacePath);
+    const candidate = resolve(root, "AGENTS.md");
+    try {
+      await writeFile(candidate, AGENTS_MD_TEMPLATE, { flag: "wx" });
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "EEXIST")
+        throw new Error("该仓库已有 AGENTS.md，未做任何改动。");
+      throw new Error(`无法写入 ${candidate}：${error instanceof Error ? error.message : String(error)}`);
+    }
+    return { path: relative(root, candidate), sha256: createHash("sha256").update(AGENTS_MD_TEMPLATE).digest("hex") };
   }
 
   async loadInstructions(workspacePath: string): Promise<string | undefined> {

@@ -52,12 +52,12 @@ async function analysisRun(
     if (options.failVerificationCheckpoint) {
       const saveCheckpoint = database.saveCheckpoint.bind(database);
       let failedOnce = false;
-      database.saveCheckpoint = (checkpoint: Parameters<typeof saveCheckpoint>[0]) => {
+      database.saveCheckpoint = (checkpoint, compaction, events) => {
         if (!failedOnce && checkpoint.reason === "verification") {
           failedOnce = true;
           throw new Error("disk full while exporting the database");
         }
-        return saveCheckpoint(checkpoint);
+        return saveCheckpoint(checkpoint, compaction, events);
       };
     }
     await writeFile(join(root, "memory.ts"), options.sourceText ?? "export const memory = 1;\n");

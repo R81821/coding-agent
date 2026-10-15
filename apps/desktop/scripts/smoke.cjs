@@ -5,6 +5,7 @@ const { mkdtempSync } = require("node:fs");
 const { tmpdir } = require("node:os");
 const { join, resolve } = require("node:path");
 const { pathToFileURL } = require("node:url");
+const { setTimeout: delay } = require("node:timers/promises");
 
 const root = mkdtempSync(join(tmpdir(), "harness-electron-smoke-"));
 app.setPath("userData", join(root, "user-data"));
@@ -15,10 +16,12 @@ process.env.APPDATA = root;
 if (!process.argv.includes("--dev")) delete process.env.VITE_DEV_SERVER_URL;
 app.setLoginItemSettings = () => {};
 let finished = false;
+const started = performance.now();
+const background = process.argv.includes("--background");
 function finish(error) {
   if (finished) return;
   finished = true;
-  process.stderr.write(`${error ? `FAIL: ${error.stack ?? error}` : "PASS: Electron main, preload and renderer document loaded"}\n`);
+  process.stderr.write(`${error ? `FAIL: ${error.stack ?? error}` : `PASS: Electron main, preload and renderer UI ready (${Math.round(performance.now() - started)} ms)`}\n`);
   app.exit(error ? 1 : 0);
 }
 dialog.showErrorBox = (title, message) => finish(new Error(`${title}: ${message}`));
@@ -26,9 +29,28 @@ process.on("uncaughtException", finish);
 process.on("unhandledRejection", finish);
 setTimeout(() => finish(new Error("Desktop startup timed out after 30 seconds")), 30_000);
 app.on("browser-window-created", (_event, window) => {
+  process.stderr.write(`[Harness Agent] smoke window created (${Math.round(performance.now() - started)} ms)\n`);
   window.webContents.on("preload-error", (_event, _path, error) => finish(error));
   window.webContents.on("did-fail-load", (_event, code, description) => finish(new Error(`${code}: ${description}`)));
   window.webContents.on("render-process-gone", (_event, details) => finish(new Error(`Renderer exited: ${details.reason}`)));
-  window.webContents.once("did-finish-load", () => finish());
+  window.webContents.once("did-finish-load", () => {
+    // A loaded HTML shell can still hide a broken or stalled React application.
+    void (async () => {
+      while (!finished) {
+        const ready = await window.webContents.executeJavaScript('!!document.querySelector("#unlock-heading") && !!window.harness');
+        if (ready) {
+          if (background && window.isVisible()) throw new Error("Background launch unexpectedly showed its window");
+          if (!background && (!window.isVisible() || !window.isFocused())) {
+            await delay(100);
+            continue;
+          }
+          process.stderr.write(`[Harness Agent] smoke window visible=${window.isVisible()} focused=${window.isFocused()}\n`);
+          finish();
+          return;
+        }
+        await delay(100);
+      }
+    })().catch(finish);
+  });
 });
 void import(pathToFileURL(resolve(__dirname, "..", "dist-electron/main.js")).href).catch(finish);

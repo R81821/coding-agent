@@ -340,6 +340,12 @@ function createWindow(show: boolean): void {
       nodeIntegration: false,
     },
   });
+  const createdWindow = window;
+  // Bring an explicit launch forward after the renderer's first paint. Background
+  // login launches stay hidden, and closing during startup cancels the reveal.
+  createdWindow.once("ready-to-show", () => {
+    if (!quitting && showWindowWhenReady && window === createdWindow && !createdWindow.isDestroyed()) showMainWindow();
+  });
   Menu.setApplicationMenu(null);
   browserHost?.attach(window);
   window.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
@@ -369,6 +375,7 @@ function createWindow(show: boolean): void {
     void logLifecycle("window-close", { quitting });
     if (!quitting) {
       event.preventDefault();
+      showWindowWhenReady = false;
       window?.hide();
     }
   });

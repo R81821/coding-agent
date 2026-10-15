@@ -1,10 +1,13 @@
-.workbench-prompt.prompt-compact { position: relative; padding: 9px 10px 6px; border-radius: 22px; }
-.prompt-compose-row { display: flex; align-items: center; gap: 10px; min-width: 0; }
-.workbench-prompt.prompt-compact .prompt-textarea { flex: 1; width: 0; min-width: 60px; min-height: 40px; padding: 8px 0; line-height: 24px; }
+.workbench-prompt.prompt-compact { position: relative; padding: 9px 10px; border-radius: 22px; }
+.prompt-compact .skill-chips:empty { display: none; }
+.prompt-compose-row { display: flex; align-items: flex-end; gap: 10px; min-width: 0; }
+.prompt-input { flex: 1; width: 0; min-width: 60px; padding: 8px 0; }
+.workbench-prompt.prompt-compact .prompt-textarea { width: 100%; min-width: 0; min-height: 24px; max-height: 72px; padding: 0; line-height: 24px; scrollbar-width: none; }
+.workbench-prompt.prompt-compact .prompt-textarea::-webkit-scrollbar { display: none; }
 .prompt-add { display: grid; place-items: center; flex-shrink: 0; width: 40px; height: 40px; border: 0; border-radius: 12px; background: #ffffff08; color: inherit; cursor: pointer; }
 .prompt-add:hover:not(:disabled), .prompt-add[aria-expanded="true"] { background: #ffffff12; }
 .prompt-add:disabled { opacity: .4; cursor: not-allowed; }
-.prompt-compact .prompt-meta { gap: 10px; }
+.prompt-compact .prompt-meta { gap: 10px; height: 40px; }
 .prompt-compact .prompt-model { max-width: 180px; }
 .workbench .prompt-compact .prompt-send { border-radius: 50%; background: var(--color-text); color: var(--bg); }
 .workbench .prompt-compact .prompt-send:hover:not(:disabled) { background: var(--color-text); color: var(--bg); opacity: .85; }

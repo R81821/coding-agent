@@ -44,4 +44,49 @@
 .mcp-secret-row { display: grid; grid-template-columns: 1fr 80px 1.3fr auto; gap: 7px; }
 .mcp-import-target { font-size: 12px; color: var(--color-text-muted); overflow-wrap: anywhere; margin: 6px 0 12px; }
 .mcp-secret-row input:disabled { opacity: .55; }
+.mcp-catalog-tabs { display: flex; gap: 6px; border-bottom: 1px solid var(--color-line); padding-bottom: 10px; }
+.mcp-catalog-tabs button { display: inline-flex; align-items: center; gap: 6px; border: 1px solid transparent; border-radius: 8px; padding: 7px 10px; color: var(--color-text-muted); background: transparent; font: inherit; font-size: 13px; cursor: pointer; }
+.mcp-catalog-tabs button[aria-selected=true] { color: var(--color-accent); background: color-mix(in srgb, var(--color-accent) 10%, transparent); }
+.mcp-content-list, .mcp-template-list { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 240px), 1fr)); gap: 8px; }
+.mcp-template-list h4 { grid-column: 1 / -1; font-size: 13px; color: var(--color-text-muted); }
+.mcp-content-item { display: flex; flex-direction: column; gap: 6px; border: 1px solid var(--color-line); border-radius: 10px; padding: 12px; background: var(--color-bg); color: var(--color-text); font: inherit; text-align: left; cursor: pointer; min-width: 0; }
+.mcp-content-item:hover { border-color: var(--color-accent); }
+.mcp-content-item strong { font-size: 13px; font-weight: 600; }
+.mcp-content-item span, .mcp-content-item small, .mcp-content-item code { color: var(--color-text-muted); font-size: 12px; overflow-wrap: anywhere; }
+.mcp-content-item:disabled { opacity: .6; cursor: wait; }
+.mcp-resource-uri { display: flex; align-items: flex-end; gap: 10px; }
+.mcp-resource-uri label { flex: 1; }
+.mcp-resource-uri label, .mcp-prompt-form label, .mcp-template-form label { display: flex; flex-direction: column; gap: 6px; font-size: 13px; color: var(--color-text-muted); }
+.mcp-template-form { display: flex; flex-direction: column; gap: 10px; }
+.mcp-template-form h4 { font-size: 14px; }
+.mcp-prompt-form { display: flex; flex-direction: column; gap: 12px; border-top: 1px solid var(--color-line); padding-top: 16px; }
+.mcp-prompt-form h4 { font-size: 14px; }
+.mcp-prompt-argument { display: grid; grid-template-columns: 1fr auto; gap: 8px; align-items: center; }
+.mcp-prompt-argument small { font-size: 12px; }
+.mcp-completion-options { grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: 6px; }
+.mcp-completion-options button { color: var(--color-accent); background: color-mix(in srgb, var(--color-accent) 8%, transparent); border: 1px solid var(--color-line); border-radius: 7px; padding: 4px 7px; cursor: pointer; font: inherit; font-size: 12px; }
+.mcp-content-preview { border-top: 1px solid var(--color-line); padding-top: 15px; display: flex; flex-direction: column; gap: 10px; }
+.mcp-content-preview pre, .mcp-interaction-card pre { white-space: pre-wrap; overflow-wrap: anywhere; margin: 8px 0; max-height: 260px; overflow: auto; border-radius: 8px; background: var(--color-bg); padding: 12px; color: var(--color-text); font: inherit; font-size: 13px; line-height: 1.5; }
+.mcp-content-source { font-size: 12px; color: var(--color-text-muted); overflow-wrap: anywhere; }
+.mcp-message-role { font-size: 12px; color: var(--color-accent); }
+.mcp-interactions { position: fixed; z-index: 120; right: 22px; bottom: 18px; width: min(560px, calc(100vw - 32px)); color: var(--color-text); }
+.mcp-interaction-card { display: flex; flex-direction: column; gap: 12px; padding: 20px; border: 1px solid var(--color-line); border-radius: 16px; background: var(--color-surface-strong); box-shadow: 0 14px 60px #0005; max-height: min(80vh, 780px); font: inherit; }
+.mcp-interaction-card h3 { display: flex; align-items: center; gap: 8px; font-size: 16px; font-weight: 650; }
+.mcp-interaction-source { font-size: 12px; color: var(--color-text-muted); overflow-wrap: anywhere; }
+.mcp-interaction-body { min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 12px; font-size: 13px; line-height: 1.5; }
+.mcp-interaction-card footer { justify-content: flex-end; border-top: 1px solid var(--color-line); padding-top: 12px; }
+.mcp-interaction-card input:not([type=checkbox]), .mcp-interaction-card select { width: 100%; border: 1px solid var(--color-line); border-radius: 8px; background: var(--color-bg); color: var(--color-text); padding: 8px 10px; font: inherit; font-size: 13px; min-width: 0; }
+.mcp-interaction-card input:focus, .mcp-interaction-card select:focus, .mcp-catalog-tabs button:focus-visible, .mcp-content-item:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 2px; }
+.mcp-interaction-card input[type=checkbox] { accent-color: var(--color-accent); }
+.mcp-sampling-meta { display: flex; flex-wrap: wrap; gap: 8px 16px; color: var(--color-text-muted); font-size: 12px; }
+.mcp-sampling-message { padding-top: 5px; }
+.mcp-elicitation-message { white-space: pre-wrap; overflow-wrap: anywhere; }
+.mcp-elicitation-form { display: flex; flex-direction: column; gap: 12px; }
+.mcp-elicitation-form > label { display: flex; flex-direction: column; gap: 6px; }
+.mcp-elicitation-form small, .mcp-multiselect > small { color: var(--color-text-muted); font-size: 12px; }
+.mcp-interaction-card .mcp-check { display: flex; flex-direction: row; align-items: center; gap: 8px; font-size: 13px; }
+.mcp-multiselect { border: 1px solid var(--color-line); border-radius: 8px; padding: 10px; display: flex; flex-direction: column; gap: 8px; }
+.mcp-multiselect legend { padding: 0 4px; }
+.mcp-external-url { color: var(--color-accent); overflow-wrap: anywhere; background: var(--color-bg); padding: 10px; border-radius: 8px; }
 @media (max-width: 650px) { .mcp-heading { align-items: flex-start; flex-direction: column; } .mcp-form-grid { grid-template-columns: 1fr; } .mcp-dialog { padding: 16px; } .mcp-secret-row { grid-template-columns: 1fr 80px; } .mcp-secret-row input:last-child { grid-column: 1 / -1; } }
+@media (max-width: 650px) { .mcp-interactions { right: 16px; bottom: 12px; } .mcp-interaction-card { padding: 16px; } }

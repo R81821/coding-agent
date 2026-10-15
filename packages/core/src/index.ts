@@ -7,4 +7,5 @@ export * from "./runtime.js";
 export * from "./run-review.js";
 export * from "./project-trust.js";
 export * from "./session-context.js";
+export * from "./mcp-interactions.js";
 export * from "./telemetry.js";

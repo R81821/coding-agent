@@ -1,0 +1,112 @@
+/* Unlock lives outside the workbench, but uses the same appearance preferences. */
+:root .unlock.unlock-screen {
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  display: grid;
+  padding: clamp(.75em, 3vw, 2em);
+  overflow: auto;
+  place-items: safe center;
+  background: var(--bg);
+  color: var(--color-text);
+  font-family: var(--ui-font, var(--font-sans));
+  font-size: var(--ui-font-size, inherit);
+  font-weight: var(--ui-font-weight, inherit);
+  line-height: 1.5;
+}
+.unlock-screen > .unlock-panel {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: .85em;
+  width: min(28.5em, 100%);
+  min-width: 0;
+  padding: clamp(1em, 5vw, 2em);
+  border: 1px solid var(--line);
+  border-radius: 1.4em;
+  background: var(--panel);
+  color: var(--color-text);
+  box-shadow: var(--glass-shadow);
+  backdrop-filter: none;
+  overflow-wrap: anywhere;
+}
+.unlock-screen .unlock-brand-mark {
+  display: grid;
+  place-items: center;
+  width: 2.7em;
+  height: 2.7em;
+  flex: 0 0 auto;
+  border-radius: 1em;
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: 1.28em;
+}
+.unlock-screen .unlock-brand-name {
+  color: var(--muted);
+  font-size: .72em;
+  letter-spacing: .3em;
+}
+.unlock-screen .unlock-panel h1 {
+  margin: 0;
+  color: var(--color-text);
+  font-size: 1.28em;
+  font-weight: inherit;
+  line-height: 1.4;
+}
+.unlock-screen .unlock-description {
+  margin: 0;
+  color: var(--muted);
+  font-size: inherit;
+  line-height: 1.6;
+}
+.unlock-screen .unlock-passphrase {
+  width: 100%;
+  min-width: 0;
+  margin: 0;
+  padding: .7em .85em;
+  border: 1px solid var(--line);
+  border-radius: .85em;
+  background: var(--panel-2);
+  color: var(--color-text);
+  font: inherit;
+}
+.unlock-screen .unlock-remember {
+  display: flex;
+  align-items: flex-start;
+  gap: .6em;
+  width: 100%;
+  color: var(--muted);
+  text-align: left;
+  font: inherit;
+}
+.unlock-screen .unlock-remember input {
+  flex: 0 0 auto;
+  width: 1em;
+  height: 1em;
+  margin: .25em 0 0;
+  accent-color: var(--accent);
+}
+.unlock-screen .unlock-error {
+  width: 100%;
+  padding: .6em .85em;
+  border: 1px solid color-mix(in srgb, var(--color-danger) 30%, transparent);
+  border-radius: .85em;
+  background: color-mix(in srgb, var(--color-danger) 10%, transparent);
+  color: var(--color-danger);
+  text-align: left;
+}
+.unlock-screen .unlock-submit {
+  width: 100%;
+  min-width: 0;
+  padding: .7em .85em;
+  border-radius: .85em;
+  background: var(--accent);
+  color: var(--appearance-on-accent, #fff);
+  font: inherit;
+  overflow-wrap: anywhere;
+}
+.unlock-screen .unlock-submit:hover:not(:disabled),
+.unlock-screen .unlock-submit:active:not(:disabled) {
+  background: color-mix(in srgb, var(--accent) 85%, var(--color-text));
+  color: var(--appearance-on-accent, #fff);
+}

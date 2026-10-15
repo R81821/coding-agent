@@ -50,6 +50,52 @@ describe("model router", () => {
     const route = await router.route({ ...DEFAULT_PROFILE, allowedProviders: ["allowed"] }, { needsVision: false, needsTools: false, needsStructuredOutput: false, estimatedInputTokens: 10, estimatedOutputTokens: 10 });
     expect(route.provider.id).toBe("allowed");
   });
+
+  it("admits compactable conversation history while retaining full input for pricing", async () => {
+    const modelProvider = provider("fixture", true, 0.8, 1);
+    const measured: Array<{ input: number; output: number }> = [];
+    modelProvider.estimateCost = (_model, input, output) => {
+      measured.push({ input, output });
+      return (input + output) / 1_000_000;
+    };
+    const router = new ModelRouter([modelProvider]);
+    const profile = { ...DEFAULT_PROFILE, allowedProviders: [modelProvider.id] };
+    const largeConversation = { ...requirements, estimatedInputTokens: 500_000 };
+    await expect(router.route(profile, largeConversation)).rejects.toThrow("上下文容量不足");
+    measured.length = 0;
+
+    const route = await router.route(profile, { ...largeConversation, minimumInputTokens: 3_000 });
+    expect(route.provider).toBe(modelProvider);
+    expect(measured).toEqual([{ input: 500_000, output: 500 }]);
+    expect(route.estimatedUsd).toBe(0.5005);
+    await expect(router.route({ ...profile, budget: { ...profile.budget, maxUsd: 0.1 } }, { ...largeConversation, minimumInputTokens: 3_000 })).rejects.toThrow("超过预算");
+  });
+
+  it("requires the noncompressible request and output to fit the selected model", async () => {
+    const modelProvider = provider("fixture", true, 0.8, 0);
+    const router = new ModelRouter([modelProvider]);
+    const profile = { ...DEFAULT_PROFILE, allowedProviders: [modelProvider.id] };
+    const largeConversation = { ...requirements, estimatedInputTokens: 500_000 };
+    await expect(router.route(profile, { ...largeConversation, minimumInputTokens: 127_501 })).rejects.toThrow("需要 128001，上限 128000 tokens");
+    expect((await router.route(profile, { ...largeConversation, minimumInputTokens: 127_500 })).provider).toBe(modelProvider);
+  });
+
+  it.each([-1, Infinity, NaN, 1_001])("rejects an invalid minimum input estimate %s", async minimumInputTokens => {
+    const modelProvider = provider("fixture", true, 0.8, 0);
+    await expect(new ModelRouter([modelProvider]).route({ ...DEFAULT_PROFILE, allowedProviders: [modelProvider.id] }, { ...requirements, minimumInputTokens })).rejects.toThrow("最小输入估算");
+  });
+
+  it("retains normal scoring and rejects unsupported reasoning after routing compactable history", async () => {
+    const configured = provider("configured", true, 1, 0);
+    const supporting = provider("supporting", true, 0.1, 0);
+    (await configured.listModels())[0]!.capabilities.reasoningEfforts = ["low"];
+    (await supporting.listModels())[0]!.capabilities.reasoningEfforts = ["high"];
+    const profile = { ...DEFAULT_PROFILE, allowedProviders: [configured.id, supporting.id] };
+    const router = new ModelRouter([configured, supporting]);
+    const compactable = { ...requirements, estimatedInputTokens: 500_000, minimumInputTokens: 3_000 };
+    expect((await router.route(profile, compactable)).provider).toBe(configured);
+    await expect(router.route(profile, { ...compactable, reasoningEffort: "high" as const })).rejects.toThrow("当前配置模型 configured/configured-model 不支持推理等级");
+  });
 });
 
 

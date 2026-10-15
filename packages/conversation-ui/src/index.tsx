@@ -82,6 +82,9 @@ export function VirtualConversation<T>({ items, itemKey, renderItem, header, cla
     anchorTo: "end",
     followOnAppend: true,
     scrollEndThreshold: 80,
+    // New reply bubbles change row heights. Measure on the next frame so updating
+    // scroll anchoring cannot resize the same row during ResizeObserver delivery.
+    useAnimationFrameWithResizeObserver: true,
     overscan: 3,
     initialOffset: initialPosition?.offset ?? 0,
     initialMeasurementsCache: initialPosition?.measurements ?? [],
@@ -129,7 +132,15 @@ export function VirtualConversation<T>({ items, itemKey, renderItem, header, cla
         </div>
       </div>
     </div>
-    {below && items.length > 0 && <button type="button" aria-label="回到最新消息" onClick={() => virtual.scrollToEnd()}
-      style={{ position: "absolute", bottom: 16, left: "50%", transform: "translateX(-50%)", padding: "6px 14px", borderRadius: 20, background: "var(--color-bg-elevated, var(--background, white))", border: "1px solid var(--color-border, var(--border, #ccc))", color: "inherit", cursor: "pointer" }}>↓ 回到最新消息</button>}
+    {below && items.length > 0 && <button type="button" className="conversation-jump-to-latest" aria-label="回到最新消息" onClick={() => virtual.scrollToEnd()}
+      style={{
+        position: "absolute", bottom: 16, left: "50%", transform: "translateX(-50%)",
+        width: "max-content", maxWidth: "calc(100% - 32px)", boxSizing: "border-box", padding: ".45em 1em", borderRadius: 999,
+        background: "var(--color-surface-strong, var(--card, var(--background, Canvas)))",
+        border: "1px solid var(--color-line-strong, var(--border, ButtonBorder))",
+        color: "var(--color-text, var(--foreground, CanvasText))",
+        fontFamily: "var(--ui-font, inherit)", fontSize: "var(--ui-font-size, inherit)", fontWeight: "var(--ui-font-weight, inherit)",
+        lineHeight: 1.5, whiteSpace: "normal", overflowWrap: "anywhere", cursor: "pointer",
+      }}>↓ 回到最新消息</button>}
   </div>;
 }

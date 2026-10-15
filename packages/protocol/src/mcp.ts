@@ -56,6 +56,9 @@ export interface McpConnectionStatus {
   workspacePath: string;
   state: McpConnectionState;
   toolCount: number;
+  resourceCount?: number;
+  promptCount?: number;
+  capabilities?: { tools: boolean; resources: boolean; prompts: boolean };
   error?: string;
 }
 export interface McpAuthStatus { state: "signed_out" | "pending" | "authorized" | "error"; error?: string }
@@ -65,6 +68,17 @@ export interface McpManagementSnapshot {
   auth: Record<string, McpAuthStatus>;
 }
 const projectRequest = z.object({ serverId, workspacePath: z.string().min(1) });
+const resourceRequest = projectRequest.extend({ uri: z.string().min(1).max(16_384) });
+const completionRef = z.discriminatedUnion("type", [z.object({ type: z.literal("ref/prompt"), name: z.string().min(1) }), z.object({ type: z.literal("ref/resource"), uri: z.string().min(1) })]);
+export const McpInteractionResponseSchema = z.object({
+  requestId: z.string().min(1), workspacePath: z.string().min(1), action: z.enum(["accept", "decline", "cancel"]),
+  content: z.record(z.string(), z.union([z.string(), z.number().finite(), z.boolean(), z.array(z.string())])).optional(),
+});
+export type McpInteractionResponse = z.infer<typeof McpInteractionResponseSchema>;
+export interface McpInteractionView {
+  id: string; kind: "sampling" | "elicitation"; serverId: string; serverName: string; workspacePath: string;
+  runId?: string; modelName?: string; createdAt: string; params: Record<string, unknown>;
+}
 export const McpRequestSchemas = [
   z.object({ id: z.string(), method: z.literal("mcp.list"), params: z.object({ workspacePath: z.string().min(1).optional() }).default({}) }),
   z.object({ id: z.string(), method: z.literal("mcp.save"), params: McpServerInputSchema }),
@@ -72,6 +86,16 @@ export const McpRequestSchemas = [
   z.object({ id: z.string(), method: z.literal("mcp.connect"), params: projectRequest }),
   z.object({ id: z.string(), method: z.literal("mcp.disconnect"), params: projectRequest }),
   z.object({ id: z.string(), method: z.literal("mcp.tools"), params: projectRequest }),
+  z.object({ id: z.string(), method: z.literal("mcp.resources"), params: projectRequest }),
+  z.object({ id: z.string(), method: z.literal("mcp.resource.read"), params: resourceRequest }),
+  z.object({ id: z.string(), method: z.literal("mcp.resource.subscribe"), params: resourceRequest }),
+  z.object({ id: z.string(), method: z.literal("mcp.resource.unsubscribe"), params: resourceRequest }),
+  z.object({ id: z.string(), method: z.literal("mcp.resource.updates"), params: projectRequest }),
+  z.object({ id: z.string(), method: z.literal("mcp.prompts"), params: projectRequest }),
+  z.object({ id: z.string(), method: z.literal("mcp.prompt.get"), params: projectRequest.extend({ name: z.string().min(1).max(256), arguments: z.record(z.string(), z.string()).default({}) }) }),
+  z.object({ id: z.string(), method: z.literal("mcp.completion"), params: projectRequest.extend({ ref: completionRef, argument: z.object({ name: z.string().min(1), value: z.string() }), context: z.object({ arguments: z.record(z.string(), z.string()) }).optional() }) }),
+  z.object({ id: z.string(), method: z.literal("mcp.interactions.list"), params: z.object({ workspacePath: z.string().min(1), runId: z.string().optional() }) }),
+  z.object({ id: z.string(), method: z.literal("mcp.interactions.respond"), params: McpInteractionResponseSchema }),
   z.object({ id: z.string(), method: z.literal("mcp.import"), params: z.object({ source: z.string().min(1).max(1_000_000), workspacePath: z.string().min(1) }) }),
   z.object({ id: z.string(), method: z.literal("mcp.auth.start"), params: z.object({ serverId }) }),
   z.object({ id: z.string(), method: z.literal("mcp.auth.logout"), params: z.object({ serverId }) }),
@@ -85,5 +109,7 @@ export const McpToolSnapshotSchema = z.object({
   semanticContractHash: z.string().optional(),
   description: z.string().optional(),
   inputSchema: z.record(z.string(), z.unknown()).optional(),
+  capability: z.enum(["tools", "resources", "prompts"]).optional(),
+  catalog: z.record(z.string(), z.unknown()).optional(),
 });
 export type McpToolSnapshot = z.infer<typeof McpToolSnapshotSchema>;

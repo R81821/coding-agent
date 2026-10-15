@@ -3,7 +3,7 @@ import { readFile } from "node:fs/promises";
 import { extname, resolve } from "node:path";
 import { createInterface } from "node:readline/promises";
 import { stdin, stdout } from "node:process";
-import type { AgentEvent, AttachmentRef, Profile } from "@harness/protocol";
+import type { AgentEvent, AttachmentRef, Profile, RunSteerResult } from "@harness/protocol";
 import { newId, nowIso } from "@harness/protocol";
 import { daemonRequest, PIPE_PATH } from "./client.js";
 
@@ -151,8 +151,9 @@ async function pause(runId?: string): Promise<void> {
  */
 async function steer(runId: string | undefined, text: string): Promise<void> {
   if (!runId || !text.trim()) throw new Error("steer requires a run id and a message: steer <run-id> <message>");
-  const result = await daemonRequest<{ queued: number }>({ method: "run.steer", params: { runId, text } });
-  console.log(`queued steering message ${result.queued} for ${runId}; it is delivered at the next turn boundary`);
+  const result = await daemonRequest<RunSteerResult>({ method: "run.steer", params: { runId, text } });
+  if (!result.accepted) throw new Error(`Run ${runId} is ${result.status}; the steering message was not accepted`);
+  console.log(`queued steering message ${result.queued} for ${runId}; ${result.status === "paused" ? "it is retained until this run resumes" : "it is delivered at the next turn boundary"}`);
 }
 
 async function follow(runId: string, existingRl?: ReturnType<typeof createInterface>): Promise<void> {

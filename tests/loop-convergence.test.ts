@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { isAbsolute, join, relative } from "node:path";
-import { HarnessEngine, ProjectTrustService } from "@harness/core";
+import { HarnessEngine, ProjectTrustService, runWithPiAgent } from "@harness/core";
 import { MemoryService, SkillService } from "@harness/extensions";
 import { HarnessDatabase, VaultCrypto } from "@harness/persistence";
 import { descriptor, type ModelProvider, type ProviderStreamEvent } from "@harness/providers";
@@ -37,6 +37,16 @@ async function scenario(options: {
       id: "fake", async listModels() { return [model]; }, async health() { return true; }, estimateCost() { return 0; },
       async *stream(request): AsyncIterable<ProviderStreamEvent> {
         requests.push(structuredClone(request));
+        if (request.purpose === "compaction") {
+          const part = request.messages.find(message => message.role === "user")?.content.find(part => part.type === "text");
+          const state = part?.type === "text" ? JSON.parse(part.text).state : undefined;
+          const facts = (value: unknown) => (Array.isArray(value) ? value : [value]).map(item => typeof item === "string" ? item : JSON.stringify(item));
+          yield { type: "text_delta", delta: JSON.stringify({
+            goal: state.goal, constraints: facts(state.constraints), decisions: facts(state.decisions),
+            evidence: facts(state.evidence), completed: facts(state.completed), pending: facts(state.pending),
+          }) };
+          return;
+        }
         yield* options.respond(request, requests.length);
       },
     };
@@ -65,6 +75,23 @@ async function scenario(options: {
 }
 
 describe("agent loop convergence", () => {
+  it("propagates unrelated continuation callback failures", async () => {
+    const model = descriptor({ providerId: "fake", modelId: "callback-guard", displayName: "Callback guard", maxContextTokens: 16_384 });
+    const provider: ModelProvider = {
+      id: "fake", async listModels() { return [model]; }, async health() { return true; }, estimateCost() { return 0; },
+      async *stream() { yield say("Initial work completed."); },
+    };
+    const failure = new Error("context_summary_budget_exhausted: unrelated callback failure");
+    await expect(runWithPiAgent({
+      runId: "callback-guard", sessionId: "callback-guard", provider, model,
+      initialMessages: [{ role: "user", content: [{ type: "text", trust: "user_request", text: "Inspect the supplied evidence." }] }],
+      contracts: [], resolveTool: () => undefined, externalSignal: new AbortController().signal,
+      maxOutputTokens: 100, parallelToolCalls: false,
+      beforeToolCall: async () => ({}), executeTool: async () => ({ output: null }), shouldStopAfterTurn: () => false,
+      onProviderEvent: () => {}, afterAgentRun: async () => { throw failure; },
+    })).rejects.toBe(failure);
+  });
+
   it("delivers action-specific workflow errors through the real bridge and charges the attempted call", async () => {
     const observed = await scenario({ budget: { maxTurns: 4 }, respond: (_request, turn) => turn <= 2 ? workflowPrelude(turn) : turn === 3
       ? [{ type: "tool_call", toolCall: { id: "incomplete-plan", name: "update_workflow", input: { action: "plan", context: "source read", steps: ["small fix"] } } }]

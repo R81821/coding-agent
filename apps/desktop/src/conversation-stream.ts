@@ -18,6 +18,7 @@ export type TimelineItem =
 
 export type ConversationStreamItem =
   | { kind: "text"; id: string; text: string; process: boolean; result?: ResultEvent }
+  | { kind: "user_message"; id: string; text: string; sequence: number }
   | Extract<TimelineItem, { kind: "tool_group" }>
   | Extract<TimelineItem, { kind: "event" }>;
 
@@ -31,6 +32,10 @@ export function buildConversationStream(events: AgentEvent[]): ConversationStrea
   let currentTurn: string | undefined;
   let textParts: TextPart[] = [];
   const emittedParts = new Map<ConversationStreamItem, TextPart[]>();
+  const submittedMessages = new Set(events.flatMap(event => event.type === "steering_submitted" ? [`${event.runId}\0${event.messageId}`] : []));
+  const userMessages = new Set<string>();
+  let segmentStart = 0;
+  let lastUserEventIndex = -1;
   let activeGroup: Extract<TimelineItem, { kind: "tool_group" }> | undefined;
   const pushText = (value: string, process: boolean, parts: TextPart[] = [], result?: ResultEvent): boolean => {
     if (!value.trim() || isHiddenSystemMessage(value)) return false;
@@ -53,7 +58,7 @@ export function buildConversationStream(events: AgentEvent[]): ConversationStrea
   const removeTurnText = (turn: string) => {
     // A report may already have been flushed by an activity event. Remove only its exact
     // source turn, leaving every other turn and the stored events intact.
-    for (let index = stream.length - 1; index >= 0; index--) {
+    for (let index = stream.length - 1; index >= segmentStart; index--) {
       const item = stream[index];
       if (item?.kind !== "text") continue;
       const parts = emittedParts.get(item);
@@ -72,9 +77,23 @@ export function buildConversationStream(events: AgentEvent[]): ConversationStrea
     }
   };
   const turnText = (turn: string | undefined): string => turn === undefined ? "" :
-    [...emittedParts.values(), textParts].flatMap(parts => parts.filter(part => part.turn === turn)).map(part => part.text).join("");
-  for (const event of events) {
-    if (event.type === "text_delta") {
+    [...stream.slice(segmentStart).map(item => emittedParts.get(item) ?? []), textParts].flatMap(parts => parts.filter(part => part.turn === turn)).map(part => part.text).join("");
+  for (const [eventIndex, event] of events.entries()) {
+    if (event.type === "steering_submitted" || event.type === "steering_delivered") {
+      const messageId = event.messageId ?? event.id;
+      const key = `${event.runId}\0${messageId}`;
+      // Delivery confirms model receipt. The earlier submission owns the visible bubble.
+      if (event.type === "steering_delivered" && event.messageId && submittedMessages.has(key)) continue;
+      if (userMessages.has(key)) continue;
+      userMessages.add(key);
+      flushText(true);
+      activeGroup = undefined;
+      currentTurn = undefined;
+      stream.push({ kind: "user_message", id: `user-message-${event.runId}-${messageId}`, text: event.text, sequence: event.sequence });
+      // A later authoritative report must never replace assistant text across a human reply.
+      segmentStart = stream.length;
+      lastUserEventIndex = eventIndex;
+    } else if (event.type === "text_delta") {
       if (pendingTurnStart && event.delta.trim()) {
         if (text && !/\s$/.test(text) && !/^\s/.test(event.delta)) {
           text += " ";
@@ -148,7 +167,7 @@ export function buildConversationStream(events: AgentEvent[]): ConversationStrea
       }
     }
   }
-  flushText(!finalTextEvent(events));
+  flushText(!finalTextEvent(events.slice(lastUserEventIndex + 1)));
   return stream;
 }
 

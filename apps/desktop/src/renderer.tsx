@@ -14,13 +14,17 @@ import type {
   DaemonRequestInput,
   ApprovalRequest,
   MemoryRecord,
+  ModelDescriptor,
+  ReasoningEffort,
   PlanSpec,
   PluginRecord,
   Profile,
   ProjectRecord,
   RunCheckpoint,
   RunSpec,
+  RunWithdrawal,
   RunStatus,
+  RunSteerResult,
   SessionView,
   SessionDetail,
   RunEventPage,
@@ -31,6 +35,7 @@ import type {
 } from "@harness/protocol";
 import { SessionViewCache, isDeferredOutput, refreshSessionView, mergeViewEvents, newId, nowIso } from "@harness/protocol";
 import type { DesktopAttachment } from "./preload.js";
+import { restoreWithdrawnDraft, type ComposerDraft } from "./withdrawal-draft.js";
 import { BuiBadge } from "./ui/badge.js";
 import { BuiButton } from "./ui/button.js";
 import { BuiLoadingState } from "./ui/loading-state.js";
@@ -42,11 +47,12 @@ import { ConversationProcessSummary, conversationDurationMs, terminalConversatio
 import { shouldExpandToolGroup, shouldPreviewProcessText, shouldShowHistoryLoading, summarizeActivityMessage } from "./conversation-layout.js";
 import { buildConversationStream, type ConversationStreamItem, type ToolTimelineItem } from "./conversation-stream.js";
 import { WorkflowProgress } from "./components/WorkflowProgress.js";
-import { PromptCacheStats } from "./components/PromptCacheStats.js";
+import { SessionCacheStats } from "./components/SessionCacheStats.js";
 import { RunStopCard } from "./components/RunStopCard.js";
 import { FinalReportStatus } from "./components/FinalReportStatus.js";
 import { McpView } from "./components/McpView.js";
-import { groupSessionsByProject, isLiveRun, latestSessionRun, mergeRunEvents, mergeSessionPages, runStatusLabel, createSessionTurnSelector, workspaceKey, type SessionTurn } from "./run-history.js";
+import { McpInteractions } from "./components/McpInteractions.js";
+import { groupSessionsByProject, isLiveRun, latestConversationRun, eligibleWithdrawalRun, mergeRunEvents, mergeSessionPages, runStatusLabel, createSessionTurnSelector, workspaceKey, type SessionTurn } from "./run-history.js";
 import {
   Activity,
   Bug,
@@ -71,6 +77,7 @@ import {
   Monitor,
   PanelLeft,
   Pencil,
+  FilePlus,
   Plus,
   Puzzle,
   Settings,
@@ -83,6 +90,7 @@ import {
   TriangleAlert,
   Telescope,
   Trash2,
+  Undo2,
   UserCog,
   X,
 } from "lucide-react";
@@ -111,6 +119,8 @@ import { SkillsView, SkillPicker, type DesktopSkill } from "./components/SkillsV
 import { BrowserPanel } from "./components/BrowserPanel.js";
 import { ProfileGenerationEditor } from "./components/ProfileGenerationEditor.js";
 import { ProfileVerificationEditor } from "./components/ProfileVerificationEditor.js";
+import { ModelReasoningPicker } from "./components/ModelReasoningPicker.js";
+import { Unlock } from "./components/Unlock.js";
 
 type Tab =
   | "chat"
@@ -189,12 +199,26 @@ function App() {
   const [plugins, setPlugins] = useState<PluginRecord[]>([]);
   const [prompt, setPrompt] = useState("");
   const [taskMode, setTaskMode] = useState<"auto" | "analysis" | "change">("auto");
+  const [currentModel, setCurrentModel] = useState<ModelDescriptor>();
+  const [modelLoading, setModelLoading] = useState(false);
+  const [modelCatalogError, setModelCatalogError] = useState("");
+  const [modelError, setModelError] = useState("");
+  const [modelSaving, setModelSaving] = useState(false);
+  const modelMutation = useRef(false);
+  const [modelCatalogVersion, setModelCatalogVersion] = useState(0);
   const [attachments, setAttachments] = useState<DesktopAttachment[]>([]);
   const [events, setEvents] = useState<AgentEvent[]>([]);
   const [activeRun, setActiveRun] = useState<string>();
   const [pausedRun, setPausedRun] = useState<string>();
   const [activeSessionId, setActiveSessionId] = useState<string>();
+  const [withdrawalSessionId, setWithdrawalSessionId] = useState<string>();
+  const pendingWithdrawal = useRef<{ sessionId: string; runId: string } | undefined>(undefined);
+  const pendingSteering = useRef(new Map<string, { runId: string; text: string }>());
+  const [steeringSessions, setSteeringSessions] = useState<Set<string>>(() => new Set());
+  const withdrawing = Boolean(activeSessionId && withdrawalSessionId === activeSessionId);
   const [sessionDetail, setSessionDetail] = useState<SessionView>();
+  const sessionView = useRef(sessionDetail);
+  sessionView.current = sessionDetail;
   const [sessionPage, setSessionPage] = useState<SessionPage>({ items: [], hasMore: false });
   const sessionPageRef = useRef<SessionPage>({ items: [], hasMore: false });
   const [projects, setProjects] = useState<ProjectRecord[]>([]);
@@ -202,12 +226,15 @@ function App() {
   const viewVersion = useRef(0);
   const sessionCreation = useRef(0);
   const viewCache = useRef(new SessionViewCache());
-  const drafts = useRef(new Map<string, { prompt: string; attachments: DesktopAttachment[]; taskMode: "auto" | "analysis" | "change" }>());
+  const drafts = useRef(new Map<string, ComposerDraft>());
+  const submittedDrafts = useRef(new Map<string, ComposerDraft>());
+  const composerDraft = useRef({ sessionId: activeSessionId, draft: { prompt, attachments, taskMode } });
+  composerDraft.current = { sessionId: activeSessionId, draft: { prompt, attachments, taskMode } };
   const scrollPositions = useRef(new ConversationPositions());
   const [switching, setSwitching] = useState(false);
-  const content = useSessionContent(activeSessionId, sessionDetail, setSessionDetail, requestSessionContent, unlocked && !switching);
+  const content = useSessionContent(activeSessionId, sessionDetail, setSessionDetail, requestSessionContent, unlocked && !switching && !withdrawing);
   useEffect(() => {
-    if (!unlocked) { viewCache.current.clear(); drafts.current.clear(); scrollPositions.current.clear(); }
+    if (!unlocked) { viewCache.current.clear(); drafts.current.clear(); submittedDrafts.current.clear(); scrollPositions.current.clear(); }
   }, [unlocked]);
   function saveDraft() {
     if (sessionDetail) viewCache.current.set(sessionDetail);
@@ -237,6 +264,22 @@ function App() {
   }>();
 
   const profile = profiles.find((item) => item.id === profileId);
+  const reasoningEffort = sessionDetail?.session.reasoningEffort ?? null;
+  useEffect(() => { setModelError(""); }, [activeSessionId, profileId]);
+  useEffect(() => {
+    if (!unlocked || !profiles.some(item => item.id === profileId)) { setCurrentModel(undefined); return; }
+    let current = true;
+    setCurrentModel(undefined); setModelLoading(true); setModelCatalogError("");
+    void window.harness.request<{ model: ModelDescriptor | null; error?: string }>({ method: "model.current", params: { profileId, needsVision: attachments.length > 0 } })
+      .then(result => {
+        if (!current) return;
+        setCurrentModel(result.model ?? undefined);
+        setModelCatalogError(result.error ?? "");
+      })
+      .catch(error => { if (current) setModelCatalogError(error instanceof Error ? error.message : String(error)); })
+      .finally(() => { if (current) setModelLoading(false); });
+    return () => { current = false; };
+  }, [unlocked, profileId, profiles, modelCatalogVersion, attachments.length]);
   const [selectTurns] = useState(createSessionTurnSelector);
   const conversationTurns = useMemo(() => {
     const localErrors = events.filter(event => event.sequence === Number.MAX_SAFE_INTEGER);
@@ -251,7 +294,32 @@ function App() {
   // preview plus whatever the live follow merged, so take the hydrated turn instead.
   const activeRunEvents = conversationTurns.find((turn) => turn.runId === activeRun)?.events ?? events;
   const runParked = activeRunStatus === "paused" || activeRunStatus === "waiting_approval";
-  const canPauseRun = Boolean(activeRun) && !runParked && Boolean(activeRunStatus) && isLiveRun(activeRunStatus!);
+  const composerEffort = (busy || runParked || pausedRun) && activeRun
+    ? sessionDetail?.runs.find(run => run.spec.id === activeRun)?.spec.reasoningEffort ?? null
+    : reasoningEffort;
+  const canPauseRun = Boolean(activeRun) && Boolean(activeRunStatus) && isLiveRun(activeRunStatus!);
+  const withdrawableRun = eligibleWithdrawalRun(sessionDetail);
+  useEffect(() => {
+    if (switching || withdrawing || busy || sessionDetail?.session.id !== activeSessionId) return;
+    const selected = sessionDetail?.runs.find(run => run.spec.id === activeRun);
+    // The first history page may consist entirely of delegated runs. Adopt its parent once
+    // hydration reaches it, while retaining a newly submitted or already selected main run.
+    if (activeRun && (!selected || selected.spec.parentRunId === undefined)) return;
+    const latest = sessionDetail && latestConversationRun(sessionDetail.runs);
+    if (!latest) return;
+    setActiveRun(latest.spec.id);
+    setEvents(latest.events);
+    setPausedRun(latest.status === "paused" ? latest.spec.id : undefined);
+    lastSequence.current = latest.view?.lastSequence ?? latest.events.at(-1)?.sequence ?? -1;
+    if (isLiveRun(latest.status)) {
+      const viewToken = viewVersion.current;
+      setBusy(true);
+      void pollRun(latest.spec.id, lastSequence.current, viewToken)
+        .then(status => { if (viewToken === viewVersion.current && status === "paused") setPausedRun(latest.spec.id); })
+        .catch(error => { if (viewToken === viewVersion.current) setHistoryError(`无法继续读取运行记录：${error instanceof Error ? error.message : String(error)}`); })
+        .finally(() => { if (viewToken === viewVersion.current) { setBusy(false); void refreshHistory(); } });
+    }
+  }, [activeSessionId, sessionDetail, activeRun, switching, withdrawing, busy]);
   const historyGroups = useMemo(() => groupSessionsByProject(sessionPage.items, projects, workspace), [sessionPage.items, projects, workspace]);
   const currentProjectKey = workspace ? workspaceKey(workspace) : "";
 
@@ -368,48 +436,62 @@ function App() {
     } else setUnlockError(result.error ?? "无法解锁");
   }
 
+  /**
+   * Offer the built-in project conventions when the repository has none, then run the trust dialog.
+   * Trust stays a separate, explicit confirmation: the file is written first and reviewed after.
+   */
+  async function reviewProjectInstructions(workspacePath: string, token: number) {
+    type Inspection = { files: Array<{ path: string; sha256: string; content: string }>; trusted: boolean; changed: boolean };
+    const inspect = () => window.harness.request<Inspection>({ method: "project.inspect", params: { workspacePath } });
+    let inspection = await inspect();
+    if (token !== viewVersion.current) return;
+    if (inspection.files.length === 0) {
+      if (!window.confirm("该仓库还没有项目约束文件 (AGENTS.md)。用 Harness 内置约束创建一份吗？\n\n创建后可以先看内容，再决定是否信任。")) return;
+      try {
+        await window.harness.request({ method: "project.scaffold", params: { workspacePath } });
+      } catch (error) {
+        setHistoryError(`无法创建 AGENTS.md：${error instanceof Error ? error.message : String(error)}`);
+        return;
+      }
+      if (token !== viewVersion.current) return;
+      inspection = await inspect();
+    }
+    if (!inspection.files.length || (inspection.trusted && !inspection.changed)) return;
+    if (token !== viewVersion.current) return;
+    const preview = inspection.files
+      .map(
+        (file) =>
+          `${file.path} (${file.sha256.slice(0, 12)}…)\n${file.content.slice(0, 600)}`,
+      )
+      .join("\n\n");
+    if (
+      window.confirm(
+        `该仓库包含项目指令。只有信任后它们才会获得指令权限；内容变化时会再次确认。\n\n${preview}\n\n信任这些文件吗？`,
+      )
+    ) {
+      await window.harness.request({
+        method: "project.trust",
+        params: {
+          workspacePath,
+          files: inspection.files.map(({ path, sha256 }) => ({
+            path,
+            sha256,
+          })),
+        },
+      });
+    }
+  }
+
   async function chooseWorkspace() {
     const token = viewVersion.current;
     const selected = await window.harness.chooseWorkspace();
     if (!selected || token !== viewVersion.current) return;
-    const inspection = await window.harness.request<{
-      files: Array<{ path: string; sha256: string; content: string }>;
-      trusted: boolean;
-      changed: boolean;
-    }>({ method: "project.inspect", params: { workspacePath: selected } });
-    if (token !== viewVersion.current) return;
-    if (
-      inspection.files.length > 0 &&
-      (!inspection.trusted || inspection.changed)
-    ) {
-      const preview = inspection.files
-        .map(
-          (file) =>
-            `${file.path} (${file.sha256.slice(0, 12)}…)\n${file.content.slice(0, 600)}`,
-        )
-        .join("\n\n");
-      if (
-        window.confirm(
-          `该仓库包含项目指令。只有信任后它们才会获得指令权限；内容变化时会再次确认。\n\n${preview}\n\n信任这些文件吗？`,
-        )
-      ) {
-        await window.harness.request({
-          method: "project.trust",
-          params: {
-            workspacePath: selected,
-            files: inspection.files.map(({ path, sha256 }) => ({
-              path,
-              sha256,
-            })),
-          },
-        });
-      }
-    }
+    await reviewProjectInstructions(selected, token);
     if (token !== viewVersion.current) return;
     await createSessionForWorkspace(selected);
   }
 
-  async function createSessionForWorkspace(workspacePath: string) {
+  async function createSessionForWorkspace(workspacePath: string, initialPrompt = "") {
     if (!profile) return;
     saveDraft();
     const token = viewVersion.current;
@@ -451,15 +533,27 @@ function App() {
     setActiveRun(undefined);
     lastSequence.current = -1;
     setEvents([]);
-    setPrompt("");
+    setPrompt(initialPrompt);
     setAttachments([]);
     setApprovalPrompt(undefined);
     localStorage.setItem("harness.activeSessionId", session.id);
     await refreshHistory();
+    return session;
+  }
+
+  async function applyMcpContent(text: string) {
+    if (!text.trim() || switching || withdrawing) return;
+    if (!activeSessionId) {
+      if (!workspace || !profile) { setHistoryError("请先选择项目和 Profile"); return; }
+      await createSessionForWorkspace(workspace, text);
+      return;
+    }
+    setPrompt(current => current.trim() ? current + "\n\n" + text : text);
+    setTab("chat");
   }
 
   async function chooseImages() {
-    if (!profile) return;
+    if (!profile || pendingWithdrawal.current?.sessionId === activeSessionId) return;
     const token = viewVersion.current;
     const selected = await window.harness.chooseImages(
       profile.allowedProviders,
@@ -473,7 +567,7 @@ function App() {
   ) {
     const token = viewVersion.current;
     if (
-      !profile ||
+      !profile || pendingWithdrawal.current?.sessionId === activeSessionId ||
       !["image/png", "image/jpeg", "image/gif", "image/webp"].includes(
         file.type,
       )
@@ -490,26 +584,30 @@ function App() {
   }
 
   async function send() {
-    if (skillSaving || switching) return;
+    if (skillSaving || modelMutation.current || switching || pendingWithdrawal.current?.sessionId === activeSessionId) return;
+    if (activeSessionId && pendingSteering.current.has(activeSessionId)) return;
     if (!prompt.trim()) return;
-    // While a run is on screen the composer is a steering channel, not a second task. That includes a
-    // parked run: the note waits in its queue and is read when it continues, instead of starting a
-    // second task that would have to queue behind the first.
+    // A paused task accepts the new user turn and resumes with it. Keep the same transcript,
+    // workspace baseline and permissions throughout the conversation.
     if (activeRun && (isLiveRun(activeRunStatus ?? "queued") || activeRunStatus === "paused")) {
-      const text = prompt;
-      setPrompt("");
-      await steerRun(text);
+      await steerRun(prompt);
       return;
     }
     if (!profile || !workspace || !activeSessionId || !sessionDetail || busy) return;
+    if (reasoningEffort && (modelLoading || !currentModel?.capabilities.reasoningEfforts?.includes(reasoningEffort))) {
+      setModelError(modelLoading ? "正在读取模型设置，请稍后发送" : "设置中的模型不支持此推理强度，请选择可用档位或更改模型设置");
+      return;
+    }
     const viewToken = ++viewVersion.current;
     const request = prompt.trim();
+    const submitted = { prompt, attachments, taskMode };
     const runId = newId("run");
     const runSpec: RunSpec = {
       id: runId,
       sessionId: activeSessionId,
       request,
       taskMode,
+      reasoningEffort,
       workspacePath: workspace,
       profileId: profile.id,
       attachments: attachments.map((item) => item.attachment),
@@ -528,6 +626,8 @@ function App() {
         method: "run.start",
         params: runSpec,
       });
+      submittedDrafts.current.set(runId, submitted);
+      while (submittedDrafts.current.size > 6) submittedDrafts.current.delete(submittedDrafts.current.keys().next().value!);
       void refreshHistory();
       const submittedDraft = drafts.current.get(activeSessionId);
       if (submittedDraft?.prompt.trim() === request) drafts.current.delete(activeSessionId);
@@ -631,14 +731,14 @@ function App() {
     setPrompt(draft?.prompt ?? ""); setAttachments(draft?.attachments ?? []); setTaskMode(draft?.taskMode ?? "auto");
     const cached = viewCache.current.get(item.id);
     setSessionDetail(cached);
-    const cachedRun = cached && latestSessionRun(cached.runs);
+    const cachedRun = cached && latestConversationRun(cached.runs);
     setActiveRun(cachedRun?.spec.id); setEvents(cachedRun?.events ?? []);
     localStorage.setItem("harness.activeSessionId", item.id);
     try {
       const stored = await window.harness.request<SessionView | undefined>({ method: "session.view", params: { limit: 20, sessionId: item.id } });
       if (viewToken !== viewVersion.current) return;
       if (!stored) throw new Error("该会话不存在或已被删除");
-      const latest = latestSessionRun(stored.runs);
+      const latest = latestConversationRun(stored.runs);
       setSessionDetail(refreshSessionView(cached, stored)); setActiveRun(latest?.spec.id); setEvents(latest?.events ?? []);
       setPausedRun(latest?.status === "paused" ? latest.spec.id : undefined);
       lastSequence.current = latest?.view?.lastSequence ?? latest?.events.at(-1)?.sequence ?? -1;
@@ -667,7 +767,7 @@ function App() {
 
   /** Ask the active run to stop at its next turn boundary. It stays resumable, unlike cancel. */
   async function pauseRun() {
-    if (!activeRun) return;
+    if (!activeRun || pendingWithdrawal.current?.sessionId === activeSessionId) return;
     try {
       const result = await window.harness.request<{ pausing: boolean }>({ method: "run.pause", params: { runId: activeRun } });
       if (!result.pausing) setPausedRun(undefined);
@@ -675,6 +775,7 @@ function App() {
   }
 
   async function continueTask(runId: string, note: string) {
+    if (pendingWithdrawal.current?.sessionId === activeSessionId) return;
     const viewToken = ++viewVersion.current;
     setBusy(true);
     try {
@@ -696,6 +797,8 @@ function App() {
 
   /** Continue a paused run from its checkpoint, then follow the events that follow. */
   async function resumeRun() {
+    if (pendingWithdrawal.current?.sessionId === activeSessionId) return;
+    if (activeSessionId && pendingSteering.current.has(activeSessionId)) return;
     const runId = pausedRun ?? activeRun;
     if (!runId) return;
     const viewToken = ++viewVersion.current;
@@ -725,22 +828,157 @@ function App() {
     }
   }
 
+  async function withdrawRun(messageId?: string) {
+    const eligible = eligibleWithdrawalRun(sessionDetail);
+    if (!activeSessionId || !eligible || pendingWithdrawal.current || pendingSteering.current.has(activeSessionId) || switching || busy || modelMutation.current || skillSaving) return;
+    const sessionId = activeSessionId;
+    const operation = { sessionId, runId: eligible.spec.id };
+    const initialDraft = composerDraft.current.draft;
+    pendingWithdrawal.current = operation;
+    setWithdrawalSessionId(sessionId);
+    setHistoryError("");
+    try {
+      const result = await window.harness.request<RunWithdrawal>({ method: "run.withdraw", params: { runId: operation.runId, ...(messageId ? { messageId } : {}) } });
+      const removed = new Set(result.withdrawnRunIds);
+      const currentDraft = composerDraft.current.sessionId === sessionId ? composerDraft.current.draft : drafts.current.get(sessionId) ?? initialDraft;
+      const restored = restoreWithdrawnDraft(result.messageId ? { ...result.run, request: result.text ?? "", attachments: [], taskMode: currentDraft.taskMode } : result.run,
+        currentDraft, result.messageId ? undefined : submittedDrafts.current.get(operation.runId));
+      drafts.current.set(sessionId, restored);
+      while (drafts.current.size > 6) drafts.current.delete(drafts.current.keys().next().value!);
+      for (const id of removed) submittedDrafts.current.delete(id);
+      const cached = viewCache.current.get(sessionId);
+      const applyWithdrawal = (view: SessionView) => removeWithdrawnMessage(removeWithdrawnRounds(view, removed), operation.runId, result.messageId);
+      if (cached) viewCache.current.set(applyWithdrawal(cached));
+      if (composerDraft.current.sessionId === sessionId) {
+        // Ignore a follow/page response that was requested before the withdrawal committed.
+        viewVersion.current++;
+        setBusy(false);
+        setSwitching(false);
+        setPausedRun(undefined);
+        setApprovalPrompt(undefined);
+        setPrompt(restored.prompt);
+        setAttachments(restored.attachments);
+        setTaskMode(restored.taskMode);
+        setSessionDetail(current => {
+          if (current?.session.id !== sessionId) return current;
+          return applyWithdrawal(current);
+        });
+        const source = sessionView.current?.session.id === sessionId ? sessionView.current : cached;
+        const visible = source && applyWithdrawal(source);
+        const previous = visible && latestConversationRun(visible.runs.filter(run => !removed.has(run.spec.id)));
+        setActiveRun(previous?.spec.id);
+        setPausedRun(previous?.status === "paused" ? previous.spec.id : undefined);
+        setEvents(previous?.events ?? []);
+        lastSequence.current = previous?.view?.lastSequence ?? previous?.events.at(-1)?.sequence ?? -1;
+      }
+      // Read canonical spending records as well: tokens already consumed remain in the totals.
+      try {
+        const stored = await window.harness.request<SessionView | undefined>({ method: "session.view", params: { sessionId, limit: 20 } });
+        if (stored) {
+          const cachedView = viewCache.current.get(sessionId);
+          viewCache.current.set(refreshSessionView(cachedView, stored));
+          setSessionDetail(current => current?.session.id === sessionId ? refreshSessionView(applyWithdrawal(current), stored) : current);
+          if (composerDraft.current.sessionId === sessionId) {
+            const latest = latestConversationRun(stored.runs);
+            setEvents(latest?.events ?? []);
+            lastSequence.current = latest?.view?.lastSequence ?? latest?.events.at(-1)?.sequence ?? -1;
+          }
+        }
+      } catch (error) {
+        if (composerDraft.current.sessionId === sessionId) setHistoryError(`对话已撤回，刷新历史失败：${error instanceof Error ? error.message : String(error)}`);
+      }
+      void refreshHistory();
+    } catch (error) {
+      if (composerDraft.current.sessionId === sessionId) setHistoryError(`无法撤回：${error instanceof Error ? error.message : String(error)}`);
+    } finally {
+      if (pendingWithdrawal.current === operation) {
+        pendingWithdrawal.current = undefined;
+        setWithdrawalSessionId(undefined);
+      }
+    }
+  }
+
   /**
-   * Send a correction to the run that is already working. It is read at the next turn boundary, so
-   * the run keeps its transcript, permissions and budget instead of starting over.
+   * Add a user turn to the current conversation, automatically resuming a paused task with it.
    */
   async function steerRun(text: string) {
     const value = text.trim();
-    if (!activeRun || !value) return;
+    const runId = activeRun, sessionId = activeSessionId;
+    let viewToken = viewVersion.current;
+    const wasPaused = activeRunStatus === "paused" || pausedRun === runId;
+    let accepted = false, following = false;
+    if (!runId || !sessionId || !value || pendingWithdrawal.current?.sessionId === sessionId || pendingSteering.current.has(sessionId)) return;
+    const operation = { runId, text };
+    pendingSteering.current.set(sessionId, operation);
+    setSteeringSessions(current => new Set(current).add(sessionId));
+    const sameView = () => viewToken === viewVersion.current && composerDraft.current.sessionId === sessionId;
+    const updateStatus = (status: RunStatus) => {
+      setSessionDetail(current => current?.session.id === sessionId ? {
+        ...current, runs: current.runs.map(run => run.spec.id === runId ? { ...run, status } : run),
+      } : current);
+      setSessionPage(current => {
+        const next = { ...current, items: current.items.map(session => session.id === sessionId && session.latestRunId === runId ? { ...session, latestStatus: status } : session) };
+        sessionPageRef.current = next;
+        return next;
+      });
+      if (status !== "paused") setPausedRun(current => current === runId ? undefined : current);
+    };
     try {
-      await window.harness.request({ method: "run.steer", params: { runId: activeRun, text: value } });
-    } catch (error) { setHistoryError(`无法发送补充说明：${error instanceof Error ? error.message : String(error)}`); }
+      const result = await window.harness.request<RunSteerResult>({ method: "run.steer", params: { runId, text: value, resumePaused: true } });
+      if (result.accepted) {
+        accepted = true;
+        if (sameView()) setPrompt(current => current === text ? "" : current);
+        else if (composerDraft.current.sessionId !== sessionId) {
+          const draft = drafts.current.get(sessionId);
+          if (draft?.prompt === text) drafts.current.set(sessionId, { ...draft, prompt: "" });
+        }
+        if (sameView()) {
+          updateStatus(result.status);
+          if (result.resumeError) setHistoryError(`消息已加入对话，自动继续失败：${result.resumeError}。可以点击继续重试。`);
+          else if (result.resumed || wasPaused && isLiveRun(result.status)) {
+            // Invalidate the old follow attempt, which ended at the previous pause receipt.
+            viewToken = ++viewVersion.current;
+            following = true;
+            setHistoryError("");
+            setBusy(true);
+            setPausedRun(undefined);
+            const status = await pollRun(runId, lastSequence.current, viewToken);
+            if (sameView() && status === "paused") setPausedRun(runId);
+          }
+        }
+      } else if (sameView()) {
+        setHistoryError(`本轮${runStatusLabel[result.status]}，补充说明已保留在输入框。`);
+        updateStatus(result.status);
+      }
+    } catch (error) {
+      if (sameView()) setHistoryError(`${accepted ? "消息已保存，读取后续执行失败" : "无法发送消息，输入已保留"}：${error instanceof Error ? error.message : String(error)}`);
+    } finally {
+      if (sameView()) {
+        try {
+          const stored = await window.harness.request<SessionView | undefined>({ method: "session.view", params: { sessionId, limit: 20 } });
+          if (stored && sameView()) {
+            setSessionDetail(current => current?.session.id === sessionId ? refreshSessionView(current, stored) : current);
+            const status = stored.runs.find(run => run.spec.id === runId)?.status;
+            if (status) updateStatus(status);
+          }
+        } catch { /* Keep the last displayed state and the draft when refreshing fails. */ }
+      }
+      if (pendingSteering.current.get(sessionId) === operation) {
+        pendingSteering.current.delete(sessionId);
+        setSteeringSessions(current => { const next = new Set(current); next.delete(sessionId); return next; });
+      }
+      if (following && sameView()) setBusy(false);
+    }
   }
 
   async function pollRun(runId: string, startSequence = -1, viewToken = viewVersion.current): Promise<RunStatus | undefined> {
     let sequence = startSequence;
     let finished = false;
     let lastStatus: RunStatus | undefined;
+    const clearRunApprovalPrompt = () => setApprovalPrompt(current => {
+      const promptRunId = current?.kind === "tool" ? current.approval.runId : current?.plan.runId;
+      return promptRunId === runId ? undefined : current;
+    });
     while (!finished && viewToken === viewVersion.current) {
       const page = await window.harness.request<RunEventPage>({ method: "run.eventPage", params: { limit: 100, runId, afterSequence: sequence } });
       if (viewToken !== viewVersion.current) return;
@@ -760,8 +998,9 @@ function App() {
           setApprovals(nextApprovals);
           const pending = nextApprovals.find((approval) => approval.runId === runId && approval.status === "pending");
           if (pending) setApprovalPrompt({ kind: "tool", approval: pending });
+          else clearRunApprovalPrompt();
         }
-      }
+      } else clearRunApprovalPrompt();
       if (!finished && !page.hasMore) await delay(500);
     }
     return lastStatus;
@@ -824,7 +1063,7 @@ function App() {
     return matches.length === 1 ? matches[0]!.key : id;
   });
   async function changeSkills(keys: string[]) {
-    if (!activeSessionId || skillSaving) return;
+    if (!activeSessionId || skillSaving || pendingWithdrawal.current?.sessionId === activeSessionId) return;
     const sessionId = activeSessionId;
     const token = viewVersion.current;
     setSkillSaving(true); setSkillError("");
@@ -836,7 +1075,25 @@ function App() {
     finally { setSkillSaving(false); }
   }
 
+  async function changeReasoning(effort: ReasoningEffort | null) {
+    if (!activeSessionId || modelMutation.current || busy || switching || runParked || pausedRun || pendingWithdrawal.current?.sessionId === activeSessionId) return;
+    const sessionId = activeSessionId;
+    const token = viewVersion.current;
+    modelMutation.current = true;
+    setModelSaving(true); setModelError("");
+    try {
+      const session = await window.harness.request<SessionRecord>({ method: "session.reasoning", params: { sessionId, profileId, reasoningEffort: effort, needsVision: attachments.length > 0 } });
+      viewCache.current.delete(sessionId);
+      if (token === viewVersion.current) setSessionDetail(current => current?.session.id === sessionId ? { ...current, session } : current);
+    } catch (error) {
+      if (token === viewVersion.current) setModelError(error instanceof Error ? error.message : String(error));
+    } finally {
+      modelMutation.current = false; setModelSaving(false);
+    }
+  }
+
   async function startCapture() {
+    if (pendingWithdrawal.current?.sessionId === activeSessionId) return;
     setCapture(await window.harness.captureScreen());
   }
 
@@ -993,6 +1250,8 @@ function App() {
                     {isCurrent && <span className="project-folder-tag">当前</span>}
                   </button>
                   <button type="button" className="row-icon-action project-new-session" aria-label={`在 ${basename(group.project.workspacePath)} 中新建会话`} title="新建会话" onClick={(event) => { event.stopPropagation(); void createSessionForWorkspace(group.project.workspacePath); }}><Plus size={13} /></button>
+                  {/* The folder picker only runs when a project is added, so projects already in the list need their own entry to this. */}
+                  <button type="button" className="row-icon-action project-instructions" aria-label={`为 ${basename(group.project.workspacePath)} 创建或查看项目约束`} title="项目约束 (AGENTS.md)" onClick={(event) => { event.stopPropagation(); void reviewProjectInstructions(group.project.workspacePath, viewVersion.current); }}><FilePlus size={13} /></button>
                   <button type="button" className="row-icon-action project-delete" aria-label={`删除项目 ${basename(group.project.workspacePath)}`} title="从 Harness 删除项目" disabled={busy} onClick={(event) => { event.stopPropagation(); void deleteProject(group.project); }}><Trash2 size={13} /></button>
                 </div>
                 {expanded && <div className="project-group-items">
@@ -1022,7 +1281,7 @@ function App() {
         </details>
         </div>
         <div className="sidebar-foot">
-          <BuiButton variant="ghost" onClick={() => setTab("settings")} className="sidebar-settings"><Settings size={17} /><span>设置</span><small>v1.4.5</small></BuiButton>
+          <BuiButton variant="ghost" onClick={() => setTab("settings")} className="sidebar-settings"><Settings size={17} /><span>设置</span><small>v1.4.51</small></BuiButton>
           <div className="sidebar-connection"><span className="status-dot" />本地运行时已解锁</div>
         </div>
       </aside>
@@ -1045,6 +1304,7 @@ function App() {
             <select
               aria-label="选择 Profile"
               value={profileId}
+              disabled={modelSaving || busy || runParked || Boolean(pausedRun) || withdrawing}
               onChange={(event) => setProfileId(event.target.value)}
             >
               {profiles.map((item) => (
@@ -1066,6 +1326,14 @@ function App() {
               onSkillsChange={changeSkills}
               skillSaving={skillSaving}
               skillError={skillError}
+              currentModel={currentModel}
+              reasoningEffort={composerEffort}
+              onReasoningChange={changeReasoning}
+              modelLoading={modelLoading}
+              modelSaving={modelSaving}
+              modelError={modelError}
+              modelCatalogError={modelCatalogError}
+              onModelsRetry={() => setModelCatalogVersion(value => value + 1)}
               {...(profile ? { profile } : {})}
               prompt={prompt}
               setPrompt={setPrompt}
@@ -1076,19 +1344,24 @@ function App() {
               events={events}
               turns={conversationTurns}
               hasSession={Boolean(activeSessionId)}
-              busy={busy || switching}
+              busy={busy || switching || Boolean(activeSessionId && steeringSessions.has(activeSessionId))}
+              steering={Boolean(activeSessionId && steeringSessions.has(activeSessionId))}
               switching={switching}
               hasOlder={Boolean(sessionDetail?.hasMore)}
+              {...(sessionDetail?.withdrawnEvents ? { withdrawnEvents: sessionDetail.withdrawnEvents } : {})}
               contentError={content.error}
               onContentRetry={content.retry}
               onVisibleItems={content.prioritize}
               initialScroll={scrollPositions.current.get(activeSessionId ?? "")}
               onScrollPosition={position => { if (activeSessionId) scrollPositions.current.set(activeSessionId, position); }}
               {...(activeRun ? { runId: activeRun } : {})}
-              paused={Boolean(pausedRun) || runParked}
+              paused={Boolean(pausedRun) || activeRunStatus === "paused"}
               canPause={canPauseRun}
               onPause={pauseRun}
               onResume={resumeRun}
+              {...(withdrawableRun && (!withdrawalSessionId || withdrawing) ? { withdrawableRunId: withdrawableRun.spec.id } : {})}
+              withdrawing={withdrawing}
+              onWithdraw={withdrawRun}
               onContinue={continueFromRow}
               onSend={send}
               onChooseImages={chooseImages}
@@ -1112,7 +1385,7 @@ function App() {
             <MemoryManager memories={memories} decide={decideMemory} refresh={refresh} workspace={workspace} {...(profile ? { profile } : {})} />
           )}
           {skillsVisited.current && <div hidden={tab !== "skills"}><SkillsView skills={skills} profileId={profileId} refresh={refresh} decide={decideSkill} /></div>}
-          {tab === "plugins" && <PluginsView plugins={plugins} action={pluginAction} workspacePath={workspace} />}
+          {tab === "plugins" && <PluginsView plugins={plugins} action={pluginAction} workspacePath={workspace} onApplyContent={text => { void applyMcpContent(text); }} />}
           {tab === "profiles" && (
             <ProfilesView profiles={profiles} activeId={profileId} refresh={refresh} />
           )}
@@ -1144,71 +1417,16 @@ function App() {
         />
       )}
       {confirmationDialog}
+      <McpInteractions workspacePath={workspace} />
       {approvalPrompt && (
         <ApprovalPromptDialog
           prompt={approvalPrompt}
           onClose={() => setApprovalPrompt(undefined)}
           onDecideTool={decideApproval}
           onDecidePlan={decidePlan}
+          {...((approvalPrompt.kind === "tool" ? approvalPrompt.approval.runId : approvalPrompt.plan.runId) === activeRun && canPauseRun ? { onPause: pauseRun } : {})}
         />
       )}
-    </div>
-  );
-}
-
-function Unlock(props: {
-  passphrase: string;
-  setPassphrase: (value: string) => void;
-  rememberDevice: boolean;
-  setRememberDevice: (value: boolean) => void;
-  error: string;
-  onUnlock: () => void;
-}) {
-  return (
-    <div className="unlock">
-      <div className="glass-strong flex w-[400px] max-w-[92vw] flex-col items-center gap-3 p-8 text-center">
-        <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-accent-soft text-lg font-semibold text-accent-text">
-          H
-        </div>
-        <small className="text-[10px] font-semibold tracking-[0.3em] text-text-muted">
-          HARNESS AGENT
-        </small>
-        <h1 className="text-lg font-semibold text-text">解锁本地运行时</h1>
-        <p className="text-sm text-text-muted">
-          口令用于解密会话、记忆、工具记录和图片。它不会发送给模型服务。
-        </p>
-        <input
-          autoFocus
-          type="password"
-          className="w-full rounded-xl border border-line bg-black/30 px-3 py-2.5 text-sm text-text outline-none placeholder:text-text-muted"
-          value={props.passphrase}
-          onChange={(event) => props.setPassphrase(event.target.value)}
-          onKeyDown={(event) => {
-            if (event.key === "Enter") void props.onUnlock();
-          }}
-          placeholder="应用口令（至少 10 个字符）"
-        />
-        <label className="flex w-full items-center gap-2 text-left text-xs text-text-muted">
-          <input
-            type="checkbox"
-            checked={props.rememberDevice}
-            onChange={(event) => props.setRememberDevice(event.target.checked)}
-          />
-          记住此设备（使用 Windows DPAPI）
-        </label>
-        {props.error && (
-          <div className="w-full rounded-xl border border-danger/30 bg-danger/10 px-3 py-2 text-left text-xs text-danger">
-            {props.error}
-          </div>
-        )}
-        <BuiButton
-          variant="primary"
-          className="w-full"
-          onClick={() => void props.onUnlock()}
-        >
-          解锁并启动 agentd
-        </BuiButton>
-      </div>
     </div>
   );
 }
@@ -1238,6 +1456,14 @@ function ChatView(props: {
   onSkillsChange: (keys: string[]) => void;
   skillSaving: boolean;
   skillError: string;
+  currentModel: ModelDescriptor | undefined;
+  reasoningEffort: ReasoningEffort | null;
+  onReasoningChange: (effort: ReasoningEffort | null) => void;
+  modelLoading: boolean;
+  modelSaving: boolean;
+  modelError: string;
+  modelCatalogError: string;
+  onModelsRetry: () => void;
   workspace: string;
   profile?: Profile;
   prompt: string;
@@ -1251,17 +1477,22 @@ function ChatView(props: {
   hasSession: boolean;
   switching: boolean;
   hasOlder: boolean;
+  withdrawnEvents?: readonly AgentEvent[];
   contentError: string;
   onContentRetry: () => void;
   onVisibleItems: (ids: string[]) => void;
   initialScroll: ConversationPosition | undefined;
   onScrollPosition: (position: ConversationPosition) => void;
   busy: boolean;
+  steering: boolean;
   runId?: string;
   paused: boolean;
   canPause: boolean;
   onPause: () => void;
   onResume: () => void;
+  withdrawableRunId?: string;
+  withdrawing: boolean;
+  onWithdraw: (messageId?: string) => void;
   onContinue: (runId: string, note: string) => Promise<void>;
   onSend: () => void;
   onChooseImages: () => void;
@@ -1274,10 +1505,12 @@ function ChatView(props: {
     <div className="chat-layout">
       {props.contentError && <div role="alert">{props.contentError}<BuiButton onClick={props.onContentRetry}>重试</BuiButton></div>}
       <div className="conversation-stage">
-      <VirtualConversation items={props.turns} itemKey={turnKey} className={props.turns.length ? "conversation" : "conversation conversation-empty"}
+      <VirtualConversation items={props.turns} itemKey={turnKey} className={props.turns.length ? "conversation" : "conversation conversation-empty"} contentClassName="conversation-content"
         onVisibleItems={props.onVisibleItems}
         initialPosition={props.initialScroll} onPosition={props.onScrollPosition}
-        renderItem={(turn, index) => <MemoConversationTurn turn={turn} busy={props.busy && index === props.turns.length - 1} continuationDisabled={props.busy || props.paused} onContinue={props.onContinue} />}
+        renderItem={(turn, index) => <MemoConversationTurn turn={turn} busy={props.busy && index === props.turns.length - 1} continuationDisabled={props.busy || props.paused || props.withdrawing} onContinue={props.onContinue}
+          {...(turn.runId === props.withdrawableRunId ? { onWithdraw: props.onWithdraw } : {})}
+          withdrawing={props.withdrawing && turn.runId === props.withdrawableRunId} withdrawDisabled={props.busy || props.steering || props.modelSaving || props.skillSaving} />}
         header={<>
         {showHistoryLoading && (
           <section className="conversation-history-loading" aria-live="polite">
@@ -1307,26 +1540,32 @@ function ChatView(props: {
       </div>
       <div className="composer-wrap">
         <div className="composer-project-bar">
-          <button onClick={props.onChooseWorkspace} title={props.workspace || "打开代码仓库"}><FolderOpen size={16} /><span>{props.workspace ? basename(props.workspace) : "选择项目"}</span></button>
+          <button onClick={props.onChooseWorkspace} disabled={props.withdrawing} title={props.workspace || "打开代码仓库"}><FolderOpen size={16} /><span>{props.workspace ? basename(props.workspace) : "选择项目"}</span></button>
           <span><Monitor size={15} />本地</span>
           <span className="composer-profile" title={props.profile?.name}><UserCog size={15} />{props.profile?.name || "未选择 Profile"}</span>
         </div>
         <BuiPromptBar
           value={props.prompt}
-          skillChips={<><div className="skill-chips">{props.selectedSkills.map(key => { const skill = props.skills.find(item => item.key === key); return <button key={key} type="button" disabled={props.skillSaving} title={skill?.manifest.enabled ? "移除此技能" : "技能不可用，请重新选择或确认信任"} aria-label={`移除技能 ${skill?.manifest.name ?? key}`} onClick={() => props.onSkillsChange(props.selectedSkills.filter(item => item !== key))}><BookOpen size={13} /><span>{skill?.manifest.name ?? "缺失的技能"}{skill && !skill.manifest.enabled ? " · 需确认" : ""}</span><X size={12} /></button>; })}</div>{props.skillError && <small role="alert">{props.skillError}</small>}</>}
-          skillPicker={skillPickerOpen ? <SkillPicker skills={props.skills} selected={props.selectedSkills} onChange={props.onSkillsChange} onClose={() => setSkillPickerOpen(false)} disabled={props.skillSaving} /> : null}
+          skillChips={<><div className="skill-chips">{props.selectedSkills.map(key => { const skill = props.skills.find(item => item.key === key); return <button key={key} type="button" disabled={props.skillSaving || props.withdrawing} title={skill?.manifest.enabled ? "移除此技能" : "技能不可用，请重新选择或确认信任"} aria-label={`移除技能 ${skill?.manifest.name ?? key}`} onClick={() => props.onSkillsChange(props.selectedSkills.filter(item => item !== key))}><BookOpen size={13} /><span>{skill?.manifest.name ?? "缺失的技能"}{skill && !skill.manifest.enabled ? " · 需确认" : ""}</span><X size={12} /></button>; })}</div>{props.skillError && <small role="alert">{props.skillError}</small>}{props.modelError && <small role="alert">{props.modelError}</small>}</>}
+          skillPicker={skillPickerOpen ? <SkillPicker skills={props.skills} selected={props.selectedSkills} onChange={props.onSkillsChange} onClose={() => setSkillPickerOpen(false)} disabled={props.skillSaving || props.withdrawing} /> : null}
           taskMode={props.taskMode}
+          modelPicker={<ModelReasoningPicker model={props.currentModel} effort={props.reasoningEffort} onChange={props.onReasoningChange}
+            loading={props.modelLoading} error={props.modelError || props.modelCatalogError}
+            disabled={!props.hasSession || props.busy || props.paused || props.modelSaving || props.withdrawing}
+            disabledReason={props.paused ? "继续运行时沿用原推理强度" : props.busy ? "运行期间固定推理强度" : props.modelSaving ? "正在保存推理强度" : "请先创建会话"} />}
           onTaskModeChange={props.setTaskMode}
           onChange={props.setPrompt}
           onSubmit={props.onSend}
           placeholder={
             !props.workspace ? "先选择项目，再开始对话…" : props.hasSession ? "描述你的想法，或粘贴错误截图…" : "点击新建任务创建会话…"
           }
-          disabled={!props.workspace || !props.hasSession}
-          busy={props.busy}
+          disabled={!props.workspace || !props.hasSession || props.withdrawing}
+          busy={props.busy || props.modelSaving}
           {...(props.runId && !props.paused && props.canPause ? { onHold: props.onPause } : {})}
           holding={props.paused}
-          {...(props.runId ? { onRelease: props.onResume, canRelease: true } : {})}
+          {...(props.runId ? { onRelease: props.onResume, canRelease: !props.steering } : {})}
+          withdrawing={props.withdrawing}
+          runDisabled={props.withdrawing}
           {...(props.attachments.length > 0
             ? {
                 attachments: (
@@ -1336,10 +1575,11 @@ function ChatView(props: {
                         className="glass-strong flex items-center gap-2 p-2"
                         key={item.attachment.id}
                       >
-                        <img
+                        {item.previewDataUrl ? <img
                           src={item.previewDataUrl}
+                          alt="待发送图片"
                           className="h-10 w-14 rounded-lg object-cover"
-                        />
+                        /> : <ImageIcon size={24} aria-label="已恢复的图片附件" />}
                         <span className="text-xs text-text-muted">
                           {item.attachment.mimeType}
                           <small className="block text-[10px]">
@@ -1350,6 +1590,7 @@ function ChatView(props: {
                           variant="ghost"
                           size="sm"
                           aria-label="移除附件"
+                          disabled={props.withdrawing}
                           onClick={() =>
                             props.setAttachments((all) =>
                               all.filter((_, itemIndex) => itemIndex !== index),
@@ -1366,7 +1607,7 @@ function ChatView(props: {
             : {})}
           actions={
             <>
-              <BuiButton variant="ghost" size="sm" onClick={() => setSkillPickerOpen(true)}><BookOpen size={17} /> 技能</BuiButton>
+              <BuiButton variant="ghost" size="sm" disabled={props.withdrawing} onClick={() => setSkillPickerOpen(true)}><BookOpen size={17} /> 技能</BuiButton>
               <BuiButton
                 variant="ghost"
                 size="sm"
@@ -1388,6 +1629,8 @@ function ChatView(props: {
             </>
           }
         />
+        <SessionCacheStats turns={props.turns} hasOlder={props.hasOlder} {...(props.withdrawnEvents ? { withdrawnEvents: props.withdrawnEvents } : {})} />
+        {props.modelCatalogError && <small role="alert">{props.modelCatalogError} <BuiButton variant="ghost" size="sm" disabled={props.modelLoading} onClick={props.onModelsRetry}>重新读取模型设置</BuiButton></small>}
       </div>
     </div>
   );
@@ -1441,9 +1684,32 @@ function SidebarResizeHandle({ value, onResize, onCommit }: {
 }
 
 const requestSessionContent = <T,>(input: DaemonRequestInput) => window.harness.request<T>(input);
+function removeWithdrawnRounds(view: SessionView, removed: ReadonlySet<string>): SessionView {
+  const spentEvents = new Map((view.withdrawnEvents ?? []).map(event => [event.id, event]));
+  for (const run of view.runs) if (removed.has(run.spec.id)) {
+    for (const event of run.events) if (event.type === "usage" || event.type === "context_compacted") spentEvents.set(event.id, event);
+  }
+  return { ...view, runs: view.runs.filter(run => !removed.has(run.spec.id)), withdrawnEvents: [...spentEvents.values()] };
+}
 const MemoConversationTurn = React.memo(ConversationTurnView);
 
-function ConversationTurnView({ turn, busy, continuationDisabled, onContinue }: { turn: SessionTurn; busy: boolean; continuationDisabled: boolean; onContinue: (runId: string, note: string) => Promise<void> }) {
+function removeWithdrawnMessage(view: SessionView, runId: string, messageId?: string): SessionView {
+  if (!messageId) return view;
+  const target = view.runs.find(run => run.spec.id === runId);
+  const submitted = target?.events.find(event => event.type === "steering_submitted" && event.messageId === messageId);
+  if (!submitted) return view;
+  const spent = new Map((view.withdrawnEvents ?? []).map(event => [event.id, event]));
+  for (const event of target!.events) if (event.sequence >= submitted.sequence && (event.type === "usage" || event.type === "context_compacted")) spent.set(event.id, event);
+  return { ...view, withdrawnEvents: [...spent.values()], runs: view.runs.map(run => run !== target ? run : {
+    ...run, status: "paused", events: run.events.filter(event => event.sequence < submitted.sequence),
+    ...(run.view ? { view: { ...run.view, lastSequence: submitted.sequence - 1 } } : {}),
+  }) };
+}
+
+function ConversationTurnView({ turn, busy, continuationDisabled, onContinue, onWithdraw, withdrawing, withdrawDisabled }: {
+  turn: SessionTurn; busy: boolean; continuationDisabled: boolean; onContinue: (runId: string, note: string) => Promise<void>;
+  onWithdraw?: (messageId?: string) => void; withdrawing: boolean; withdrawDisabled: boolean;
+}) {
   const [continuable, setContinuable] = useState(false);
   const [continuationNote, setContinuationNote] = useRowState("continuationNote", "");
   const pending = turn.events.findLast(event => event.type === "result")?.stop?.pending.length ?? 0;
@@ -1481,40 +1747,70 @@ function ConversationTurnView({ turn, busy, continuationDisabled, onContinue }: 
     setRunReview(updated);
   }
   const stream = useMemo(() => buildConversationStream(turn.events), [turn.events]);
-  const durationMs = useMemo(() => conversationDurationMs(turn.events), [turn.events]);
-  const finalIndex = stream.findLastIndex((item) => item.kind === "text" && !item.process);
-  const processItems = finalIndex >= 0 ? stream.slice(0, finalIndex) : stream;
-  const finalItems = finalIndex >= 0 ? stream.slice(finalIndex) : [];
+  const segments = useMemo(() => {
+    const groups: Array<{ id: string; user?: Extract<ConversationStreamItem, { kind: "user_message" }>; items: ConversationStreamItem[] }> = [{ id: "initial", items: [] }];
+    for (const item of stream) {
+      if (item.kind === "user_message") groups.push({ id: item.id, user: item, items: [] });
+      else groups.at(-1)!.items.push(item);
+    }
+    return groups.map((group, index) => ({ ...group, events: turn.events.filter(event =>
+      event.sequence >= (group.user?.sequence ?? -1) && event.sequence < (groups[index + 1]?.user?.sequence ?? Infinity)) }));
+  }, [stream, turn.events]);
   const completed = !busy && terminalStatus !== undefined;
+  const latestHuman = stream.findLast(item => item.kind === "user_message");
+  const withdrawalButton = (messageId?: string) => <div className="conversation-user-actions">
+    <button type="button" className="conversation-withdraw" disabled={withdrawDisabled || withdrawing} aria-label={messageId ? "撤回最新消息" : "撤回最新一轮"} aria-busy={withdrawing}
+      title={messageId ? "撤回这条消息及其后产生的文件改动，将消息放回输入框" : "撤回本轮对话及本轮产生的文件改动，将原消息放回输入框"} onClick={() => onWithdraw?.(messageId)}>
+      {withdrawing ? <LoaderCircle size={16} className="animate-spin" aria-hidden="true" /> : <Undo2 size={16} aria-hidden="true" />}
+    </button>
+  </div>;
   const renderStreamItem = (item: ConversationStreamItem) => item.kind === "text"
     ? item.process
       ? <ProcessNarration key={item.id} text={item.text} live={busy && stream.at(-1) === item} />
       : <article className="assistant-message" key={item.id}><FinalReportStatus {...(item.result ? { result: item.result } : {})} /><MarkdownMessage text={item.text} /></article>
     : item.kind === "tool_group"
       ? <ToolEventGroup key={item.id} tools={item.tools} />
-      : <EventRow key={item.event.id} event={item.event} />;
-  const result = turn.events.findLast((event) => event.type === "result");
-  const visibleStop = result?.stop && !/^运行已暂停[。．]?/.test(result.stop.message) ? result.stop : undefined;
-  const route = turn.events.find((event) => event.type === "route") as Extract<AgentEvent, { type: "route" }> | undefined;
+      : item.kind === "user_message"
+        ? <div className="conversation-user-turn" key={item.id} data-message-id={item.id}><article className="user-message" aria-label="你的消息">{item.text}</article>
+            {onWithdraw && item === latestHuman && (() => {
+              const submitted = turn.events.find(event => event.type === "steering_submitted" && event.sequence === item.sequence);
+              return submitted?.type === "steering_submitted" && submitted.withdrawable ? withdrawalButton(submitted.messageId) : null;
+            })()}
+          </div>
+        : <EventRow key={item.event.id} event={item.event} />;
   return (
     <section className="conversation-turn" data-run-id={turn.runId}>
       {turn.view && !turn.view.eventsComplete && <p role="status">正在同步执行记录…</p>}
-      <article className="user-message" aria-label="你的任务">{turn.continuation ? `继续任务${turn.continuation.note ? "：" + turn.continuation.note : ""}` : turn.request}</article>
-      {(processItems.length > 0 || route || visibleStop) && <ConversationProcessSummary completed={completed} preview={Boolean(turn.view && !turn.view.eventsComplete)} durationMs={durationMs} activeLabel={result?.status === "paused" ? "已暂停" : "运行中"}>
-        {() => <div className="conversation-stream">
-          {route && <div className="activity-row conversation-route"><Terminal size={14} aria-hidden="true" /><span>{route.providerId} / {route.modelId}</span><small>{route.reason}</small></div>}
-          {processItems.map(renderStreamItem)}
-          {visibleStop && <RunStopCard stop={visibleStop} />}
-          <WorkflowProgress events={turn.events} />
-          <PromptCacheStats usages={turn.events.flatMap(event => event.type === "usage" ? [event.usage] : [])} events={turn.events} />
-        </div>}
-      </ConversationProcessSummary>}
-      {finalItems.length > 0 && <div className="conversation-stream conversation-final-stream">
-        {finalItems.map(renderStreamItem)}
-      </div>}
-      {completed && finalItems.length === 0 && <div className="conversation-stream conversation-final-stream">
-        <article className="assistant-message"><MarkdownMessage text={terminalStatus === "failed" ? "运行失败，未生成最终回答。" : terminalStatus === "cancelled" ? "运行已取消。" : terminalStatus === "review" ? "本轮已结束，仍有待复核事项。" : "运行已完成，未生成最终回答。"} /></article>
-      </div>}
+      <div className="conversation-user-turn">
+        <article className="user-message" aria-label="你的任务">{turn.continuation ? `继续任务${turn.continuation.note ? "：" + turn.continuation.note : ""}` : turn.request}</article>
+        {onWithdraw && !latestHuman && withdrawalButton()}
+      </div>
+      {segments.map((segment, index) => {
+        const last = index === segments.length - 1;
+        const finalIndex = segment.items.findLastIndex(item => item.kind === "text" && !item.process);
+        const processItems = finalIndex >= 0 ? segment.items.slice(0, finalIndex) : segment.items;
+        const finalItems = finalIndex >= 0 ? segment.items.slice(finalIndex) : [];
+        const result = segment.events.findLast(event => event.type === "result");
+        const visibleStop = result?.stop && !/^运行已暂停[。．]?/.test(result.stop.message) ? result.stop : undefined;
+        const route = segment.events.find(event => event.type === "route");
+        const segmentCompleted = !last || completed;
+        return <React.Fragment key={segment.id}>
+          {segment.user && renderStreamItem(segment.user)}
+          {(processItems.length > 0 || route || visibleStop) && <ConversationProcessSummary stateKey={segment.id === "initial" ? "process" : `process:${segment.id}`} completed={segmentCompleted}
+            preview={Boolean(turn.view && !turn.view.eventsComplete)} durationMs={conversationDurationMs(segment.events)} activeLabel={result?.status === "paused" ? "已暂停" : "运行中"}>
+            {() => <div className="conversation-stream">
+              {route?.type === "route" && <div className="activity-row conversation-route"><Terminal size={14} aria-hidden="true" /><span>{route.providerId} / {route.modelId}</span><small>{route.reason}</small></div>}
+              {processItems.map(renderStreamItem)}
+              {visibleStop && <RunStopCard stop={visibleStop} />}
+              {last && <WorkflowProgress events={turn.events} />}
+            </div>}
+          </ConversationProcessSummary>}
+          {finalItems.length > 0 && <div className="conversation-stream conversation-final-stream">{finalItems.map(renderStreamItem)}</div>}
+          {last && completed && finalItems.length === 0 && <div className="conversation-stream conversation-final-stream">
+            <article className="assistant-message"><MarkdownMessage text={terminalStatus === "failed" ? "运行失败，未生成最终回答。" : terminalStatus === "cancelled" ? "运行已取消。" : terminalStatus === "review" ? "本轮已结束，仍有待复核事项。" : "运行已完成，未生成最终回答。"} /></article>
+          </div>}
+        </React.Fragment>;
+      })}
       {turn.continuation && turn.chainUsage && <p className="text-xs text-text-muted">本轮：{turn.usage?.turns ?? 0} 轮 / {turn.usage?.tools ?? 0} 次工具调用 · 续办链累计：{turn.chainUsage.turns} 轮 / {turn.chainUsage.tools} 次工具调用 · 输入 {turn.chainUsage.inputTokens} / 输出 {turn.chainUsage.outputTokens} tokens · {turn.chainUsage.costKnown ? `$${turn.chainUsage.usd.toFixed(4)}` : "费用统计不完整"}</p>}
       {continuable && <div className="flex items-center gap-2 my-3">
         <input aria-label="续办补充说明" placeholder="补充说明（可选）" maxLength={4000} value={continuationNote} disabled={continuationDisabled} onChange={event => setContinuationNote(event.target.value)} className="rounded border border-line bg-transparent px-3 py-2 text-sm" />
@@ -1721,6 +2017,7 @@ function ApprovalPromptDialog({
   onClose,
   onDecideTool,
   onDecidePlan,
+  onPause,
 }: {
   prompt: ApprovalPrompt;
   onClose: () => void;
@@ -1730,6 +2027,7 @@ function ApprovalPromptDialog({
     approved: boolean,
     feedback?: string,
   ) => Promise<void>;
+  onPause?: () => Promise<void>;
 }) {
   const isTool = prompt.kind === "tool";
   const risk = isTool ? prompt.approval.risk : prompt.plan.scope.maxRisk;
@@ -1749,6 +2047,7 @@ function ApprovalPromptDialog({
       onDismiss={onClose}
       onCancel={() => isTool ? onDecideTool(prompt.approval.id, false) : onDecidePlan(prompt.plan, false)}
       onConfirm={() => isTool ? onDecideTool(prompt.approval.id, true) : onDecidePlan(prompt.plan, true)}
+      {...(onPause ? { onPause } : {})}
     >
       {isTool
         ? <ApprovalContent input={prompt.approval.normalizedInput} />
@@ -2195,13 +2494,13 @@ function PlanView({ runId, events, decide }: { runId?: string; events: AgentEven
   );
 }
 
-function PluginsView({ plugins, action, workspacePath }: { plugins: PluginRecord[]; action: (method: "plugins.install" | "plugins.trust" | "plugins.enable" | "plugins.disable", params: Record<string, unknown>) => Promise<void>; workspacePath: string }) {
+function PluginsView({ plugins, action, workspacePath, onApplyContent }: { plugins: PluginRecord[]; action: (method: "plugins.install" | "plugins.trust" | "plugins.enable" | "plugins.disable", params: Record<string, unknown>) => Promise<void>; workspacePath: string; onApplyContent: (text: string) => void }) {
   const [sourcePath, setSourcePath] = useState("");
   const [section, setSection] = useState<"mcp" | "local">("mcp");
   return (
     <div className="flex flex-col gap-3">
       <div className="flex gap-2" role="tablist" aria-label="插件类型"><BuiButton role="tab" aria-selected={section === "mcp"} variant={section === "mcp" ? "primary" : "secondary"} onClick={() => setSection("mcp")}>MCP 服务</BuiButton><BuiButton role="tab" aria-selected={section === "local"} variant={section === "local" ? "primary" : "secondary"} onClick={() => setSection("local")}>本地插件</BuiButton></div>
-      {section === "mcp" ? <McpView workspacePath={workspacePath} /> : <>
+      {section === "mcp" ? <McpView workspacePath={workspacePath} onApplyPrompt={onApplyContent} onAttachResource={onApplyContent} /> : <>
       <div>
         <h2 className="text-base font-semibold text-text">本地插件</h2>
         <p className="text-sm text-text-muted">

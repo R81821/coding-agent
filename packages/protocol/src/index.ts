@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { SummaryOutcomeSchema, ContextAdjustmentSchema, CacheDiagnosticSchema } from "./cache-diagnostics.js";
+import { SummaryOutcomeSchema, ContextAdjustmentSchema, ContextUsageSchema, CacheDiagnosticSchema } from "./cache-diagnostics.js";
 import { SkillReferenceSchema } from "./skills.js";
 import { WorkflowStateSchema } from "./workflow.js";
 import { McpRequestSchemas, McpToolSnapshotSchema } from "./mcp.js";
@@ -31,6 +31,16 @@ export const RunStatusSchema = z.enum([
   "cancelled"
 ]);
 export type RunStatus = z.infer<typeof RunStatusSchema>;
+
+export const RunSteerResultSchema = z.discriminatedUnion("accepted", [
+  z.object({ accepted: z.literal(true), messageId: z.string().min(1), queued: z.number().int().nonnegative(), status: RunStatusSchema,
+    resumed: z.boolean().optional(), resumeError: z.string().optional() }),
+  z.object({ accepted: z.literal(false), queued: z.literal(0), status: RunStatusSchema }),
+]);
+export type RunSteerResult = z.infer<typeof RunSteerResultSchema>;
+
+export const SteeringMessageSchema = z.object({ id: z.string().min(1), text: z.string().trim().min(1).max(4_000) });
+export type SteeringMessage = z.infer<typeof SteeringMessageSchema>;
 
 export const KanbanStatusSchema = z.enum([
   "Backlog",
@@ -72,6 +82,8 @@ export const ContentPartSchema = z.discriminatedUnion("type", [
 export type ContentPart = z.infer<typeof ContentPartSchema>;
 
 export const ModelMessageSchema = z.object({
+  // Internal identity for acknowledging a persisted steering message, never an instruction/grant.
+  steeringId: z.string().min(1).optional(),
   reasoningContent: z.string().optional(),
   // Internal control provenance; this instruction expires after its summary request.
   runtimePrompt: z.literal("stop_summary").optional(),
@@ -92,7 +104,11 @@ export const ToolContractSchema = z.object({
 });
 export type ToolContract = z.infer<typeof ToolContractSchema>;
 
+export const ReasoningEffortSchema = z.enum(["none", "minimal", "low", "medium", "high", "xhigh", "max"]);
+export type ReasoningEffort = z.infer<typeof ReasoningEffortSchema>;
+
 export const ProviderCapabilitiesSchema = z.object({
+  reasoningEfforts: z.array(ReasoningEffortSchema).optional(),
   vision: z.boolean(),
   tools: z.boolean(),
   parallelTools: z.boolean(),
@@ -116,6 +132,7 @@ export const ModelDescriptorSchema = z.object({
   healthy: z.boolean().default(true)
 });
 export type ModelDescriptor = z.infer<typeof ModelDescriptorSchema>;
+export interface CurrentModel { model: ModelDescriptor | null; error?: string }
 
 export const ToolCallSchema = z.object({
   id: z.string(),
@@ -135,7 +152,7 @@ export type ToolCallOrigin = z.infer<typeof ToolCallOriginSchema>;
 export const UsageSchema = z.object({
   reasoningTokens: z.number().int().nonnegative().optional(),
   costKnown: z.boolean().optional(),
-  purpose: z.enum(["main", "compaction", "review"]).optional(),
+  purpose: z.enum(["main", "compaction", "review", "sampling"]).optional(),
   cachedInputTokens: z.number().int().nonnegative().optional(),
   inputTokens: z.number().int().nonnegative(),
   outputTokens: z.number().int().nonnegative(),
@@ -249,6 +266,8 @@ export const ContextSnapshotSchema = z.object({
 export type ContextSnapshot = z.infer<typeof ContextSnapshotSchema>;
 
 export const RunCheckpointSchema = z.object({
+  // Version 1 working transcripts cover the preceding conversation, including accepted summaries.
+  sessionContextVersion: z.literal(1).optional(),
   elapsedMs: z.number().int().nonnegative().optional(),
   verificationProgress: z.object({ stage: z.enum(["local", "broader"]), epoch: z.string(), revision: z.number().int().nonnegative(), codeFingerprint: z.string(), startedAt: z.string().datetime(), results: z.array(VerificationResultSchema), pendingItemIds: z.array(z.string()) }).optional(),
   workspaceFingerprint: z.string().optional(),
@@ -267,6 +286,8 @@ export const RunCheckpointSchema = z.object({
   turns: z.number().int().nonnegative(),
   toolCalls: z.number().int().nonnegative(),
   pendingNonIdempotentToolCalls: z.array(ToolCallSchema).default([]),
+  // Optional for checkpoints written before steering became durable.
+  pendingSteering: z.array(SteeringMessageSchema).max(8).optional(),
   createdAt: z.string().datetime()
 });
 export type RunCheckpoint = z.infer<typeof RunCheckpointSchema>;
@@ -363,9 +384,10 @@ export const EvalResultSchema = z.object({
 export type EvalResult = z.infer<typeof EvalResultSchema>;
 
 export const ModelRequestSchema = z.object({
+  reasoningEffort: ReasoningEffortSchema.optional(),
   disableThinking: z.boolean().optional(),
   cacheDiagnostics: z.boolean().optional(),
-  purpose: z.enum(["main", "compaction", "review"]).optional(),
+  purpose: z.enum(["main", "compaction", "review", "sampling"]).optional(),
   promptCacheKey: z.string().max(64).optional(),
   runId: z.string(),
   model: ModelDescriptorSchema,
@@ -414,9 +436,12 @@ export const AgentEventSchema = z.discriminatedUnion("type", [
   z.object({ ...eventBase, type: z.literal("plan_created"), plan: PlanSpecSchema }),
   z.object({ ...eventBase, type: z.literal("plan_updated"), plan: PlanSpecSchema }),
   z.object({ ...eventBase, type: z.literal("plan_approval_required"), planId: z.string(), version: z.number().int().positive(), summary: z.string() }),
-  z.object({ ...eventBase, type: z.literal("checkpoint_saved"), checkpointId: z.string(), reason: RunCheckpointSchema.shape.reason }),
+  // durationMs/messages make the cost of checkpointing visible: a run writes one of these per tool
+  // result, so growth here against conversation size is what tells us the store needs a delta.
+  z.object({ ...eventBase, type: z.literal("checkpoint_saved"), checkpointId: z.string(), reason: RunCheckpointSchema.shape.reason, durationMs: z.number().nonnegative().optional(), messages: z.number().int().nonnegative().optional() }),
   z.object({ ...eventBase, type: z.literal("context_compacted"), record: CompactionRecordSchema }),
   z.object({ ...eventBase, type: z.literal("context_adjusted"), adjustment: ContextAdjustmentSchema }),
+  z.object({ ...eventBase, type: z.literal("context_usage"), context: ContextUsageSchema }),
   z.object({ ...eventBase, type: z.literal("cache_diagnostic"), diagnostic: CacheDiagnosticSchema }),
   z.object({ ...eventBase, type: z.literal("verification_started"), verificationRunId: z.string(), attempt: z.number().int().nonnegative() }),
   z.object({
@@ -450,11 +475,12 @@ export const AgentEventSchema = z.discriminatedUnion("type", [
   z.object({ ...eventBase, type: z.literal("plugin_event"), pluginId: z.string(), action: z.string(), detail: z.string().optional() }),
   z.object({ ...eventBase, type: z.literal("search_usage"), providerId: z.string(), searchId: z.string(), resultCount: z.number().int().nonnegative(), usage: z.record(z.string(), z.unknown()).default({}) }),
   z.object({ ...eventBase, type: z.literal("recovery_event"), checkpointId: z.string().optional(), action: z.enum(["restored", "paused_non_idempotent", "failed"]), detail: z.string() }),
-  z.object({ ...eventBase, type: z.literal("model_request_finished"), purpose: z.enum(["main", "compaction", "review"]), durationMs: z.number().nonnegative(), succeeded: z.boolean(), maxOutputTokens: z.number().int().positive().optional(), configuredMaxOutputTokens: z.number().int().positive().optional(), attempt: z.number().int().positive().optional(), errorCode: z.string().optional() }),
+  z.object({ ...eventBase, type: z.literal("model_request_finished"), purpose: z.enum(["main", "compaction", "review", "sampling"]), durationMs: z.number().nonnegative(), succeeded: z.boolean(), maxOutputTokens: z.number().int().positive().optional(), configuredMaxOutputTokens: z.number().int().positive().optional(), attempt: z.number().int().positive().optional(), errorCode: z.string().optional() }),
   z.object({ ...eventBase, type: z.literal("usage"), usage: UsageSchema }),
-  // A steering message is user input injected mid-run. It is a user_request, never a grant, and the
-  // event marks the exact point the model received it.
-  z.object({ ...eventBase, type: z.literal("steering_delivered"), text: z.string() }),
+  // Accepted user input appears in the conversation before model delivery. Its stable ID joins
+  // submission and delivery without duplicating the human message after resume or reload.
+  z.object({ ...eventBase, type: z.literal("steering_submitted"), messageId: z.string().min(1), text: z.string(), withdrawable: z.boolean().optional() }),
+  z.object({ ...eventBase, type: z.literal("steering_delivered"), messageId: z.string().min(1).optional(), text: z.string() }),
   z.object({ ...eventBase, type: z.literal("error"), code: z.string(), message: z.string(), retryable: z.boolean() }),
   z.object({ ...eventBase, type: z.literal("result"), text: z.string(), status: RunStatusSchema, stop: RunStopInfoSchema.optional(), sourceAssistantTurnSequence: z.number().int().nonnegative().optional() })
 ]);
@@ -492,6 +518,7 @@ export const GenerationPolicySchema = z.object({
 export type GenerationPolicy = z.infer<typeof GenerationPolicySchema>;
 
 export const RunSpecSchema = z.object({
+  reasoningEffort: ReasoningEffortSchema.nullable().optional(),
   continuation: z.object({ runId: z.string(), checkpointId: z.string(), note: z.string().max(4000).optional() }).optional(),
   mcpUncertainCalls: z.array(z.object({ name: z.string(), fingerprint: z.string() })).optional(),
   mcpSnapshot: z.array(McpToolSnapshotSchema).max(16384).optional(),
@@ -515,6 +542,7 @@ export const RunSpecSchema = z.object({
   createdAt: z.string().datetime()
 });
 export type RunSpec = z.infer<typeof RunSpecSchema>;
+export interface RunWithdrawal { run: RunSpec; withdrawnRunIds: string[]; messageId?: string; text?: string }
 
 export type RunHistoryItem = Pick<RunSpec, "id" | "sessionId" | "request" | "workspacePath" | "profileId" | "createdAt"> & { status: RunStatus };
 export interface RunHistoryPage { items: RunHistoryItem[]; hasMore: boolean }
@@ -523,6 +551,7 @@ export interface RunReviewFile { path: string; added: number; deleted: number; d
 export interface RunReview { runId: string; status: "capturing" | "ready" | "unavailable"; files: RunReviewFile[]; reason?: string; scope?: "tracked-and-nonignored-untracked" }
 
 export const SessionRecordSchema = z.object({
+  reasoningEffort: ReasoningEffortSchema.nullable().optional(),
   skillSelection: z.array(z.string()).max(100).optional(),
   id: z.string().min(1), workspacePath: z.string().min(1), profileId: z.string().min(1),
   title: z.string().trim().min(1).max(300), createdAt: z.string().datetime(), updatedAt: z.string().datetime(),
@@ -531,7 +560,7 @@ export const SessionRecordSchema = z.object({
 export type SessionRecord = z.infer<typeof SessionRecordSchema>;
 export type SessionSummary = SessionRecord & { runCount: number; latestRunId?: string; latestStatus?: RunStatus };
 export interface SessionPage { items: SessionSummary[]; hasMore: boolean }
-export interface SessionDetail { session: SessionRecord; runs: Array<{ spec: RunSpec; status: RunStatus; events: AgentEvent[]; view?: { lastSequence: number; eventsComplete: boolean } }> }
+export interface SessionDetail { session: SessionRecord; runs: Array<{ spec: RunSpec; status: RunStatus; events: AgentEvent[]; view?: { lastSequence: number; eventsComplete: boolean } }>; withdrawnEvents?: AgentEvent[] }
 export interface SessionCursor { createdAt: string; id: string }
 export interface SessionView extends SessionDetail { hasMore: boolean; before?: SessionCursor }
 export interface RunEventPage { events: AgentEvent[]; nextSequence: number; hasMore: boolean; status: RunStatus }
@@ -676,6 +705,8 @@ export const DaemonRequestSchema = z.discriminatedUnion("method", [
   z.object({ id: z.string(), method: z.literal("skills.cancel"), params: z.object({ jobId: z.string() }) }),
   z.object({ id: z.string(), method: z.literal("skills.location") }),
   z.object({ id: z.string(), method: z.literal("health") }),
+  z.object({ id: z.string(), method: z.literal("model.current"), params: z.object({ profileId: z.string().min(1), needsVision: z.boolean().optional() }) }),
+  z.object({ id: z.string(), method: z.literal("session.reasoning"), params: z.object({ sessionId: z.string().min(1), profileId: z.string().min(1).optional(), needsVision: z.boolean().optional(), reasoningEffort: ReasoningEffortSchema.nullable() }) }),
   z.object({ id: z.string(), method: z.literal("sessions.create"), params: SessionRecordSchema.omit({ deletedAt: true }) }),
   z.object({ id: z.string(), method: z.literal("sessions.list"), params: z.object({ deleted: z.boolean().default(false), limit: z.number().int().positive().max(200).default(50), offset: z.number().int().nonnegative().default(0) }).default({ deleted: false, limit: 50, offset: 0 }) }),
   z.object({ id: z.string(), method: z.literal("session.get"), params: z.object({ sessionId: z.string().min(1) }) }),
@@ -697,7 +728,8 @@ export const DaemonRequestSchema = z.discriminatedUnion("method", [
   z.object({ id: z.string(), method: z.literal("run.continue"), params: z.object({ runId: z.string(), note: z.string().trim().max(4000).optional() }) }),
   z.object({ id: z.string(), method: z.literal("run.cancel"), params: z.object({ runId: z.string() }) }),
   z.object({ id: z.string(), method: z.literal("run.pause"), params: z.object({ runId: z.string() }) }),
-  z.object({ id: z.string(), method: z.literal("run.steer"), params: z.object({ runId: z.string(), text: z.string().min(1).max(4_000) }) }),
+  z.object({ id: z.string(), method: z.literal("run.withdraw"), params: z.object({ runId: z.string().min(1), messageId: z.string().min(1).optional() }) }),
+  z.object({ id: z.string(), method: z.literal("run.steer"), params: z.object({ runId: z.string(), text: z.string().min(1).max(4_000), resumePaused: z.boolean().optional() }) }),
   z.object({ id: z.string(), method: z.literal("run.events"), params: z.object({ runId: z.string(), afterSequence: z.number().int().default(-1) }) }),
   z.object({ id: z.string(), method: z.literal("plan.get"), params: z.object({ runId: z.string() }) }),
   z.object({ id: z.string(), method: z.literal("plan.decide"), params: z.object({ planId: z.string(), version: z.number().int().positive(), approved: z.boolean(), actor: z.string(), feedback: z.string().optional() }) }),
@@ -729,6 +761,7 @@ export const DaemonRequestSchema = z.discriminatedUnion("method", [
   z.object({ id: z.string(), method: z.literal("trace.export"), params: z.object({ runId: z.string(), destinationPath: z.string() }) }),
   z.object({ id: z.string(), method: z.literal("project.inspect"), params: z.object({ workspacePath: z.string() }) }),
   z.object({ id: z.string(), method: z.literal("project.trust"), params: z.object({ workspacePath: z.string(), files: z.array(z.object({ path: z.string(), sha256: z.string() })) }) }),
+  z.object({ id: z.string(), method: z.literal("project.scaffold"), params: z.object({ workspacePath: z.string() }) }),
   z.object({ id: z.string(), method: z.literal("connectors.pairing"), params: z.object({ connector: z.enum(["telegram", "feishu"]) }) }),
   z.object({ id: z.string(), method: z.literal("attachment.put"), params: z.object({ base64: z.string(), mimeType: z.string(), source: z.enum(["file", "clipboard", "screenshot", "telegram", "feishu", "browser"]), allowedProviders: z.array(z.string()).default([]) }) })
 ]);

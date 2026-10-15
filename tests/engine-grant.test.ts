@@ -16,6 +16,7 @@ import {
   newId,
   nowIso,
   type AgentEvent,
+  type ModelRequest,
   type RunSpec,
 } from "@harness/protocol";
 import { ToolRegistry } from "@harness/tools";
@@ -39,7 +40,11 @@ describe("approval grants are persisted and reused within a run", () => {
       async listModels() { return [model]; },
       async health() { return true; },
       estimateCost() { return 0; },
-      async *stream(): AsyncIterable<ProviderStreamEvent> {
+      async *stream(request: ModelRequest): AsyncIterable<ProviderStreamEvent> {
+        if (request.purpose === "compaction") {
+          yield { type: "text_delta", delta: JSON.stringify({ goal: "Write beta twice within the approved plan", constraints: ["Preserve plan and tool approval requirements"], decisions: [], evidence: [], completed: [], pending: ["Complete verification and requirement acceptance"] }) };
+          return;
+        }
         requests += 1;
         if (requests <= 3) yield* workflowPrelude(requests);
         else if (requests === 4) {
@@ -75,11 +80,17 @@ describe("approval grants are persisted and reused within a run", () => {
         }
       });
     });
-    engine.start(run, profile);
-    await expect(result).resolves.toMatchObject({ status: "review" });
-    expect(executions).toBe(2);
-    expect(approvalRequests).toBe(1);
-    database.close();
-    vault.dispose();
+    try {
+      engine.start(run, profile);
+      const outcome = await result;
+      await engine.waitForSettlement(run.id);
+      expect(outcome, JSON.stringify(outcome)).toMatchObject({ status: "review" });
+      expect(executions).toBe(2);
+      expect(approvalRequests).toBe(1);
+    } finally {
+      await engine.close();
+      database.close();
+      vault.dispose();
+    }
   });
 });

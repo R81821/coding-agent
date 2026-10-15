@@ -7,6 +7,7 @@ export interface ApprovalRepository {
 }
 
 interface PendingApproval {
+  runId: string;
   resolve: (approved: boolean) => void;
   timeout: NodeJS.Timeout;
 }
@@ -41,7 +42,7 @@ export class ApprovalBroker {
     this.repository.saveApproval(approval);
     const decision = new Promise<boolean>((resolveDecision) => {
       const timeout = setTimeout(() => this.finish(approval.id, false, "system:expired"), ttlMs);
-      this.pending.set(approval.id, { resolve: resolveDecision, timeout });
+      this.pending.set(approval.id, { runId: input.runId, resolve: resolveDecision, timeout });
       signal.addEventListener("abort", () => this.finish(approval.id, false, "system:cancelled"), { once: true });
     });
     return { approval, decision };
@@ -53,6 +54,13 @@ export class ApprovalBroker {
     if (approval.status !== "pending") throw new Error(`Approval ${id} is already ${approval.status}`);
     this.finish(id, approved, actor);
     return this.repository.getApproval(id) ?? approval;
+  }
+
+  /** Release only this live run's waiting tools, without cancelling its resumable checkpoint. */
+  denyRun(runId: string, actor = "system:paused"): void {
+    for (const [id, pending] of this.pending) {
+      if (pending.runId === runId) this.finish(id, false, actor);
+    }
   }
 
   private finish(id: string, approved: boolean, actor: string): void {

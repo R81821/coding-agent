@@ -56,7 +56,7 @@ export function BrowserPanel({ sessionId, open, onOpenChange }: { sessionId: str
       cancelAnimationFrame(frame);
       frame = requestAnimationFrame(() => {
         const rect = viewport.current?.getBoundingClientRect();
-        const obscured = Boolean(document.querySelector('dialog[open], [role="menu"], .approval-overlay, .crop-overlay'));
+        const obscured = Boolean(document.querySelector('dialog[open], [role="menu"], [role="dialog"], .approval-overlay, .crop-overlay'));
         void window.harness.browserLayout({ sessionId: sessionId ?? null, visible: open, obscured, x: rect?.x ?? 0, y: rect?.y ?? 0, width: rect?.width ?? 0, height: rect?.height ?? 0 }).catch(() => {});
       });
     };

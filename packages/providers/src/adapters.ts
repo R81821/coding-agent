@@ -5,6 +5,7 @@ import { authHeaders, parseSse } from "./http.js";
 import type { AttachmentResolver, ModelProvider, ProviderStreamEvent } from "./types.js";
 import { normalizeToolMessageSequence } from "./tool-history.js";
 import { WireCacheDiagnostics } from "./cache-diagnostics.js";
+import { usesOpenAICompletionTokenLimit, validatedReasoningEffort, withReasoningCapabilities } from "./reasoning.js";
 
 export class ProviderOutputTruncatedError extends Error {
   readonly code = "provider_output_truncated";
@@ -75,6 +76,11 @@ abstract class HttpProvider implements ModelProvider {
     };
   }
 
+  protected reasoningEffort(request: ModelRequest) {
+    const model = this.models.find(model => model.modelId === request.model.modelId) ?? request.model;
+    return validatedReasoningEffort(request, model);
+  }
+
   protected async resolveParts(message: ModelMessage): Promise<Array<Record<string, unknown>>> {
     const parts: Array<Record<string, unknown>> = [];
     for (const part of message.content) {
@@ -91,6 +97,9 @@ abstract class HttpProvider implements ModelProvider {
 }
 
 export class OpenAIProvider extends HttpProvider {
+  constructor(config: AdapterConfig) {
+    super({ ...config, models: config.models.map(model => withReasoningCapabilities(model, config.apiProtocol ?? "responses")) });
+  }
   supportsNonThinkingCompaction(): boolean { return isOfficialDeepSeek(this.baseUrl); }
   private chatAdapter?: OpenAICompatibleProvider;
   private readonly continuations = new Map<string, { scope: string; responseId: string; prefix: string[] }>();
@@ -102,6 +111,7 @@ export class OpenAIProvider extends HttpProvider {
     }
     request = { ...request, tools: stableTools(request.tools) };
     const deepSeek = isOfficialDeepSeek(this.baseUrl);
+    const reasoningEffort = deepSeek && request.disableThinking ? "none" : this.reasoningEffort(request);
     if (deepSeek) request = { ...request, store: false };
     const input = [];
     for (const message of normalizeToolMessageSequence(request.messages)) {
@@ -123,7 +133,7 @@ export class OpenAIProvider extends HttpProvider {
       .flatMap(message => message.content.flatMap(part => part.type === "text" ? [part.text] : [])).join("\n\n");
     const fullInput = input.filter(item => !("role" in item) || item.role !== "system");
     const digest = (item: unknown) => createHash("sha256").update(canonicalJson(item)).digest("hex");
-    const scope = digest({ model: request.model.modelId, tools: request.tools, instructions, key: request.promptCacheKey });
+    const scope = digest({ model: request.model.modelId, reasoningEffort, tools: request.tools, instructions, key: request.promptCacheKey });
     const fingerprints = fullInput.map(digest);
     const previous = request.store ? this.continuations.get(request.runId) : undefined;
     const reusable = previous?.scope === scope && previous.prefix.length < fingerprints.length && previous.prefix.every((item, i) => fingerprints[i] === item);
@@ -134,7 +144,7 @@ export class OpenAIProvider extends HttpProvider {
       ...(reusable ? { previous_response_id: previous.responseId } : {}),
       ...(request.promptCacheKey ? { prompt_cache_key: request.promptCacheKey } : {}), stream: true, store: request.store,
       max_output_tokens: request.maxOutputTokens, parallel_tool_calls: request.parallelToolCalls,
-      ...(deepSeek && request.disableThinking ? { reasoning: { effort: "none" } } : {}),
+      ...(reasoningEffort !== undefined ? { reasoning: { effort: reasoningEffort } } : {}),
       tools: request.tools.map(tool => ({ type: "function", name: tool.name, description: tool.description, parameters: tool.inputSchema, strict: tool.strict ?? true })) };
     const send = (value: unknown) => this.request(this.baseUrl + "/responses", { method: "POST", headers: authHeaders(this.apiKey), signal, body: canonicalJson(value) });
     if (request.cacheDiagnostics) yield { type: "cache_diagnostic", diagnostic: this.cacheDiagnostics.observe(request, "responses", body, fullInput) };
@@ -198,12 +208,17 @@ export class OpenAIProvider extends HttpProvider {
 }
 
 export class AnthropicProvider extends HttpProvider {
+  constructor(config: AdapterConfig) {
+    super({ ...config, models: config.models.map(model => withReasoningCapabilities(model, "anthropic")) });
+  }
   override async health(): Promise<boolean> {
     return Boolean(this.apiKey);
   }
 
   async *stream(request: ModelRequest, signal: AbortSignal): AsyncIterable<ProviderStreamEvent> {
     request = { ...request, tools: stableTools(request.tools) };
+    const reasoningEffort = this.reasoningEffort(request);
+    if (reasoningEffort && !["low", "medium", "high", "max"].includes(reasoningEffort)) throw new Error(`Anthropic API 不支持推理等级 ${reasoningEffort}`);
     const system: string[] = [];
     const messages = [];
     for (const message of normalizeToolMessageSequence(request.messages)) {
@@ -223,6 +238,7 @@ export class AnthropicProvider extends HttpProvider {
         messages,
         max_tokens: request.maxOutputTokens,
         stream: true,
+        ...(reasoningEffort ? { output_config: { effort: reasoningEffort } } : {}),
         tools: request.tools.map((tool) => ({ name: tool.name, description: tool.description, input_schema: tool.inputSchema }))
     };
     if (request.cacheDiagnostics) yield { type: "cache_diagnostic", diagnostic: this.cacheDiagnostics.observe(request, "anthropic", body) };
@@ -261,12 +277,17 @@ export class AnthropicProvider extends HttpProvider {
 }
 
 export class GeminiProvider extends HttpProvider {
+  constructor(config: AdapterConfig) {
+    super({ ...config, models: config.models.map(model => withReasoningCapabilities(model, "gemini")) });
+  }
   override async health(): Promise<boolean> {
     return Boolean(this.apiKey);
   }
 
   async *stream(request: ModelRequest, signal: AbortSignal): AsyncIterable<ProviderStreamEvent> {
     request = { ...request, tools: stableTools(request.tools) };
+    const reasoningEffort = this.reasoningEffort(request);
+    if (reasoningEffort && !["minimal", "low", "medium", "high"].includes(reasoningEffort)) throw new Error(`Gemini API 不支持推理等级 ${reasoningEffort}`);
     const contents = [];
     let systemInstruction = "";
     const normalizedMessages = normalizeToolMessageSequence(request.messages);
@@ -283,7 +304,7 @@ export class GeminiProvider extends HttpProvider {
     }
     const body = {
       systemInstruction: { parts: [{ text: systemInstruction }] }, contents,
-      generationConfig: { maxOutputTokens: request.maxOutputTokens },
+      generationConfig: { maxOutputTokens: request.maxOutputTokens, ...(reasoningEffort ? { thinkingConfig: { thinkingLevel: reasoningEffort } } : {}) },
       tools: [{ functionDeclarations: request.tools.map(tool => ({ name: tool.name, description: tool.description, parametersJsonSchema: tool.inputSchema })) }]
     };
     if (request.cacheDiagnostics) yield { type: "cache_diagnostic", diagnostic: this.cacheDiagnostics.observe(request, "gemini", body) };
@@ -333,6 +354,10 @@ export class GeminiProvider extends HttpProvider {
 }
 
 export class OpenAICompatibleProvider extends HttpProvider {
+  constructor(config: AdapterConfig) {
+    const protocol = config.apiProtocol ?? (isOfficialDeepSeek(config.baseUrl) ? "responses" : "chat_completions");
+    super({ ...config, models: config.models.map(model => withReasoningCapabilities(model, protocol)) });
+  }
   supportsNonThinkingCompaction(): boolean { return isOfficialDeepSeek(this.baseUrl); }
   private responsesAdapter?: OpenAIProvider;
   async *stream(request: ModelRequest, signal: AbortSignal): AsyncIterable<ProviderStreamEvent> {
@@ -343,6 +368,15 @@ export class OpenAICompatibleProvider extends HttpProvider {
       return;
     }
     request = { ...request, tools: stableTools(request.tools) };
+    const deepSeek = isOfficialDeepSeek(this.baseUrl);
+    let reasoningEffort = this.reasoningEffort(request);
+    // GPT-6 Sol/Luna Chat function calls are available only in non-reasoning mode.
+    const requiresNonThinkingTools = /^gpt-6-(?:sol|luna)(?:-\d{4}-\d{2}-\d{2})?$/.test(request.model.modelId.toLowerCase()) && request.tools.length > 0;
+    if (requiresNonThinkingTools) {
+      if (reasoningEffort && reasoningEffort !== "none") throw new Error("此模型在 Chat Completions 中调用工具时只能使用 None 推理等级；其他等级请使用 Responses API。");
+      reasoningEffort = "none";
+    }
+    if (/^gpt-6(?:\.1-sol|-astra)(?:-\d{4}-\d{2}-\d{2})?$/.test(request.model.modelId.toLowerCase()) && request.tools.length > 0) throw new Error("此模型调用工具需要使用 Responses API。");
     const messages = [];
     for (const message of normalizeToolMessageSequence(request.messages)) {
       const content = [];
@@ -358,12 +392,15 @@ export class OpenAICompatibleProvider extends HttpProvider {
     const body = {
         model: request.model.modelId,
         messages,
-        max_tokens: request.maxOutputTokens,
+        ...(usesOpenAICompletionTokenLimit(request.model.modelId) ? { max_completion_tokens: request.maxOutputTokens } : { max_tokens: request.maxOutputTokens }),
         stream: true,
         stream_options: { include_usage: true },
         ...(request.promptCacheKey ? { prompt_cache_key: request.promptCacheKey } : {}),
         parallel_tool_calls: request.parallelToolCalls,
-        ...(isOfficialDeepSeek(this.baseUrl) && request.disableThinking ? { thinking: { type: "disabled" } } : {}),
+        ...(deepSeek && request.disableThinking ? { thinking: { type: "disabled" } } : reasoningEffort !== undefined ? {
+          reasoning_effort: reasoningEffort,
+          ...(deepSeek ? { thinking: { type: reasoningEffort === "none" ? "disabled" : "enabled" } } : {})
+        } : {}),
         tools: request.tools.map((tool) => ({ type: "function", function: { name: tool.name, description: tool.description, parameters: tool.inputSchema, strict: tool.strict ?? true } }))
     };
     if (request.cacheDiagnostics) yield { type: "cache_diagnostic", diagnostic: this.cacheDiagnostics.observe(request, "chat_completions", body) };

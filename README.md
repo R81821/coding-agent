@@ -2,7 +2,7 @@
 
 Harness Agent 是面向 Windows 11 x64 的本地优先软件开发 Agent。它把桌面端、`harness-agent` CLI、远程消息和定时任务连接到同一个独立 daemon，并以追加式 `RunEvent` 日志保存可恢复、可审计的运行状态。
 
-当前版本为 `1.4.5`。图片仅用于理解、OCR、截图分析和多图比较；不包含图片生成或编辑。附件、网页、项目指令和工具输出默认是不可信数据，不能覆盖当前用户请求或取得更高工具权限。
+当前版本为 `1.4.51`。图片仅用于理解、OCR、截图分析和多图比较；不包含图片生成或编辑。附件、网页、项目指令和工具输出默认是不可信数据，不能覆盖当前用户请求或取得更高工具权限。
 
 核心多轮循环使用 `@earendil-works/pi-agent-core`，负责流式消息、工具批次、轮次生命周期和取消传播。Harness 适配层继续掌管 provider 路由、确定性权限与审批、不可信数据标记、预算、事件落库、记忆和最终验证，因此 pi-agent 不能绕过现有安全边界。
 
@@ -14,6 +14,7 @@ Harness Agent 是面向 Windows 11 x64 的本地优先软件开发 Agent。它�
 - 受限文件读写、搜索、补丁、PTY 命令、Git diff、隔离浏览器 profile 与 Chromium DevTools 自动化。
 - AES-256-GCM 加密 SQLite/附件库，Argon2id 口令派生；长期记忆候选需显式批准。
 - 持久化多轮 Session：同一会话的每条消息保留独立 run，并在上下文预算内续接历史；会话按项目归档。
+- 最新未完成轮次暂停后可撤回：恢复发送前的文件状态并将原消息、附件放回输入框；完成轮次不可撤回。
 - 会话与项目支持软删除和设置页恢复；只有已删除会话可永久清理运行历史，长期记忆始终保留，项目删除绝不触碰磁盘仓库。
 - `SKILL.md` 哈希信任、`AGENTS.md` 首次预览与变更后重新确认。
 - 独立 Git worktree 子任务、最多 1–8 并发、脏工作区内部快照与非 Git 降级。
@@ -60,6 +61,8 @@ pnpm dev:cli chat D:\path\to\repo
 ```powershell
 pnpm dev
 ```
+
+开发启动会等待本次主进程、预加载构建和 Vite 服务全部就绪，再打开窗口，终端会显示准备进度。文件监听只覆盖源码，避免遍历依赖、安装包和构建缓存。后续构建会原子替换完整文件，避免加载写到一半的代码；主进程改动需退出应用并重新运行 `pnpm dev` 后生效（关闭窗口只会隐藏到托盘）。如需更换开发端口，可用 `HARNESS_DESKTOP_DEV_PORT` 指定端口（默认 5173）。
 
 桌面端可在“设置 → 兼容 API”中填写 OpenAI-compatible 服务的 `Base URL` 和模型 ID；API Key 仍在同页的 Windows 凭据中以 `OPENAI_COMPATIBLE_API_KEY` 保存。保存后 daemon 会自动重载，两项同时清空即可禁用该 provider。
 
@@ -134,6 +137,8 @@ Gateway 默认监听 `http://127.0.0.1:8787`。管理员先调用 `/admin/provid
 默认数据位于 `%LOCALAPPDATA%\HarnessAgent`。开发和自动化环境可通过 `HARNESS_APP_DATA_PATH` 覆盖；远程 Telegram/飞书任务必须显式设置 `HARNESS_REMOTE_WORKSPACE`。本地数据库、事件、记忆和附件均以保险库主密钥加密。
 
 会话创建、上下文续接、删除/恢复与永久删除边界见 [Session 生命周期](./docs/session-lifecycle.md)。
+
+暂停后的消息撤回与文件恢复见 [聊天撤回](./docs/conversation-withdrawal.md)。
 
 安全模型、威胁边界和密钥处理见 [SECURITY.md](./SECURITY.md)。
 

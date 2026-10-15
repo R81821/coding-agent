@@ -1,5 +1,7 @@
 # 输入缓存优化说明
 
+当前上下文压缩行为见[上下文压缩与摘要](context-compaction.md)。下方 2026-09-27 升级记录中的摘要固定上限和失败后使用程序摘要属于历史行为：当前由提示词决定摘要长度，不设摘要专用的 token、字符或条目上限；生成失败时保留原历史并停止，不提交简化摘要替换。
+
 本次参考 Hermes Agent 的稳定提示词分层、冻结工作区快照和逻辑缓存身份机制，将动态状态移到消息尾部。Hermes 源目录仅用于阅读，未作修改。
 
 ## 七项实现
@@ -12,13 +14,13 @@
 | 按需读代码 | 提示先 search_text，再 read_file、read_range；read_file 默认最多 16 KiB，截断后提供范围读取指引；read_range 为一基行号、闭区间，最多 500 行及 64 KiB | `packages/tools/src/builtins.ts` |
 | 稳定缓存 key | 主循环请求使用应用版本和规范化仓库路径身份的哈希，避免将 run ID 或时间加入 key；OpenAI 与兼容适配器传递 prompt_cache_key | `packages/core/src/prompt-cache.ts`、`packages/providers/src/adapters.ts` |
 | Responses 连续响应 | 同一运行内保存完成响应 ID，核对已有上下文前缀后仅发送新增输入；每次重发稳定 instructions；历史、模型或工具改变时重建响应链；过期 ID 回退一次完整本地上下文 | `packages/providers/src/adapters.ts` |
-| 命中率统计 | 用量事件保存 cachedInputTokens，界面显示输入、命中、未命中和统计覆盖；兼容 OpenAI、DeepSeek、Anthropic、Gemini 的返回字段 | `packages/protocol/src/prompt-cache.ts`、`apps/desktop/src/components/PromptCacheStats.tsx` |
+| 命中率统计 | 用量事件保存 cachedInputTokens，会话唯一面板一行显示累计总输入缓存命中率、总输入 token、总输出 token 和压缩次数，并提供当前会话上下文占用进度条；兼容 OpenAI、DeepSeek、Anthropic、Gemini 的返回字段 | `packages/protocol/src/prompt-cache.ts`、`apps/desktop/src/components/SessionCacheStats.tsx` |
 
 ## 使用与边界
 
 - Profile 中的“Responses 连续响应”默认启用，使用服务端保存的响应上下文；关闭后使用本地完整历史和 store=false。其他 API 不使用 previous_response_id。
 - 响应链仅限当前运行；重启、上下文压缩或恢复时，允许重新发送本地完整上下文。失败、不完整或意外结束的流不会成为下一轮续接依据。
-- 命中率按有缓存字段的请求计算：sum(cachedInputTokens) / sum(inputTokens)。不平均每次请求的百分比。未返回缓存字段的请求不作为零命中，另行显示统计覆盖。
+- 命中率按有缓存字段的请求计算：sum(cachedInputTokens) / sum(inputTokens)。不平均每次请求的百分比。未返回缓存字段的请求不作为零命中；精简面板不再显示统计覆盖明细。
 - prompt_cache_key 和 previous_response_id 都不保证缓存命中。实际表现仍取决于服务端支持、前缀长度、缓存保留和请求间隔。连续响应也不意味着历史输入免费。
 - 测试使用本地模拟响应，未调用真实模型，因此当前没有真实优化前后命中率对比。旧事件缺少缓存字段时显示未知；更新后正常运行即可收集数据。
 - 成本估算继续沿用原有输入单价，未将缓存价格折扣写成确定节省金额。

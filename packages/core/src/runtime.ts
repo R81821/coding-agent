@@ -3,9 +3,9 @@ import { recoverTaskArtifacts } from "./task-artifact-recovery.js";
 import { captureGraphTaskBaseline, executeGraphTasks, graphTaskChanges, graphTaskScopeViolations, type GraphExecutionTask } from "./graph-task-execution.js";
 import { join } from "node:path";
 import { homedir } from "node:os";
-import { newId, nowIso, type AgentEvent, type Profile, type RunSpec, type TaskSpec } from "@harness/protocol";
+import { newId, nowIso, type AgentEvent, type CurrentModel, type Profile, type ReasoningEffort, type RunSpec, type SessionRecord, type TaskSpec } from "@harness/protocol";
 import { EncryptedBlobStore, ensureV2Storage, HarnessDatabase, VaultCrypto, type StorageProgress } from "@harness/persistence";
-import { createConfiguredProviders, ParallelSearchProvider } from "@harness/providers";
+import { createConfiguredProviders, ModelRouter, ParallelSearchProvider } from "@harness/providers";
 import { createDefaultToolRegistry, createWebSearchTool, type ToolDefinition } from "@harness/tools";
 import { MemoryService, PluginService, SkillService, TaskScheduler, WorktreeManager } from "@harness/extensions";
 import { HarnessEngine } from "./engine.js";
@@ -19,6 +19,8 @@ import { RunReviewService } from "./run-review.js";
 import { McpStore, McpService, McpOAuthManager } from "@harness/extensions";
 
 export interface HarnessRuntime {
+  currentModel(profileId: string, needsVision?: boolean): Promise<CurrentModel>;
+  setSessionReasoning(sessionId: string, effort: ReasoningEffort | null, profileId?: string, needsVision?: boolean): Promise<SessionRecord>;
   providerIds: string[];
   engine: HarnessEngine;
   database: HarnessDatabase;
@@ -52,6 +54,7 @@ export async function createRuntime(options: { appDataPath?: string; passphrase:
     attachmentResolver: async (attachment) => ({ mimeType: attachment.mimeType, base64: (await blobs.read(attachment)).toString("base64") })
   });
   const profiles = loadProfilesWithBudgetMigration(database);
+  const modelRouter = new ModelRouter(providers);
   const memory = new MemoryService(database);
   const telemetry = configureTelemetry(profiles.values());
   const skills = new SkillService(join(appData, "skills"));
@@ -239,6 +242,30 @@ export async function createRuntime(options: { appDataPath?: string; passphrase:
   scheduler.start();
   let closing: Promise<void> | undefined;
   return {
+    async currentModel(profileId, needsVision = false) {
+      try {
+        const profile = profiles.get(profileId);
+        if (!profile) throw new Error(`Unknown profile: ${profileId}`);
+        const route = await modelRouter.route(profile, { needsVision, needsTools: true, needsStructuredOutput: false, estimatedInputTokens: 512, estimatedOutputTokens: 8192 });
+        return { model: route.model };
+      } catch (error) { return { model: null, error: (error instanceof Error ? error.message : String(error)).slice(0, 600) }; }
+    },
+    async setSessionReasoning(sessionId, reasoningEffort, profileId, needsVision = false) {
+      const available = () => {
+        const detail = database.getSessionDetail(sessionId);
+        if (!detail || detail.session.deletedAt) throw new Error("会话不存在");
+        if (detail.runs.some(run => ["queued", "planning", "running", "verifying", "waiting_approval", "paused"].includes(run.status))) throw new Error("请等待当前任务结束后再更改推理等级");
+        return detail.session;
+      };
+      const session = available();
+      const selectedProfileId = profileId ?? session.profileId;
+      const profile = profiles.get(selectedProfileId);
+      if (!profile) throw new Error(`Unknown profile: ${selectedProfileId}`);
+      if (reasoningEffort !== null) await modelRouter.route(profile, { needsVision, needsTools: true, needsStructuredOutput: false, estimatedInputTokens: 512, estimatedOutputTokens: 8192, reasoningEffort });
+      const current = available();
+      if (current.profileId !== session.profileId) throw new Error("会话 Profile 已变更，请重新选择推理等级");
+      return database.touchSession(sessionId, { profileId: selectedProfileId, reasoningEffort, updatedAt: nowIso() });
+    },
     providerIds: providers.map((provider) => provider.id),
     engine,
     database,

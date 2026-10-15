@@ -60,16 +60,18 @@ export function ConversationProcessSummary({
   durationMs,
   activeLabel = "运行中",
   preview = false,
+  stateKey = "process",
   children,
 }: {
   completed: boolean;
   durationMs: number;
   activeLabel?: string;
   preview?: boolean;
+  stateKey?: string;
   children: React.ReactNode | (() => React.ReactNode);
 }) {
-  const [open, setOpen] = useRowState("processOpen", !completed);
-  const [lastCompleted, setLastCompleted] = useRowState("processCompleted", completed);
+  const [open, setOpen] = useRowState(`${stateKey}Open`, !completed);
+  const [lastCompleted, setLastCompleted] = useRowState(`${stateKey}Completed`, completed);
 
   useEffect(() => {
     if (lastCompleted !== completed) { setOpen(!completed); setLastCompleted(completed); }

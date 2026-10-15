@@ -112,7 +112,11 @@ async function dispatch(request: DaemonRequest, target: HarnessRuntime): Promise
   if (isMcpRequest(request)) return dispatchMcp(request, target);
   switch (request.method) {
     case "health":
-      return { status: "ok", version: "1.4.5", activeRuns: "available", providerIds: target.providerIds, connectors: [...connectors.keys()] };
+      return { status: "ok", version: "1.4.51", activeRuns: "available", providerIds: target.providerIds, connectors: [...connectors.keys()] };
+    case "model.current":
+      return target.currentModel(request.params.profileId, request.params.needsVision);
+    case "session.reasoning":
+      return target.setSessionReasoning(request.params.sessionId, request.params.reasoningEffort, request.params.profileId, request.params.needsVision);
     case "sessions.create":
       return target.database.createSession(request.params);
     case "sessions.list":
@@ -131,6 +135,7 @@ async function dispatch(request: DaemonRequest, target: HarnessRuntime): Promise
       return target.database.touchSession(session.id, { skillSelection: [...new Set(request.params.skillSelection)], updatedAt: nowIso() });
     }
     case "session.delete": {
+      target.engine.assertSessionMutationAllowed(request.params.sessionId);
       const session = target.database.deleteSession(request.params.sessionId);
       await target.review.deleteSession(request.params.sessionId);
       return session;
@@ -141,14 +146,18 @@ async function dispatch(request: DaemonRequest, target: HarnessRuntime): Promise
       return session;
     }
     case "session.purge": {
+      target.engine.assertSessionMutationAllowed(request.params.sessionId);
       const result = target.database.purgeSession(request.params.sessionId);
       await target.review.deleteSession(request.params.sessionId);
       return result;
     }
     case "projects.list":
       return target.database.listProjects(request.params.deleted);
-    case "project.delete":
+    case "project.delete": {
+      const project = [...target.database.listProjects(false), ...target.database.listProjects(true)].find(item => item.id === request.params.projectId);
+      if (project) target.engine.assertWorkspaceMutationAllowed(project.workspacePath);
       return target.database.deleteProject(request.params.projectId);
+    }
     case "project.restore":
       return target.database.restoreProject(request.params.projectId);
     case "run.start": {
@@ -183,8 +192,14 @@ async function dispatch(request: DaemonRequest, target: HarnessRuntime): Promise
       return { cancelled: target.engine.cancel(request.params.runId) };
     case "run.pause":
       return { pausing: target.engine.pause(request.params.runId) };
-    case "run.steer":
-      return target.engine.steer(request.params.runId, request.params.text);
+    case "run.withdraw":
+      return target.engine.withdraw(request.params.runId, request.params.messageId);
+    case "run.steer": {
+      if (!request.params.resumePaused) return target.engine.steer(request.params.runId, request.params.text);
+      const previous = target.database.getRun(request.params.runId);
+      if (!previous) throw new Error(`Unknown run: ${request.params.runId}`);
+      return target.engine.steerAndResume(request.params.runId, request.params.text, profileFor(target, previous.spec.profileId));
+    }
     case "run.events":
       return target.database.listEvents(request.params.runId, request.params.afterSequence);
     case "plan.get":
@@ -290,6 +305,8 @@ async function dispatch(request: DaemonRequest, target: HarnessRuntime): Promise
       return target.projectTrust.inspect(request.params.workspacePath);
     case "project.trust":
       return target.projectTrust.trust(request.params.workspacePath, request.params.files);
+    case "project.scaffold":
+      return target.projectTrust.scaffold(request.params.workspacePath);
     case "connectors.pairing":
       if (!connectors.has(request.params.connector)) throw new Error(`${request.params.connector} is not configured`);
       return { connector: request.params.connector, code: pairing.create(request.params.connector), expiresInSeconds: 600 };

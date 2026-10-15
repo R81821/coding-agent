@@ -228,7 +228,7 @@ describe("run control", { timeout: 20_000 }, () => {
     h.engine.start(h.spec, h.profile);
     await waitUntil(() => seen.length >= 4);
 
-    expect(h.engine.steer(h.spec.id, "Stop reading a.txt; look at b.txt instead.")).toEqual({ queued: 1 });
+    expect(h.engine.steer(h.spec.id, "Stop reading a.txt; look at b.txt instead.")).toMatchObject({ accepted: true, queued: 1 });
     // The run is mid-request; the correction is delivered at the next turn boundary.
     expect(seen.some((text) => text.includes("Stop reading a.txt"))).toBe(false);
     gate.open();
@@ -241,6 +241,43 @@ describe("run control", { timeout: 20_000 }, () => {
     expect(delivered).toHaveLength(1);
     h.engine.cancel(h.spec.id);
     await done;
+  });
+
+  it("hands a project's trusted conventions to the model", async () => {
+    // End to end for the scaffold flow: write the built-in conventions, approve them, and confirm
+    // they actually reach the request — not merely that a file appeared on disk.
+    const seen: string[] = [];
+    const h = await harness(gated(seen, 0, async () => {}));
+    const trust = new ProjectTrustService(h.database);
+    const written = await trust.scaffold(h.root);
+    trust.trust(h.root, [{ path: written.path, sha256: written.sha256 }]);
+
+    const done = waitForResult(h.engine, h.spec.id);
+    h.engine.start(h.spec, h.profile);
+    await done;
+
+    expect(seen.some((text) => text.includes("Trusted project instructions:"))).toBe(true);
+    expect(seen.some((text) => text.includes("项目约定"))).toBe(true);
+  });
+
+  it("records how long each checkpoint took and how large it was", async () => {
+    // A run writes one checkpoint per tool result. Without these two numbers the cost of that is
+    // invisible, and there is no way to tell whether the store needs a delta.
+    const seen: string[] = [];
+    const h = await harness(gated(seen, 1, async () => {}));
+    const done = waitForResult(h.engine, h.spec.id);
+    h.engine.start(h.spec, h.profile);
+    await done;
+
+    const saved = h.database.listEvents(h.spec.id).filter((event) => event.type === "checkpoint_saved");
+    expect(saved.length).toBeGreaterThan(0);
+    // An early checkpoint can legitimately precede any message; a later one must carry the transcript.
+    expect(saved.some((event) => event.type === "checkpoint_saved" && (event.messages ?? 0) > 0)).toBe(true);
+    for (const event of saved) {
+      if (event.type !== "checkpoint_saved") continue;
+      expect(event.messages).toBeGreaterThanOrEqual(0);
+      expect(event.durationMs).toBeGreaterThanOrEqual(0);
+    }
   });
 
   it("reports only the outstanding work when a paused run already streamed its report", async () => {
@@ -396,7 +433,7 @@ describe("run control", { timeout: 20_000 }, () => {
   it("refuses steering and pause for a run that is not active", async () => {
     const h = await harness(gated([], 0, async () => {}));
     expect(h.engine.pause("missing-run")).toBe(false);
-    expect(() => h.engine.steer("missing-run", "hello")).toThrow(/not active/);
+    expect(() => h.engine.steer("missing-run", "hello")).toThrow(/Unknown run/);
   });
 
   it("rejects an empty or oversized steering message", async () => {

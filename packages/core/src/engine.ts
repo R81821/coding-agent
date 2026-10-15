@@ -18,23 +18,28 @@ import type { ToolDefinition } from "@harness/tools";
 import { AGENT_VERSION, promptCacheKey, repositoryBaseSnapshot } from "./prompt-cache.js";
 import { EventEmitter } from "node:events";
 import { createHash } from "node:crypto";
+import { realpathSync } from "node:fs";
 import { isAbsolute, relative, resolve } from "node:path";
 import { SpanStatusCode, trace } from "@opentelemetry/api";
 import type {
   AgentEvent,
   AgentEventInput,
+  CompactionRecord,
   ModelMessage,
   PlanSpec,
   Profile,
   RunCheckpoint,
   RunSpec,
+  RunSteerResult,
+  SteeringMessage,
   RunStatus,
   RunStopInfo,
+  RunWithdrawal,
   ToolCall,
   VerificationRun,
 } from "@harness/protocol";
 import { newId, nowIso, TaskExecutionSchema, type TaskExecution } from "@harness/protocol";
-import type { ModelProvider } from "@harness/providers";
+import type { ModelProvider, RouteDecision } from "@harness/providers";
 import { ModelRouter } from "@harness/providers";
 import type { MemoryService, SkillService, McpService } from "@harness/extensions";
 import { McpUncertainCallError, prepareMcpCapabilities, type RunCapabilityLease } from "./mcp-capabilities.js";
@@ -43,10 +48,13 @@ import type { EncryptedBlobStore, HarnessDatabase } from "@harness/persistence";
 import type { ToolRegistry } from "@harness/tools";
 import { confinedPath } from "@harness/tools";
 import { ApprovalBroker } from "./approvals.js";
+import { McpInteractionBroker, redactMcpValue } from "./mcp-interactions.js";
+import { mcpSamplingMessages, sampleMcp } from "./mcp-sampling.js";
+import { estimateRequestInputTokens } from "./generation-policy.js";
 import { buildInitialMessages } from "./context.js";
 import { runWithPiAgent } from "./pi-agent-bridge.js";
 import { runtimeStopSummary, stripRuntimeSummaryMessages } from "./runtime-messages.js";
-import { buildSessionContext } from "./session-context.js";
+import { buildSessionContext, normalizeSessionWorkspace, SESSION_CONTEXT_VERSION } from "./session-context.js";
 import { BudgetExceededError, budgetStopMessage, buildRunStop, pendingWork } from "./run-stop.js";
 import { RunProgress } from "./run-progress.js";
 import { CodingWorkflow, compactObservation } from "./coding-workflow.js";
@@ -157,6 +165,7 @@ interface ActiveRun {
   inputTokens: number;
   outputTokens: number;
   transcript: ModelMessage[];
+  sessionContextVersion?: RunCheckpoint["sessionContextVersion"];
   workspaceSnapshot?: WorkspaceSnapshot;
   workspaceDiff?: WorkspaceDiff;
   verifiedSnapshot?: WorkspaceSnapshot | undefined;
@@ -167,8 +176,12 @@ interface ActiveRun {
   repairAttemptsUsed: number;
   /** Set by pause(); the loop stops at the next turn boundary and the run settles as paused. */
   pauseRequested: boolean;
+  /** The pause end snapshot is frozen before publishing paused; settlement must not refreeze it. */
+  pauseSnapshotFinalized?: boolean;
   /** User messages typed while the run is active, delivered at the next turn boundary. */
-  steering: string[];
+  steering: SteeringMessage[];
+  /** Pumped into pi but not acknowledged by a durable request transcript yet. */
+  steeringInFlight: Set<string>;
   steeringVersion: number;
 }
 
@@ -176,12 +189,27 @@ interface ActiveRun {
 const MAX_STEERING_MESSAGES = 8;
 export const MAX_STEERING_CHARS = 4_000;
 
+function workspacesOverlap(left: string, right: string): boolean {
+  const canonical = (value: string) => {
+    try { return realpathSync.native(value); }
+    catch { return resolve(value); }
+  };
+  const a = normalizeSessionWorkspace(canonical(left)), b = normalizeSessionWorkspace(canonical(right));
+  return a === b || a.startsWith(`${b}/`) || b.startsWith(`${a}/`);
+}
+
 export class HarnessEngine extends EventEmitter {
   readonly approvals: ApprovalBroker;
+  readonly mcpInteractions = new McpInteractionBroker();
   private readonly permission = new PermissionEngine();
   private readonly router: ModelRouter;
   private readonly active = new Map<string, ActiveRun>();
   private readonly executions = new Map<string, Promise<void>>();
+  /** Concurrent accepted messages share only the resume action, never their durable input. */
+  private readonly steeringResumptions = new Map<string, Promise<{ resumed: boolean; resumeError?: string }>>();
+  private readonly steeringSubmissions = new Map<string, Promise<void>>();
+  private readonly withdrawals = new Map<string, { sessionId: string; workspacePath: string; root?: string; runIds: Set<string> }>();
+  private readonly withdrawalSettlements = new Set<Promise<void>>();
   private closing: Promise<void> | undefined;
   private readonly planDecisions = new Map<string, (decision: { approved: boolean; actor: string; feedback?: string }) => void>();
   private readonly tracer = trace.getTracer("harness-agent", "2.0.0");
@@ -194,11 +222,16 @@ export class HarnessEngine extends EventEmitter {
 
   start(spec: RunSpec, profile: Profile, recovery?: RunCheckpoint): void {
     if (this.closing) throw new Error("Engine is closed");
+    this.assertNoWithdrawal(spec);
+    if (this.deps.database.isRunWithdrawn(spec.id)) throw new Error("已撤回的对话不能重新启动");
     if (this.active.has(spec.id))
       throw new Error(`Run is already active: ${spec.id}`);
     const session = this.deps.database.getSessionDetail(spec.sessionId)?.session;
+    const parent = spec.parentRunId ? this.active.get(spec.parentRunId)?.spec ?? this.deps.database.getRun(spec.parentRunId)?.spec : undefined;
+    // Freeze effort independently of routing; null keeps the provider's default effort.
+    const reasoningEffort = spec.reasoningEffort !== undefined ? spec.reasoningEffort : parent ? parent.reasoningEffort ?? null : recovery ? null : session?.reasoningEffort ?? null;
     const generationPolicy = spec.generationPolicy ?? (spec.parentRunId ? this.active.get(spec.parentRunId)?.spec.generationPolicy : undefined) ?? profile.generationPolicy;
-    spec = { ...spec, generationPolicy: { maxOutputTokens: resolveMainOutputTokens(generationPolicy), reviewMaxOutputTokens: resolveReviewOutputLimit(generationPolicy) }, skillSelection: [...(spec.skillSelection ?? session?.skillSelection ?? profile.skillIds)] };
+    spec = { ...spec, reasoningEffort, generationPolicy: { maxOutputTokens: resolveMainOutputTokens(generationPolicy), reviewMaxOutputTokens: resolveReviewOutputLimit(generationPolicy) }, skillSelection: [...(spec.skillSelection ?? session?.skillSelection ?? profile.skillIds)] };
     this.deps.database.saveRun(spec, "queued");
     if (session && !session.deletedAt) this.deps.database.touchSession(spec.sessionId, {
       profileId: spec.profileId,
@@ -227,6 +260,7 @@ export class HarnessEngine extends EventEmitter {
       repairAttemptsUsed: 0,
       pauseRequested: false,
       steering: [],
+      steeringInFlight: new Set(),
       steeringVersion: 0,
     };
     this.active.set(spec.id, state);
@@ -245,7 +279,11 @@ export class HarnessEngine extends EventEmitter {
         state.sequence = Math.max(recovery.sequence + 1, this.deps.database.listEvents(spec.id).length);
       }
       state.verificationProgress = recovery.verificationProgress;
+      state.sessionContextVersion = recovery.sessionContextVersion;
       state.transcript = stripRuntimeSummaryMessages(structuredClone(recovery.transcript), this.recoveryUserTexts(spec));
+      const retainedSteering = new Set(state.transcript.flatMap(message => message.steeringId ? [message.steeringId] : []));
+      state.steering = structuredClone(recovery.pendingSteering ?? []).filter(message => !retainedSteering.has(message.id));
+      state.steeringVersion = state.steering.length;
       for (const call of recovery.pendingNonIdempotentToolCalls) state.transcript.push({ role: "tool", content: [{ type: "tool_result", toolCallId: call.id, output: { error: "Previous execution outcome unknown. Do not replay; inspect current state first." }, trust: "untrusted_tool" }] });
       state.transcript.push({ role: "user", content: [{ type: "text", trust: "user_request", text: "Continue the original task's remaining requirements using the restored plan." + (spec.continuation?.note ? "\nAdditional instruction: " + spec.continuation.note : "") }] });
     }
@@ -285,7 +323,7 @@ export class HarnessEngine extends EventEmitter {
     return [spec.request, spec.continuation?.note ?? "", ...this.evidenceRunIds(spec).flatMap(id => {
       const original = this.deps.database.getRun(id)?.spec;
       return [original?.request ?? "", original?.continuation?.note ?? "",
-        ...this.deps.database.listEvents(id).flatMap(event => event.type === "steering_delivered" ? [event.text] : [])];
+        ...this.deps.database.listEvents(id).flatMap(event => event.type === "steering_delivered" || event.type === "steering_submitted" ? [event.text] : [])];
     })];
   }
 
@@ -315,6 +353,7 @@ export class HarnessEngine extends EventEmitter {
     if (this.active.has(runId)) throw new Error(`Run is already active: ${runId}`);
     const stored = this.deps.database.getRun(runId);
     if (!stored) throw new Error(`Unknown run: ${runId}`);
+    this.assertNoWithdrawal(stored.spec);
     if (stored.status === "completed" || stored.status === "cancelled") throw new Error(`Run cannot be resumed from ${stored.status}: ${runId}`);
     const checkpoint = this.deps.database.getLatestCheckpoint(runId);
     if (!checkpoint) throw new Error(`Run has no recoverable checkpoint: ${runId}`);
@@ -340,14 +379,16 @@ export class HarnessEngine extends EventEmitter {
       inputTokens: checkpoint.usage.inputTokens,
       outputTokens: checkpoint.usage.outputTokens,
       transcript,
+      sessionContextVersion: checkpoint.sessionContextVersion,
       plan: this.deps.database.getPlanForRun(runId),
       pendingNonIdempotent: new Map(),
       hadSideEffect: checkpoint.toolCalls > 0,
       consecutiveToolErrors: 0,
       repairAttemptsUsed: checkpoint.repairAttemptsUsed ?? this.deps.database.listEvents(runId).filter(event => event.type === "repair_started").length,
       pauseRequested: false,
-      steering: [],
-      steeringVersion: 0,
+      steering: structuredClone(checkpoint.pendingSteering ?? []).filter(message => !transcript.some(retained => retained.steeringId === message.id)),
+      steeringInFlight: new Set(),
+      steeringVersion: checkpoint.pendingSteering?.length ?? 0,
     };
     this.active.set(runId, state);
     this.launch(stored.spec, profile, state, checkpoint);
@@ -372,7 +413,8 @@ export class HarnessEngine extends EventEmitter {
       // Set the gate before abort handlers or result subscribers can start another run.
       this.closing = Promise.resolve().then(async () => {
         for (const run of this.active.values()) run.controller.abort(new Error("Runtime is shutting down"));
-        const settled = await Promise.allSettled(this.executions.values());
+        this.mcpInteractions.close();
+        const settled = await Promise.allSettled([...this.executions.values(), ...this.steeringResumptions.values(), ...this.steeringSubmissions.values(), ...this.withdrawalSettlements]);
         const failures = settled.filter(result => result.status === "rejected");
         if (failures.length) throw new AggregateError(failures.map(result => result.reason), "Run shutdown failed");
       });
@@ -406,12 +448,110 @@ export class HarnessEngine extends EventEmitter {
     const run = this.active.get(runId);
     if (!run) return false;
     run.pauseRequested = true;
+    this.mcpInteractions.cancelRun(runId);
+    this.approvals.denyRun(runId);
     for (const child of this.active.values()) if (child.spec.parentRunId === runId) this.pause(child.spec.id);
     // A run parked on plan approval never reaches a turn boundary on its own, so the pending
     // decision is released here. Declining it unblocks the loop, which then stops at the pause flag
     // instead of hanging on a dialog the user has already dismissed.
     this.releasePlanDecisions(runId);
     return true;
+  }
+
+  /** A withdrawal restores the saved workspace first; failed/conflicting rollback leaves the chat intact. */
+  async withdraw(runId: string, messageId?: string): Promise<RunWithdrawal> {
+    if (this.closing) throw new Error("Engine is closed");
+    const initial = this.withdrawalCandidate(runId);
+    this.assertWithdrawalTarget(runId, messageId);
+    this.assertNoWithdrawal(initial.run.spec);
+    const review = this.deps.review;
+    if (!review) throw new Error("本轮没有可恢复的文件快照，无法安全撤回");
+    const lock = { sessionId: initial.run.spec.sessionId, workspacePath: initial.run.spec.workspacePath, runIds: new Set(initial.runs.map(run => run.spec.id)) } as { sessionId: string; workspacePath: string; root?: string; runIds: Set<string> };
+    this.withdrawals.set(runId, lock);
+    let release!: () => void;
+    const settlement = new Promise<void>(resolveSettlement => { release = resolveSettlement; });
+    this.withdrawalSettlements.add(settlement);
+    try {
+      // The status/result event precedes review capture and child/MCP cleanup. Those must finish
+      // before a frozen pause snapshot can be restored or the conversation can be removed.
+      await Promise.all(initial.runs.map(run => this.waitForSettlement(run.spec.id)));
+      const settled = this.withdrawalCandidate(runId);
+      lock.runIds = new Set(settled.runs.map(run => run.spec.id));
+      lock.root = await review.withdrawalRoot(runId);
+      this.assertWithdrawalWorkspaceIdle(lock.root, lock.runIds);
+      const commit = () => {
+        if (this.closing) throw new Error("运行时正在关闭，撤回尚未提交");
+        this.withdrawalCandidate(runId);
+        this.assertWithdrawalTarget(runId, messageId);
+        this.assertWithdrawalWorkspaceIdle(lock.root!, lock.runIds);
+        // There is no await between the final lifecycle validation and this transaction. The
+        // rollback service compensates filesystem restoration if validation/storage fails here.
+        return messageId ? this.deps.database.withdrawLatestSteering(runId, messageId) : this.deps.database.withdrawLatestRun(runId);
+      };
+      if (messageId) {
+        const boundary = this.deps.database.getSteeringWithdrawal(runId, messageId)!;
+        const previousChildren = new Set(boundary.descendantRunIds);
+        return await review.withdrawMessage(runId, messageId, settled.runs.filter(run => run.spec.id === runId || !previousChildren.has(run.spec.id)).map(run => run.spec), commit);
+      }
+      return await review.withdraw(runId, settled.runs.map(run => run.spec), commit);
+    } finally {
+      this.withdrawals.delete(runId);
+      this.withdrawalSettlements.delete(settlement);
+      release();
+    }
+  }
+
+  private assertWithdrawalTarget(runId: string, messageId?: string): void {
+    const events = this.deps.database.listEvents(runId);
+    const submitted = new Set(events.flatMap(event => event.type === "steering_submitted" ? [event.messageId] : []));
+    const latest = events.findLast((event): event is Extract<AgentEvent, { type: "steering_submitted" | "steering_delivered" }> =>
+      event.type === "steering_submitted" || event.type === "steering_delivered" && (!event.messageId || !submitted.has(event.messageId)));
+    if (!messageId) {
+      if (latest) throw new Error("请撤回最新消息，不能连同此前对话一起撤回");
+      return;
+    }
+    if (latest?.messageId !== messageId || !this.deps.database.getSteeringWithdrawal(runId, messageId))
+      throw new Error("只能撤回有恢复点的最新消息；旧消息无法安全撤回");
+  }
+
+  private withdrawalCandidate(runId: string) {
+    const run = this.deps.database.getRun(runId);
+    if (!run || run.spec.parentRunId || run.status !== "paused") throw new Error("只能撤回已暂停的最新一轮对话");
+    if (!this.deps.database.getSessionView(run.spec.sessionId, 1)) throw new Error("会话不存在或已删除");
+    const detail = this.deps.database.getSessionDetail(run.spec.sessionId);
+    const latest = detail?.runs.filter(item => !item.spec.parentRunId).at(-1);
+    if (latest?.spec.id !== runId) throw new Error("只能撤回最新一轮对话");
+    const runs = this.deps.database.getRunDescendants(runId);
+    const liveStatuses = ["queued", "planning", "running", "waiting_approval", "verifying"];
+    if (runs.some(item => liveStatuses.includes(item.status)
+      || liveStatuses.includes(this.active.get(item.spec.id)?.status ?? ""))
+      || this.active.has(runId) && this.active.get(runId)?.status !== "paused") throw new Error("本轮仍在运行，请等待暂停完成");
+    return { run, runs };
+  }
+
+  private assertNoWithdrawal(spec: RunSpec): void {
+    for (const lock of this.withdrawals.values()) {
+      if (lock.sessionId === spec.sessionId || lock.runIds.has(spec.id)
+        || spec.parentRunId && lock.runIds.has(spec.parentRunId)
+        || workspacesOverlap(lock.root ?? lock.workspacePath, spec.workspacePath)) throw new Error("正在撤回对话，请等待文件恢复完成后再发送或继续");
+    }
+  }
+
+  /** Session/project deletion must not remove rollback backups while restoration is in progress. */
+  assertSessionMutationAllowed(sessionId: string): void {
+    if ([...this.withdrawals.values()].some(lock => lock.sessionId === sessionId)) throw new Error("正在撤回对话，请等待文件恢复完成后再删除会话");
+    const session = this.deps.database.getSessionDetail(sessionId)?.session;
+    if (session) this.assertWorkspaceMutationAllowed(session.workspacePath);
+  }
+
+  assertWorkspaceMutationAllowed(workspacePath: string): void {
+    if ([...this.withdrawals.values()].some(lock => workspacesOverlap(lock.root ?? lock.workspacePath, workspacePath))) throw new Error("正在撤回对话，请等待文件恢复完成后再删除项目或会话");
+  }
+
+  private assertWithdrawalWorkspaceIdle(root: string, ownRunIds: Set<string>): void {
+    for (const { spec } of this.active.values()) {
+      if (!ownRunIds.has(spec.id) && workspacesOverlap(root, spec.workspacePath)) throw new Error("工作区还有其他运行中的任务，无法安全撤回");
+    }
   }
 
   isActive(runId: string): boolean {
@@ -443,7 +583,9 @@ export class HarnessEngine extends EventEmitter {
 
   private async settleRun(runId: string): Promise<void> {
     try {
-      await this.deps.review?.finish(runId, this.deps.database.getRun(runId)?.status === "paused");
+      const paused = this.deps.database.getRun(runId)?.status === "paused";
+      if (!paused || !this.active.get(runId)?.pauseSnapshotFinalized)
+        await this.deps.review?.finish(runId, paused);
     } catch (error) {
       process.stderr.write(`Review capture failed for ${runId}: ${error instanceof Error ? error.message : String(error)}\n`);
     } finally {
@@ -462,23 +604,141 @@ export class HarnessEngine extends EventEmitter {
    * correct a plan mid-flight without discarding the work already done. Steering never grants
    * permissions and never bypasses the completion gate: it is another user turn, nothing more.
    */
-  steer(runId: string, text: string): { queued: number } {
+  steer(runId: string, text: string): RunSteerResult {
+    return this.queueSteering(runId, text);
+  }
+
+  private queueSteering(runId: string, text: string, options: { messageId?: string; withdrawable?: true; locked?: boolean } = {}): RunSteerResult {
+    if (this.closing) throw new Error("Engine is closed");
+    const stored = this.deps.database.getRun(runId);
+    if (!stored) throw new Error(`Unknown run: ${runId}`);
+    if (!options.locked) this.assertNoWithdrawal(stored.spec);
+    if (this.deps.database.isRunWithdrawn(runId)) throw new Error("已撤回的对话不能接收补充说明");
     const run = this.active.get(runId);
-    if (!run) throw new Error(`Run is not active: ${runId}`);
     const trimmed = text.trim();
     if (!trimmed) throw new Error("Steering message is empty");
     if (trimmed.length > MAX_STEERING_CHARS) throw new Error(`Steering message exceeds ${MAX_STEERING_CHARS} characters`);
-    if (run.steering.length >= MAX_STEERING_MESSAGES) throw new Error(`At most ${MAX_STEERING_MESSAGES} steering messages may be queued for one run`);
-    run.steering.push(trimmed);
-    run.steeringVersion++;
-    return { queued: run.steering.length };
+    const status = stored.status;
+    if (!["queued", "planning", "running", "waiting_approval", "verifying", "paused"].includes(status) || !run && status !== "paused")
+      return { accepted: false, queued: 0, status };
+    const message: SteeringMessage = { id: options.messageId ?? newId("steering"), text: trimmed };
+    if (run) {
+      if (run.controller.signal.aborted || !["queued", "planning", "running", "waiting_approval", "verifying", "paused"].includes(run.status))
+        return { accepted: false, queued: 0, status };
+      if (run.steering.length >= MAX_STEERING_MESSAGES) throw new Error(`At most ${MAX_STEERING_MESSAGES} steering messages may be queued for one run`);
+      run.steering.push(message);
+      run.steeringVersion++;
+      try { this.saveCheckpoint(runId, run, "manual", undefined, { submittedSteering: message }); }
+      catch (error) { run.steering = run.steering.filter(item => item.id !== message.id); run.steeringVersion--; throw error; }
+      return { accepted: true, messageId: message.id, queued: run.steering.length, status };
+    }
+    const checkpoint = this.deps.database.getLatestCheckpoint(runId);
+    if (!checkpoint) throw new Error(`Run has no recoverable checkpoint: ${runId}`);
+    const pending = [...(checkpoint.pendingSteering ?? []), message];
+    if (pending.length > MAX_STEERING_MESSAGES) throw new Error(`At most ${MAX_STEERING_MESSAGES} steering messages may be queued for one run`);
+    const sequence = Math.max(checkpoint.sequence + 1, (this.deps.database.listEvents(runId).at(-1)?.sequence ?? -1) + 1);
+    const saved = { ...checkpoint, id: newId("checkpoint"), sequence, reason: "manual" as const, status, pendingSteering: pending, createdAt: nowIso() };
+    const events: AgentEvent[] = [
+      { id: newId("event"), runId, at: nowIso(), sequence, type: "steering_submitted", messageId: message.id, text: message.text, ...(options.withdrawable ? { withdrawable: true } : {}) },
+      { id: newId("event"), runId, at: nowIso(), sequence: sequence + 1, type: "checkpoint_saved", checkpointId: saved.id, reason: saved.reason, messages: saved.transcript.length },
+    ];
+    this.deps.database.saveCheckpoint(saved, undefined, events);
+    for (const event of events) this.publishCommittedEvent(event);
+    return { accepted: true, messageId: message.id, queued: pending.length, status };
   }
 
-  private drainSteering(runId: string, state: ActiveRun): string[] {
-    if (!state.steering.length) return [];
-    const delivered = state.steering.splice(0, state.steering.length);
-    for (const text of delivered) this.emitEvent(runId, state, { type: "steering_delivered", text });
-    return delivered;
+  /** Desktop submission commits the user message and then continues a paused run automatically. */
+  async steerAndResume(runId: string, text: string, profile: Profile): Promise<RunSteerResult> {
+    // Serialize snapshot-backed submissions through resume. A second submission can then be
+    // queued in the new live execution, never assigned an identical pre-message boundary.
+    if (this.deps.review?.beginMessageWithdrawal) {
+      const previous = this.steeringSubmissions.get(runId);
+      let release!: () => void;
+      const submission = new Promise<void>(resolve => { release = resolve; });
+      this.steeringSubmissions.set(runId, submission);
+      try {
+        await previous;
+        return await this.submitAndResume(runId, text, profile);
+      } finally {
+        if (this.steeringSubmissions.get(runId) === submission) this.steeringSubmissions.delete(runId);
+        release();
+      }
+    }
+    return this.submitAndResume(runId, text, profile);
+  }
+
+  private async preparePausedSteering(runId: string, text: string): Promise<RunSteerResult> {
+    // Validate input before capturing a full workspace. Only a stable paused task has a safe
+    // independent message boundary; live steering remains an ordinary queued correction.
+    if (!text.trim() || text.trim().length > MAX_STEERING_CHARS) return this.steer(runId, text);
+    const initial = this.withdrawalCandidate(runId);
+    this.assertNoWithdrawal(initial.run.spec);
+    const review = this.deps.review!;
+    const messageId = newId("steering");
+    const lock: { sessionId: string; workspacePath: string; runIds: Set<string>; root?: string } = {
+      sessionId: initial.run.spec.sessionId, workspacePath: initial.run.spec.workspacePath, runIds: new Set(initial.runs.map(run => run.spec.id)),
+    };
+    this.withdrawals.set(runId, lock);
+    try {
+      await Promise.all(initial.runs.map(run => this.waitForSettlement(run.spec.id)));
+      this.withdrawalCandidate(runId);
+      if (this.closing) throw new Error("运行时正在关闭，请稍后重新发送");
+      lock.root = await review.withdrawalRoot(runId);
+      this.assertWithdrawalWorkspaceIdle(lock.root, lock.runIds);
+      const checkpoint = this.deps.database.getLatestCheckpoint(runId);
+      if (!checkpoint) throw new Error("本轮没有可恢复的暂停记录");
+      await review.beginMessageWithdrawal(runId, messageId);
+      this.deps.database.prepareSteeringWithdrawal(runId, messageId, checkpoint.id);
+      const accepted = this.queueSteering(runId, text, { messageId, withdrawable: true, locked: true });
+      if (!accepted.accepted) throw new Error("运行状态已改变，请重新发送");
+      return accepted;
+    } catch (error) {
+      this.deps.database.discardSteeringWithdrawal(runId, messageId);
+      await review.cancelMessageWithdrawal(runId, messageId).catch(() => {});
+      throw error;
+    } finally {
+      this.withdrawals.delete(runId);
+    }
+  }
+
+  private async submitAndResume(runId: string, text: string, profile: Profile): Promise<RunSteerResult> {
+    // A send can race the last in-flight tool after the user presses pause. Wait for the
+    // actual pause before freezing the new message, so those earlier edits remain earlier work.
+    if (this.deps.review?.beginMessageWithdrawal && this.isPausing(runId)) await this.waitForSettlement(runId);
+    const accepted = this.deps.database.getRun(runId)?.status === "paused" && this.deps.review?.beginMessageWithdrawal
+      ? await this.preparePausedSteering(runId, text) : this.steer(runId, text);
+    if (!accepted.accepted) return accepted;
+    if (accepted.status !== "paused" && !this.isPausing(runId)) return { ...accepted, resumed: false };
+    let resumption = this.steeringResumptions.get(runId);
+    if (!resumption) {
+      // The paused event is visible before execute()/settleRun() remove the old active entry.
+      // Wait for that exact execution before installing a new one with the same ID.
+      const settlement = this.waitForSettlement(runId);
+      resumption = (async () => {
+        try {
+          await settlement;
+          if (this.closing) throw new Error("运行时正在关闭，消息已保存，可重新启动后继续");
+          const stored = this.deps.database.getRun(runId);
+          if (!stored) throw new Error(`Unknown run: ${runId}`);
+          if (this.active.has(runId) && ["queued", "planning", "running", "waiting_approval", "verifying"].includes(stored.status)) return { resumed: true };
+          if (stored.status !== "paused") throw new Error(`Run cannot be resumed from ${stored.status}: ${runId}`);
+          this.resume(runId, profile);
+          return { resumed: true };
+        } catch (error) {
+          return { resumed: false, resumeError: error instanceof Error ? error.message : String(error) };
+        }
+      })().finally(() => { this.steeringResumptions.delete(runId); });
+      this.steeringResumptions.set(runId, resumption);
+    }
+    const result = await resumption;
+    return { ...accepted, ...result, status: this.closing ? accepted.status : this.deps.database.getRun(runId)?.status ?? accepted.status };
+  }
+
+  private drainSteering(state: ActiveRun): SteeringMessage[] {
+    if (state.pauseRequested || !["queued", "planning", "running", "waiting_approval", "verifying"].includes(state.status)) return [];
+    const messages = state.steering.filter(message => !state.steeringInFlight.has(message.id));
+    for (const message of messages) state.steeringInFlight.add(message.id);
+    return messages;
   }
 
   /**
@@ -561,6 +821,7 @@ export class HarnessEngine extends EventEmitter {
     recovery?: RunCheckpoint,
   ): Promise<void> {
     let capabilities: RunCapabilityLease | undefined;
+    let samplingRoute: RouteDecision | undefined;
     try {
       await this.deps.review?.begin(spec, Boolean(recovery));
       if (recovery) {
@@ -569,7 +830,44 @@ export class HarnessEngine extends EventEmitter {
         this.emitEvent(spec.id, state, { type: "recovery_event", checkpointId: recovery.id, action: recovery.pendingNonIdempotentToolCalls.length ? "paused_non_idempotent" : "restored", detail: recovery.pendingNonIdempotentToolCalls.length ? "Restored transcript with unknown non-idempotent calls marked as not replayed." : "Restored exact transcript, plan version and budgets from the latest checkpoint." });
       } else this.status(spec.id, state, "planning");
       if (this.deps.mcp) {
-        capabilities = await prepareMcpCapabilities(this.deps.mcp, spec, state.controller.signal, { database: this.deps.database, ...(this.deps.blobs ? { blobs: this.deps.blobs } : {}), ...(recovery ? { unresolvedCalls: recovery.pendingNonIdempotentToolCalls } : {}), ...(spec.mcpInherited ? { inherited: spec.mcpInherited } : {}) });
+        capabilities = await prepareMcpCapabilities(this.deps.mcp, spec, state.controller.signal, { database: this.deps.database, ...(this.deps.blobs ? { blobs: this.deps.blobs } : {}), ...(recovery ? { unresolvedCalls: recovery.pendingNonIdempotentToolCalls } : {}), ...(spec.mcpInherited ? { inherited: spec.mcpInherited } : {}),
+          requestHandlers: {
+            onSampling: async (raw, signal, source) => {
+              this.checkBudget(spec, state);
+              if (state.pauseRequested) throw new Error("Run paused before MCP sampling");
+              const params = redactMcpValue(raw, await this.deps.mcp!.secretValues(source.serverId));
+              const messages = await mcpSamplingMessages(params, this.deps.blobs ? { blobs: this.deps.blobs, database: this.deps.database } : undefined);
+              const route = samplingRoute ?? await this.router.route(profile, {
+                needsTools: false, needsVision: messages.some(message => message.content.some(part => part.type === "image")), needsStructuredOutput: false,
+                estimatedInputTokens: estimateRequestInputTokens({ messages, tools: [] }), estimatedOutputTokens: 1,
+              });
+              const decision = await this.mcpInteractions.request("sampling", source, params as unknown as Record<string, unknown>,
+                AbortSignal.any([signal, state.controller.signal]), { runId: spec.id, modelName: route.model.displayName });
+              if (decision.action !== "accept") throw new Error("MCP sampling declined by user");
+              return sampleMcp({ params, messages, ...route, runId: spec.id, signal: AbortSignal.any([signal, state.controller.signal]),
+                beforeRequest: () => {
+                  this.checkBudget(spec, state);
+                  if (state.pauseRequested) throw new Error("Run paused before MCP sampling");
+                  if (state.turns >= spec.budget.maxTurns) throw new BudgetExceededError("model_turn_limit", "MCP sampling exceeds the model turn budget");
+                  state.turns++;
+                },
+                onUsage: usage => {
+                  state.spentUsd += usage.estimatedUsd; state.costKnown &&= usage.costKnown !== false;
+                  state.inputTokens += usage.inputTokens; state.outputTokens += usage.outputTokens;
+                  this.emitEvent(spec.id, state, { type: "usage", usage }); this.checkBudget(spec, state);
+                },
+                onFinished: timing => this.emitEvent(spec.id, state, { type: "model_request_finished", ...timing }),
+              });
+            },
+            onElicitation: async (params, signal, source) => {
+              if (state.pauseRequested) return { action: "cancel" };
+              const safe = redactMcpValue(params, await this.deps.mcp!.secretValues(source.serverId));
+              const decision = await this.mcpInteractions.request("elicitation", source, safe as unknown as Record<string, unknown>,
+                AbortSignal.any([signal, state.controller.signal]), { runId: spec.id });
+              return { action: decision.action, ...(decision.action === "accept" && decision.content ? { content: decision.content } : {}) };
+            },
+          },
+        });
         if (!spec.mcpSnapshot) { spec.mcpSnapshot = capabilities.snapshot; this.deps.database.saveRun(spec, state.status); }
       }
       const memories = this.deps.memory.retrieve(
@@ -633,13 +931,19 @@ export class HarnessEngine extends EventEmitter {
         if (recovery) state.transcript.push(diagnosticMessage);
       }
       if (skillRuntime.catalog.length) messages.push({ role: "user", content: [{ type: "text", trust: "trusted_project", text: `Trusted skill catalog (metadata only): ${JSON.stringify(skillRuntime.catalog.slice(0, 20))}. Use search_skills for more entries and load_skill for relevant instructions. Explicitly selected skills are already loaded and take priority.` }] });
-      const conversationHistory = recovery
-        ? []
-        : buildSessionContext(
-            this.deps.database.getSessionDetail(spec.sessionId),
-            spec.id,
-            48_000,
-          );
+      const sessionHistory = this.deps.database.getSessionDetail(spec.sessionId);
+      const conversationHistory = recovery ? [] : buildSessionContext(sessionHistory, spec.id,
+        runId => this.deps.database.getLatestCheckpoint(runId));
+      if (!recovery && !spec.parentRunId) state.sessionContextVersion = SESSION_CONTEXT_VERSION;
+      // Historical receipts remain readable, while verification reuse and approval state
+      // continue to use only this task's explicit continuation chain.
+      const readableEvidenceRunIds = [...new Set([...this.evidenceRunIds(spec),
+        ...(!spec.parentRunId ? sessionHistory?.runs.filter(run => run.spec.id !== spec.id && !run.spec.parentRunId
+          && run.spec.sessionId === spec.sessionId
+          && normalizeSessionWorkspace(run.spec.workspacePath) === normalizeSessionWorkspace(spec.workspacePath)
+          && (run.spec.createdAt < spec.createdAt || run.spec.createdAt === spec.createdAt && run.spec.id < spec.id))
+          .sort((left, right) => right.spec.createdAt.localeCompare(left.spec.createdAt) || right.spec.id.localeCompare(left.spec.id))
+          .map(run => run.spec.id) ?? [] : [])])];
       const modern = spec.workflowVersion !== 1 && (!recovery?.workflow || recovery.workflow.schemaVersion >= 3);
       const sequential = modern && spec.workflowVersion !== 2 && (!recovery?.workflow || recovery.workflow.schemaVersion >= 4 || spec.workflowVersion === 3);
       const Workflow = sequential ? SequentialWorkflow : modern ? LightweightWorkflow : CodingWorkflow;
@@ -710,10 +1014,10 @@ export class HarnessEngine extends EventEmitter {
           execute: async input => {
             const value = z.object({ id: z.string(), offset: z.number().int().min(0).default(0), limit: z.number().int().min(1).max(16000).default(6000) }).parse(input);
             // Indexed lookup: the previous scan decrypted every event of the run on each call.
-            const event = this.evidenceRunIds(spec).map(id => this.deps.database.getToolEvidence(id, value.id)).find(Boolean);
+            const event = readableEvidenceRunIds.map(id => this.deps.database.getToolEvidence(id, value.id)).find(Boolean);
             const review = workflow.state.independentReview;
             const failure = workflow.state.observations.find(item => item.id === value.id && item.kind === "failure");
-            const verification = !event && this.evidenceRunIds(spec).flatMap(id => this.deps.database.listVerificationRuns(id)).find(run => run.id === value.id);
+            const verification = !event && readableEvidenceRunIds.flatMap(id => this.deps.database.listVerificationRuns(id)).find(run => run.id === value.id);
             const task = workflow.state.sequential?.taskExecutions.find(item => item.taskId === value.id || item.childRunId === value.id);
             const saved = event?.type === "tool_finished" ? event.output : value.id === review.runId ? { kind: "independent_review", ...review, requirements: workflow.state.requirementReceipts } : verification ?? task ?? failure;
             if (saved === undefined) return { isError: true, output: { code: "evidence_not_found", id: value.id } };
@@ -787,16 +1091,19 @@ export class HarnessEngine extends EventEmitter {
       if (!modern && contracts.length) contracts.push(workflowTool.contract);
       workflow.move(workflow.state.phase, recovery ? "恢复工作流；继续修复并更新测试、diff 与需求验收证据" : "接收用户任务，准备理解目标");
       const requirements = {
-        needsVision: spec.attachments.length > 0,
+        reasoningEffort: spec.reasoningEffort ?? null,
+        needsVision: [...messages, ...conversationHistory, ...state.transcript].some(message => message.content.some(part => part.type === "image")),
         needsTools: contracts.length > 0,
         needsStructuredOutput: false,
         estimatedInputTokens: Math.max(
           512,
           Math.ceil(JSON.stringify([...messages, ...conversationHistory]).length / 4),
         ),
+        ...(conversationHistory.length ? { minimumInputTokens: Math.max(512, Math.ceil(JSON.stringify(messages).length / 4)) } : {}),
         estimatedOutputTokens: 8_192,
       };
       const route = await this.router.route(profile, requirements);
+      samplingRoute = route;
       this.emitEvent(spec.id, state, {
         type: "route",
         providerId: route.provider.id,
@@ -833,11 +1140,9 @@ export class HarnessEngine extends EventEmitter {
         providerRetryBaseDelayMs: 500,
         maxToolSelfCorrections: null,
       };
-      const disableModelSummary = this.deps.database.listCompactions(spec.id).some(record =>
-        ["truncated", "empty", "invalid_json", "provider_error", "target_fallback", "disabled_after_failure"].includes(record.summaryOutcome ?? ""));
       if (state.transcript.length) this.emitEvent(spec.id, state, { type: "context_adjusted", adjustment: { kind: "resume_rebuild" } });
       if (profile.contextPolicyMigration && !recovery) {
-        const capacity = Math.min(profile.contextPolicy.workingContextTokens ?? 128000, route.model.capabilities.maxContextTokens);
+        const capacity = Math.min(profile.contextPolicy.workingContextTokens ?? Infinity, route.model.capabilities.maxContextTokens);
         this.emitEvent(spec.id, state, { type: "context_adjusted", adjustment: { kind: "policy_migration", policyVersion: profile.contextPolicyMigration.version,
           capacityTokens: capacity, triggerTokens: Math.floor(capacity * profile.contextPolicy.compactAtRatio), targetTokens: Math.floor(capacity * profile.contextPolicy.maxAfterCompactionRatio) } });
       }
@@ -854,16 +1159,17 @@ export class HarnessEngine extends EventEmitter {
         resolveTool: (name) => runtimeTools.get(name) ?? (name === "update_workflow" && !modern ? workflowTool : this.deps.tools.get(name)),
         externalSignal: state.controller.signal,
         maxOutputTokens: resolveMainOutputTokens(spec.generationPolicy),
+        ...(spec.reasoningEffort != null ? { reasoningEffort: spec.reasoningEffort } : {}),
         parallelToolCalls: modern ? false : route.model.capabilities.parallelTools,
         providerRetryPolicy: {
           maxAttempts: resiliencePolicy.maxProviderAttempts,
           baseDelayMs: resiliencePolicy.providerRetryBaseDelayMs,
         },
-        ...(state.transcript.length ? { resumeTranscript: state.transcript, recoveryUserTexts: this.recoveryUserTexts(spec) } : {}),
+        ...(recovery || state.transcript.length ? { resumeTranscript: state.transcript, recoveryUserTexts: this.recoveryUserTexts(spec) } : {}),
         contextPolicy: profile.contextPolicy,
-        disableModelSummary,
         onContextAdjustment: adjustment => { this.emitEvent(spec.id, state, { type: "context_adjusted", adjustment }); },
-        drainSteering: () => this.drainSteering(spec.id, state),
+        onContextUsage: context => { this.emitEvent(spec.id, state, { type: "context_usage", context }); },
+        drainSteering: () => this.drainSteering(state),
         getPinnedContext: () => JSON.stringify({
           projectBaseSnapshot: repositorySnapshot,
           approvedPlan: state.plan?.status === "approved" ? state.plan : undefined,
@@ -885,7 +1191,10 @@ export class HarnessEngine extends EventEmitter {
         }),
         beforeCompactionRequest: () => {
           this.checkBudget(spec, state);
-          if (state.turns >= spec.budget.maxTurns - 1) return false;
+          if (state.turns >= spec.budget.maxTurns - 1) {
+            stop("model_turn_limit", "模型轮次不足以完成上下文压缩，原历史已保留。");
+            return false;
+          }
           state.turns += 1;
           return true;
         },
@@ -1110,6 +1419,16 @@ export class HarnessEngine extends EventEmitter {
           });
         },
         onCompaction: async (compaction) => {
+          const previousTranscript = state.transcript;
+          const compactedSteering = new Set(compaction.before.flatMap(message => message.role === "user" && message.steeringId ? [message.steeringId] : []));
+          try {
+            // Keep the complete source recoverable independently of the new working summary.
+            state.transcript = compaction.before;
+            this.saveCheckpoint(spec.id, state, "compaction", undefined, { acknowledgeSteering: false });
+          } finally {
+            // A failed archive must leave the active run's working transcript intact.
+            state.transcript = previousTranscript;
+          }
           const record = {
             id: newId("compact"),
             runId: spec.id,
@@ -1125,10 +1444,14 @@ export class HarnessEngine extends EventEmitter {
             trust: "untrusted_tool" as const,
             createdAt: nowIso(),
           };
-          state.transcript = compaction.after;
-          this.deps.database.saveCompaction(record);
-          this.emitEvent(spec.id, state, { type: "context_compacted", record });
-          this.saveCheckpoint(spec.id, state, "compaction");
+          try {
+            state.transcript = compaction.after;
+            this.saveCheckpoint(spec.id, state, "compaction", record, { steeringIds: compactedSteering });
+            this.emitEvent(spec.id, state, { type: "context_compacted", record });
+          } catch (error) {
+            state.transcript = previousTranscript;
+            throw error;
+          }
         },
         onProviderEvent: (event) => {
           if (event.type === "cache_diagnostic" && event.diagnostic) this.emitEvent(spec.id, state, { type: "cache_diagnostic", diagnostic: event.diagnostic });
@@ -1282,8 +1605,26 @@ export class HarnessEngine extends EventEmitter {
         },
       });
       state.transcript = bridgeResult.transcript;
+      // A correction may arrive during the final asynchronous checks, after pi stopped pumping.
+      // Keep that accepted input resumable instead of publishing a completed run that cannot read it.
+      const retainedSteering = new Set(state.transcript.flatMap(message => message.steeringId ? [message.steeringId] : []));
+      if (state.steering.some(message => !retainedSteering.has(message.id)) && !stopReason && !bridgeResult.errorMessage) state.pauseRequested = true;
       if (state.controller.signal.aborted) throw state.controller.signal.reason ?? new Error("Run cancelled");
       if (state.pauseRequested) {
+        // A visible paused state is a stable editing boundary. Children, MCP leases and the
+        // complete end snapshot settle first so edits made after the pause cannot enter this
+        // round's rollback delta. The later generic settlement never captures this pause again.
+        await Promise.all(this.deps.database.getRunDescendants(spec.id)
+          .filter(run => run.spec.id !== spec.id).map(run => this.waitForSettlement(run.spec.id)));
+        if (capabilities) {
+          const lease = capabilities;
+          capabilities = undefined;
+          await lease.close();
+        }
+        state.pauseSnapshotFinalized = true;
+        try { await this.deps.review?.finish(spec.id, true); }
+        catch (error) { process.stderr.write(`Pause snapshot failed for ${spec.id}: ${error instanceof Error ? error.message : String(error)}\n`); }
+        if (state.controller.signal.aborted) throw state.controller.signal.reason ?? new Error("Run cancelled");
         // Settle where the loop stopped. The checkpoint carries the full transcript, so resume()
         // continues this task rather than starting it again; nothing is marked complete either way.
         this.status(spec.id, state, "paused");
@@ -1370,7 +1711,7 @@ export class HarnessEngine extends EventEmitter {
         status,
         ...(!cancelled ? { stop: buildRunStop(failure instanceof BudgetExceededError ? failure.code : "provider_error", failure instanceof Error ? failure.message : String(failure), spec, state, state.workflow?.snapshot()) } : {}),
       });
-    } finally { await capabilities?.close(); }
+    } finally { this.mcpInteractions.cancelRun(spec.id); await capabilities?.close(); }
   }
 
   private restoreAfterApproval(spec: RunSpec, state: ActiveRun, previous: RunStatus): void {
@@ -1384,6 +1725,7 @@ export class HarnessEngine extends EventEmitter {
     options: { approvalTtlMs?: number; commandPrefixes?: string[] } = {},
     definition?: ToolDefinition,
   ): Promise<{ block?: boolean; reason?: string; terminate?: boolean }> {
+    if (state.pauseRequested) return { block: true, reason: "Run paused before tool authorization" };
     const previous = state.status;
     state.toolCalls += 1;
     this.checkBudget(spec, state);
@@ -1395,6 +1737,7 @@ export class HarnessEngine extends EventEmitter {
     if ((risk !== "read" || call.name === "delegate") && !(await this.ensurePlanApproved(spec, state, call, risk))) {
       return { block: true, reason: "The plan was rejected", terminate: true };
     }
+    if (state.pauseRequested) return { block: true, reason: "Run paused before tool authorization" };
     const permission = this.permission.decide(
       call.name,
       call.input,
@@ -1405,6 +1748,10 @@ export class HarnessEngine extends EventEmitter {
     );
     if (!permission.allowed) {
       this.status(spec.id, state, "waiting_approval");
+      if (state.pauseRequested) {
+        this.restoreAfterApproval(spec, state, previous);
+        return { block: true, reason: "Run paused before tool approval" };
+      }
       const requestedGrant = {
         toolNames: [call.name],
         pathGlobs: ["**"],
@@ -1435,11 +1782,12 @@ export class HarnessEngine extends EventEmitter {
         summary: summarizeToolRequest(call, risk),
         risk,
       });
-      if (!(await decision)) {
+      const approved = await decision;
+      if (!approved || state.pauseRequested) {
         this.restoreAfterApproval(spec, state, previous);
         return {
           block: true,
-          reason: "Tool execution denied or approval expired",
+          reason: state.pauseRequested ? "Run paused before tool execution" : "Tool execution denied or approval expired",
         };
       }
       spec.grants = [...spec.grants, requestedGrant];
@@ -1777,11 +2125,20 @@ export class HarnessEngine extends EventEmitter {
     return { ...counts, reusedFromRunIds: reusedFromRunIds.slice(0, 8), reusedFromRunIdsTruncated: reusedFromRunIds.length > 8 };
   }
 
-  private saveCheckpoint(runId: string, state: ActiveRun, reason: RunCheckpoint["reason"]): RunCheckpoint {
+  private saveCheckpoint(runId: string, state: ActiveRun, reason: RunCheckpoint["reason"], compaction?: CompactionRecord,
+    options: { acknowledgeSteering?: boolean; steeringIds?: ReadonlySet<string>; submittedSteering?: SteeringMessage } = {}): RunCheckpoint {
+    // Timed from the top: the cost is the workflow snapshot, the workspace fingerprint and the
+    // per-message content store together, which is what a delta would remove.
+    const startedAt = performance.now();
     // Initialization can fail before the runtime has rebuilt or checked the workflow. Preserve the
     // original checkpoint in that case; dropping it would make the next resume forget the task.
     // Once a workflow exists, only its current state and observed workspace are checkpointed.
     const initial = state.workflow ? undefined : state.initialCheckpoint;
+    const retainedSteering = options.acknowledgeSteering === false ? new Set<string>() : new Set([
+      ...state.transcript.flatMap(message => message.role === "user" && message.steeringId ? [message.steeringId] : []),
+      ...(options.steeringIds ?? []),
+    ]);
+    const deliveredSteering = state.steering.filter(message => retainedSteering.has(message.id));
     const checkpoint: RunCheckpoint = {
       id: newId("checkpoint"),
       runId,
@@ -1789,6 +2146,7 @@ export class HarnessEngine extends EventEmitter {
       reason,
       status: state.status,
       transcript: state.transcript,
+      ...(state.sessionContextVersion ? { sessionContextVersion: state.sessionContextVersion } : {}),
       ...(state.plan ? { planVersion: state.plan.version } : {}),
       usage: { inputTokens: state.inputTokens, outputTokens: state.outputTokens, estimatedUsd: state.spentUsd, costKnown: state.costKnown },
       turns: state.turns,
@@ -1797,14 +2155,39 @@ export class HarnessEngine extends EventEmitter {
       elapsedMs: Math.floor(activeElapsedMs(state)),
       ...(state.verificationProgress ? { verificationProgress: state.verificationProgress } : initial?.verificationProgress ? { verificationProgress: initial.verificationProgress } : {}),
       pendingNonIdempotentToolCalls: initial?.pendingNonIdempotentToolCalls ?? [...state.pendingNonIdempotent.values()],
+      pendingSteering: state.steering.filter(message => !retainedSteering.has(message.id)),
       ...(state.workflow ? { workflow: state.workflow.snapshot() } : initial?.workflow ? { workflow: initial.workflow } : {}),
       ...(state.workspaceSnapshot?.complete ? { workspaceFingerprint: workspaceFingerprint(state.workspaceSnapshot) } : initial?.workspaceFingerprint ? { workspaceFingerprint: initial.workspaceFingerprint } : {}),
       ...(state.workspaceDiff?.reference ? { workspaceBaseline: state.workspaceDiff.reference } : initial?.workspaceBaseline ? { workspaceBaseline: initial.workspaceBaseline } : {}),
       createdAt: nowIso(),
     };
-    this.deps.database.saveCheckpoint(checkpoint);
-    this.emitEvent(runId, state, { type: "checkpoint_saved", checkpointId: checkpoint.id, reason });
+    let sequence = state.sequence;
+    const events: AgentEvent[] = [];
+    if (options.submittedSteering) events.push({
+      id: newId("event"), runId, at: nowIso(), sequence: sequence++, type: "steering_submitted",
+      messageId: options.submittedSteering.id, text: options.submittedSteering.text,
+    });
+    for (const message of deliveredSteering) events.push({
+      id: newId("event"), runId, at: nowIso(), sequence: sequence++, type: "steering_delivered", messageId: message.id, text: message.text,
+    });
+    events.push({ id: newId("event"), runId, at: nowIso(), sequence: sequence++, type: "checkpoint_saved", checkpointId: checkpoint.id, reason,
+      durationMs: Math.round((performance.now() - startedAt) * 100) / 100, messages: checkpoint.transcript.length });
+    this.deps.database.saveCheckpoint(checkpoint, compaction, events);
+    // Listeners can synchronously submit another message. Publish only after both the storage
+    // transaction and in-memory cursor/queue have advanced to the same committed state.
+    state.sequence = sequence;
+    state.steering = checkpoint.pendingSteering ?? [];
+    for (const message of deliveredSteering) state.steeringInFlight.delete(message.id);
+    for (const event of events) this.publishCommittedEvent(event);
     return checkpoint;
+  }
+
+  /** Once the transaction committed, presentation/telemetry failure cannot reject accepted input. */
+  private publishCommittedEvent(event: AgentEvent): void {
+    try { this.deps.database.appendTrace({ id: newId("trace"), runId: event.runId, type: event.type, at: event.at, attributes: traceAttributes(event) }); }
+    catch { /* durable conversation events remain available for polling after telemetry failure */ }
+    try { this.emit("event", event); }
+    catch { /* a failed subscriber must not invite resubmission of already accepted user input */ }
   }
 
   private checkBudget(spec: RunSpec, state: ActiveRun): void {
@@ -1863,6 +2246,7 @@ function traceAttributes(event: AgentEvent): Record<string, unknown> {
     case "self_correction_started": return { trigger: event.trigger, attempt: event.attempt, maxAttempts: event.maxAttempts };
     case "context_compacted": return { compactionId: event.record.id, inputTokens: event.record.inputTokens, outputTokens: event.record.outputTokens, deterministicFallback: event.record.deterministicFallback, summaryOutcome: event.record.summaryOutcome };
     case "context_adjusted": return event.adjustment;
+    case "context_usage": return event.context;
     case "cache_diagnostic": return event.diagnostic;
     case "plugin_event": return { pluginId: event.pluginId, action: event.action };
     case "search_usage": return { providerId: event.providerId, searchId: event.searchId, resultCount: event.resultCount };

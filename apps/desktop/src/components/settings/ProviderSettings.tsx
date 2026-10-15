@@ -8,7 +8,7 @@ import {
   useSettingsAction,
 } from "./SettingsSection.js";
 
-export function ProviderSettings() {
+export function ProviderSettings({ refresh }: { refresh: () => Promise<void> }) {
   const [config, setConfig] = useState<ProviderConfig>({
     openaiCompatibleBaseUrl: "",
     openaiCompatibleModel: "",
@@ -123,6 +123,7 @@ export function ProviderSettings() {
                   const saved =
                     await window.harness.setProviderSettings(config);
                   setConfig(saved);
+                  await refresh();
                   return saved.openaiCompatibleBaseUrl
                     ? "已保存并重新加载运行时"
                     : "OpenAI-compatible 已禁用";

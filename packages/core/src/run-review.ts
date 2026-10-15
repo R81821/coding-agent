@@ -8,6 +8,7 @@ import {
   readFile,
   readdir,
   readlink,
+  realpath,
   rename,
   rm,
   writeFile,
@@ -16,11 +17,13 @@ import { tmpdir } from "node:os";
 import { isAbsolute, join, relative, resolve } from "node:path";
 import type { RunReview, RunReviewFile } from "@harness/protocol";
 import type { VaultCrypto } from "@harness/persistence";
+import { WithdrawalSnapshotStore } from "./withdrawal-snapshot.js";
 
 export interface ReviewRun {
   id: string;
   sessionId: string;
   workspacePath: string;
+  parentRunId?: string | undefined;
 }
 interface StoredFile extends RunReviewFile {
   fingerprint: string;
@@ -48,6 +51,12 @@ const samePath = (a: string, b: string) =>
     ? resolve(a).toLowerCase() === resolve(b).toLowerCase()
     : resolve(a) === resolve(b);
 
+const pathWithin = (root: string, value: string): boolean => {
+  const delta = relative(resolve(root), resolve(value));
+  return !delta || !isAbsolute(delta) && delta !== ".." && !delta.startsWith(`..${process.platform === "win32" ? "\\" : "/"}`);
+};
+const pathsOverlap = (left: string, right: string): boolean => pathWithin(left, right) || pathWithin(right, left);
+
 /** A per-run Git-tree delta captured with a disposable index; the user's index is never staged. */
 export class RunReviewService {
   private readonly active = new Map<string, string>();
@@ -56,14 +65,18 @@ export class RunReviewService {
   private readonly invalidatedRuns = new Set<string>();
   private readonly pendingSaves = new Set<Promise<void>>();
   private readonly repositoryLocks = new Map<string, Promise<void>>();
+  private readonly withdrawalSnapshots: WithdrawalSnapshotStore;
 
   constructor(
     private readonly root: string,
     private readonly crypto: VaultCrypto,
     private readonly checks: ReviewChecks = {},
-  ) {}
+  ) {
+    this.withdrawalSnapshots = new WithdrawalSnapshotStore(join(root, "withdrawal"), crypto);
+  }
 
   async begin(run: ReviewRun, resumed = false): Promise<void> {
+    if (!run.parentRunId) await this.withdrawalSnapshots.begin(run, resumed);
     const prior = await this.load(run.id);
     const root =
       prior?.repositoryRoot ?? (await this.repositoryRoot(run.workspacePath));
@@ -128,11 +141,11 @@ export class RunReviewService {
     if (!repositoryRoot) return false;
     const overlapping = [...this.active]
       .filter(
-        ([id, root]) => id !== record.runId && samePath(root, repositoryRoot),
+        ([id, root]) => id !== record.runId && !this.sameRound(id, record.runId) && samePath(root, repositoryRoot),
       )
       .map(([id]) => id);
     for (const other of this.checks.activeRuns?.() ?? []) {
-      if (other.id === record.runId || overlapping.includes(other.id)) continue;
+      if (other.id === record.runId || this.sameRound(other.id, record.runId) || overlapping.includes(other.id)) continue;
       try {
         const root = (
           await git(other.workspacePath, ["rev-parse", "--show-toplevel"])
@@ -159,6 +172,7 @@ export class RunReviewService {
   }
 
   async finish(runId: string, paused: boolean): Promise<void> {
+    await this.withdrawalSnapshots.finish(runId, paused);
     const prior = await this.load(runId);
     if (!prior?.repositoryRoot) return this.finishLocked(runId, paused);
     return this.withRepositoryLock(prior.repositoryRoot, () =>
@@ -385,6 +399,7 @@ export class RunReviewService {
   async deleteSession(sessionId: string): Promise<void> {
     this.deletedSessions.add(sessionId);
     await Promise.allSettled([...this.pendingSaves]);
+    await this.withdrawalSnapshots.deleteSession(sessionId);
     let names: string[];
     try {
       names = await readdir(this.root);
@@ -407,6 +422,113 @@ export class RunReviewService {
 
   restoreSession(sessionId: string): void {
     this.deletedSessions.delete(sessionId);
+    this.withdrawalSnapshots.restoreSession(sessionId);
+  }
+
+  withdrawalRoot(runId: string): Promise<string> {
+    return this.withdrawalSnapshots.rootFor(runId);
+  }
+
+  async beginMessageWithdrawal(runId: string, messageId: string): Promise<void> {
+    const root = await this.withdrawalRoot(runId);
+    return this.withRepositoryLock(root, async () => {
+      const record = await this.load(runId);
+      if (!record) throw new Error("本轮没有可用的文件审查记录");
+      await this.assertWithdrawalRestorable(runId, root, [{ id: runId, sessionId: record.sessionId, workspacePath: record.workspacePath }]);
+      await this.withdrawalSnapshots.beginMessage(runId, messageId);
+    });
+  }
+
+  cancelMessageWithdrawal(runId: string, messageId: string): Promise<void> {
+    return this.withdrawalSnapshots.cancelMessage(runId, messageId);
+  }
+
+  async withdrawMessage<T>(runId: string, messageId: string, runs: ReviewRun[], commit: () => T): Promise<T> {
+    const root = await this.withdrawalRoot(runId);
+    return this.withRepositoryLock(root, async () => {
+      await this.assertWithdrawalRestorable(runId, root, runs);
+      const result = await this.withdrawalSnapshots.rollbackMessage(runId, messageId, commit);
+      // The initial Git tree still describes the original round. Drop stale derived diffs but
+      // retain that tree, so later resumes capture the remaining whole-round delta correctly.
+      try {
+        const record = await this.load(runId);
+        if (record) {
+          record.status = "capturing";
+          record.files = [];
+          delete record.reason;
+          await this.save(record);
+        }
+      } catch (error) { process.stderr.write(`Withdrawn message review cleanup failed: ${error instanceof Error ? error.message : String(error)}\n`); }
+      this.active.delete(runId);
+      // The engine supplies only children introduced after this message boundary. Earlier
+      // children retain their reviews and snapshots, just as the original parent retains its own.
+      const withdrawnChildren = runs.filter(run => run.id !== runId).map(run => run.id);
+      for (const id of withdrawnChildren) {
+        this.invalidatedRuns.add(id);
+        this.active.delete(id);
+        this.contaminated.delete(id);
+      }
+      await Promise.allSettled(withdrawnChildren.map(id => rm(this.filePath(id), { force: true })));
+      try { await this.withdrawalSnapshots.discard(withdrawnChildren); }
+      catch (error) { process.stderr.write(`Withdrawn message snapshot cleanup failed: ${error instanceof Error ? error.message : String(error)}\n`); }
+      return result;
+    });
+  }
+
+  private async assertWithdrawalRestorable(runId: string, root: string, runs: ReviewRun[]): Promise<void> {
+    const review = await this.load(runId);
+    if (this.contaminated.has(runId) || review?.reason === "Concurrent or intervening run in the same repository") throw new Error("本轮与其他任务的文件修改重叠，无法安全撤回");
+    const owned = new Set(runs.map(run => run.id));
+    for (const other of this.checks.activeRuns?.() ?? []) {
+      if (owned.has(other.id)) continue;
+      const otherRoot = await this.repositoryRoot(other.workspacePath) ?? await realpath(other.workspacePath);
+      if (pathsOverlap(root, otherRoot)) throw new Error("工作区还有其他运行中的任务，无法安全撤回");
+    }
+    // Interrupted child worktrees need their own restoration; never claim that changing the
+    // parent checkout alone has withdrawn all files touched by the message.
+    for (const child of runs) {
+      if (child.id === runId || pathWithin(root, child.workspacePath)) continue;
+      try { await lstat(child.workspacePath); }
+      catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") continue; throw error; }
+      throw new Error("子任务的独立工作区仍有文件，无法完整撤回本轮修改");
+    }
+  }
+
+  /** Whole-round restore uses its complete pre-run snapshot, independently of the public Git diff. */
+  async withdraw<T>(runId: string, runs: ReviewRun[], commit: () => T): Promise<T> {
+    const root = await this.withdrawalRoot(runId);
+    return this.withRepositoryLock(root, async () => {
+      await this.assertWithdrawalRestorable(runId, root, runs);
+      const owned = new Set(runs.map(run => run.id));
+      const result = await this.withdrawalSnapshots.rollback(runId, commit);
+      // Invalidation happens synchronously after the committed tombstone, before cleanup awaits.
+      // A failed best-effort metadata cleanup must not turn a successful withdrawal into an RPC
+      // error that prevents the renderer from restoring the user's draft.
+      for (const id of owned) {
+        this.invalidatedRuns.add(id);
+        this.active.delete(id);
+        this.contaminated.delete(id);
+      }
+      await Promise.allSettled([...owned].map(id => rm(this.filePath(id), { force: true })));
+      try { await this.withdrawalSnapshots.discard([...owned]); }
+      catch (error) { process.stderr.write(`Withdrawn snapshot cleanup failed: ${error instanceof Error ? error.message : String(error)}\n`); }
+      return result;
+    });
+  }
+
+  private sameRound(left: string, right: string): boolean {
+    const rootOf = (id: string) => {
+      const seen = new Set<string>();
+      let current = id;
+      while (!seen.has(current)) {
+        seen.add(current);
+        const parent = this.checks.getRun?.(current)?.parentRunId;
+        if (!parent) return current;
+        current = parent;
+      }
+      return id;
+    };
+    return rootOf(left) === rootOf(right);
   }
 
   private publicReview(record: StoredReview): RunReview {
@@ -490,6 +612,8 @@ export class RunReviewService {
       );
       if (
         record.runId !== exceptRunId &&
+        !this.invalidatedRuns.has(record.runId) &&
+        !this.sameRound(record.runId, exceptRunId) &&
         record.status === "capturing" &&
         record.repositoryRoot &&
         samePath(record.repositoryRoot, repositoryRoot)

@@ -9,11 +9,10 @@
   .workbench-heading { flex-shrink: 0; }
   .top-actions { min-width: 0; flex: 1; gap: 6px; }
   .workbench .topbar select { min-width: 0; width: 0; flex: 1; }
-  .workbench .composer-wrap { width: calc(100% - 32px); }
+  .workbench .chat-layout { --chat-gutter: 18px; }
   .composer-project-bar { gap: 10px; padding: 8px 12px; }
   .composer-project-bar > span { white-space: nowrap; }
   .composer-profile { display: none; }
-  .workbench .conversation { padding-left: 18px; padding-right: 18px; }
 }
 .browser-panel { display: flex; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden; background: var(--panel); border: 1px solid var(--line); border-radius: 16px; color: var(--color-text); }
 .browser-panel button { display: inline-flex; justify-content: center; align-items: center; flex-shrink: 0; border: 0; border-radius: 7px; padding: 6px; background: transparent; color: var(--color-text-muted); cursor: pointer; }

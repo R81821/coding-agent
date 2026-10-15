@@ -8,6 +8,7 @@ export * from "./router.js";
 export * from "./adapters.js";
 export * from "./parallel-search.js";
 export * from "./tool-history.js";
+export * from "./reasoning.js";
 
 export function createConfiguredProviders(options: ProviderFactoryOptions): ModelProvider[] {
   const env = options.env ?? process.env;

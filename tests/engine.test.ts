@@ -274,7 +274,11 @@ describe("HarnessEngine", () => {
     let requests = 0;
     const provider: ModelProvider = {
       id: "fake", async listModels() { return [model]; }, async health() { return true; }, estimateCost() { return 0; },
-      async *stream(): AsyncIterable<ProviderStreamEvent> {
+      async *stream(request: ModelRequest): AsyncIterable<ProviderStreamEvent> {
+        if (request.purpose === "compaction") {
+          yield { type: "text_delta", delta: JSON.stringify({ goal: "Write beta within the approved plan", constraints: ["Preserve plan and tool approval requirements"], decisions: [], evidence: [], completed: [], pending: ["Complete verification and requirement acceptance"] }) };
+          return;
+        }
         requests += 1;
         if (requests <= 3) yield* workflowPrelude(requests);
         else if (requests === 4) yield { type: "tool_call", toolCall: { id: "write-1", name: "write_value", input: { value: "beta" } } };
@@ -297,12 +301,19 @@ describe("HarnessEngine", () => {
       }
       if (event.type === "result") resolveResult(event);
     }));
-    engine.start(run, profile);
-    await expect(result).resolves.toMatchObject({ status: "review" });
-    expect(executions).toBe(1);
-    expect(database.getPlanForRun(run.id)).toMatchObject({ status: "approved", approvedBy: "test" });
-    expect(database.listCheckpoints(run.id).length).toBeGreaterThan(0);
-    database.close(); vault.dispose();
+    try {
+      engine.start(run, profile);
+      const outcome = await result;
+      await engine.waitForSettlement(run.id);
+      expect(outcome, JSON.stringify(outcome)).toMatchObject({ status: "review" });
+      expect(executions).toBe(1);
+      expect(database.getPlanForRun(run.id)).toMatchObject({ status: "approved", approvedBy: "test" });
+      expect(database.listCheckpoints(run.id).length).toBeGreaterThan(0);
+    } finally {
+      await engine.close();
+      database.close();
+      vault.dispose();
+    }
   });
 
   it("repairs tool-history protocol errors, retries transient failures, and lets the agent self-correct", async () => {
@@ -460,18 +471,24 @@ describe("HarnessEngine", () => {
       });
     });
 
-    engine.start(current, profile);
-    await expect(result).resolves.toMatchObject({ status: "completed" });
-    const requestText = requests[0]?.messages.flatMap((message) => message.content.flatMap((part) => part.type === "text" ? [part.text] : [])).join("\n") ?? "";
-    expect(requestText).toContain("remember the blue widget");
-    expect(requestText).toContain("the widget is stored in module alpha");
-    expect(requestText).toContain("where is it?");
-    expect(requestText).not.toContain("cross-session secret");
-    expect(requestText).not.toContain("must stay isolated");
-    const userMessages = requests[0]?.messages.filter((message) => message.role === "user") ?? [];
-    expect(userMessages[0]?.content.some((part) => part.type === "image")).toBe(false);
-    expect(userMessages.at(-1)?.content.some((part) => part.type === "image" && part.attachment.id === "attachment-current")).toBe(true);
-    database.close();
-    vault.dispose();
+    try {
+      engine.start(current, profile);
+      await expect(result).resolves.toMatchObject({ status: "completed" });
+      const requestText = requests[0]?.messages.flatMap((message) => message.content.flatMap((part) => part.type === "text" ? [part.text] : [])).join("\n") ?? "";
+      expect(requestText).toContain("remember the blue widget");
+      expect(requestText).toContain("the widget is stored in module alpha");
+      expect(requestText).toContain("where is it?");
+      expect(requestText).not.toContain("cross-session secret");
+      expect(requestText).not.toContain("must stay isolated");
+      const userMessages = requests[0]?.messages.filter((message) => message.role === "user") ?? [];
+      expect(userMessages[0]?.content.some((part) => part.type === "image")).toBe(false);
+      const currentMessage = userMessages.find(message => message.content.some(part => part.type === "text" && part.trust === "user_request" && part.text === current.request));
+      expect(currentMessage?.content.some(part => part.type === "image" && part.attachment.id === "attachment-current")).toBe(true);
+      expect(userMessages.filter(message => message.content.some(part => part.type === "image" && part.attachment.id === "attachment-current"))).toEqual([currentMessage]);
+    } finally {
+      await engine.close();
+      database.close();
+      vault.dispose();
+    }
   });
 });

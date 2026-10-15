@@ -25,7 +25,7 @@ const rateLimitPair = createPairRateLimiter();
 
 const app = Fastify({ logger: { redact: ["req.headers.authorization", "req.headers.x-admin-key", "body.apiKey"] }, bodyLimit: 30_000_000 });
 
-app.get("/health", async () => ({ status: "ok", version: "1.2.0" }));
+app.get("/health", async () => ({ status: "ok", version: "1.4.51" }));
 
 app.post("/admin/pairing-codes", { preHandler: requireAdmin }, async () => {
   const code = Array.from({ length: 8 }, () => PAIRING_ALPHABET[randomInt(PAIRING_ALPHABET.length)]).join("");

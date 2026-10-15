@@ -9,15 +9,19 @@ const legacySummary = "Runtime stopping condition: verification configuration mi
 const userMessage = (text: string): ModelMessage => ({ role: "user", content: [{ type: "text", text, trust: "user_request" }] });
 const messageTexts = (messages: ModelMessage[]): string[] => messages.flatMap(message => message.content.flatMap(part => part.type === "text" ? [part.text] : []));
 
-function fixture(respond: (request: ModelRequest, index: number) => ProviderStreamEvent[] = () => [{ type: "text_delta", delta: "Evidence reviewed." }]) {
+const continuationSummary = JSON.stringify({ goal: "Inspect the memory issue", constraints: ["Preserve the public API"], decisions: [], evidence: [], completed: [], pending: ["Check cancellation"] });
+
+function fixture(respond: (request: ModelRequest, index: number) => ProviderStreamEvent[] = request => [{ type: "text_delta", delta: request.purpose === "compaction" ? continuationSummary : "Evidence reviewed." }], capacity = 8192) {
   const requests: ModelRequest[] = [];
   const saved: ModelMessage[][] = [];
-  const model = descriptor({ providerId: "fixture", modelId: "summary", displayName: "Summary fixture", capabilities: { vision: false, tools: true, parallelTools: false, structuredOutput: true, maxContextTokens: 8192, dataPolicy: "local" } });
+  const model = descriptor({ providerId: "fixture", modelId: "summary", displayName: "Summary fixture", capabilities: { vision: false, tools: true, parallelTools: false, structuredOutput: true, maxContextTokens: capacity, dataPolicy: "local" } });
+  let mainTurns = 0;
   const provider: ModelProvider = {
     id: "fixture", async listModels() { return [model]; }, async health() { return true; }, estimateCost() { return 0; },
     async *stream(request) {
       requests.push(structuredClone(request));
-      for (const event of respond(request, requests.length)) yield event;
+      if (request.purpose === "main") mainTurns += 1;
+      for (const event of respond(request, mainTurns)) yield event;
     },
   };
   const options: PiAgentBridgeOptions = {
@@ -135,14 +139,16 @@ describe("temporary runtime stop summaries", () => {
     for (let index = 0; index < 30; index++) history.push({ role: index % 2 ? "user" : "assistant", content: [{ type: "text", text: `old-observation-${index} ${"inspection evidence ".repeat(100)}`, trust: "untrusted_tool" }] });
     history.push(userMessage("Continue the investigation using retained evidence."));
     options.resumeTranscript = history;
-    options.disableModelSummary = true;
     options.contextPolicy = { compactAtRatio: .7, maxAfterCompactionRatio: .5, retainRecentTurns: 1 };
     const compactions: ModelMessage[][] = [];
     options.onCompaction = async event => { compactions.push(event.after); };
     const result = await runWithPiAgent(options);
     expect(result.errorMessage).toBeUndefined();
     expect(compactions.length).toBeGreaterThan(0);
-    for (const transcript of [...compactions, ...saved, result.transcript, requests[0]!.messages]) {
+    const mainRequests = requests.filter(request => request.purpose === "main");
+    expect(mainRequests).toHaveLength(1);
+    expect(requests.some(request => request.purpose === "compaction")).toBe(true);
+    for (const transcript of [...compactions, ...saved, result.transcript, mainRequests[0]!.messages]) {
       const texts = messageTexts(transcript);
       expect(texts).not.toContain(legacySummary);
       expect(texts).toContain(realUserRequest);
@@ -151,9 +157,9 @@ describe("temporary runtime stop summaries", () => {
   });
 
   it("keeps a currently active summary effective through compaction then removes it before another prompt", async () => {
-    const { options, requests } = fixture((_request, index) => [{ type: "text_delta", delta: index === 1 ? "collected evidence ".repeat(1000) : "Collected findings." }]);
+    const { options, requests } = fixture((request, index) => [{ type: "text_delta", delta: request.purpose === "compaction" ? continuationSummary : index === 1 ? "collected evidence ".repeat(1000) : "Collected findings." }], 16_384);
     const summary = runtimeStopSummary("time budget reached");
-    options.disableModelSummary = true;
+    options.maxOutputTokens = 10_000;
     options.contextPolicy = { compactAtRatio: .6, maxAfterCompactionRatio: .4, retainRecentTurns: 1 };
     let compactions = 0;
     options.onCompaction = async () => { compactions++; };
@@ -164,20 +170,23 @@ describe("temporary runtime stop summaries", () => {
     const result = await runWithPiAgent(options);
     expect(result.errorMessage).toBeUndefined();
     expect(compactions).toBeGreaterThan(0);
-    expect(requests).toHaveLength(3);
-    expect(requests[1]!.tools).toEqual([]);
-    expect(messageTexts(requests[1]!.messages)).toContain(summary);
-    expect(requests[2]!.tools.map(tool => tool.name)).toEqual(["read_file"]);
-    expect(messageTexts(requests[2]!.messages)).not.toContain(summary);
+    const mainRequests = requests.filter(request => request.purpose === "main");
+    expect(mainRequests).toHaveLength(3);
+    expect(requests.some(request => request.purpose === "compaction")).toBe(true);
+    expect(mainRequests[1]!.tools).toEqual([]);
+    expect(messageTexts(mainRequests[1]!.messages)).toContain(summary);
+    expect(mainRequests[2]!.tools.map(tool => tool.name)).toEqual(["read_file"]);
+    expect(messageTexts(mainRequests[2]!.messages)).not.toContain(summary);
     expect(messageTexts(result.transcript)).not.toContain(summary);
   });
 
   it("excludes the active stop instruction from the model compaction request and saved compacted history", async () => {
     const { options, requests, saved } = fixture((request, index) => [{ type: "text_delta", delta: request.purpose === "compaction"
-      ? JSON.stringify({ goal: "Inspect the memory issue", constraints: ["Preserve the public API"], decisions: [], evidence: [], completed: [], pending: ["Check cancellation"] })
-      : index === 1 ? "collected evidence ".repeat(1000) : "Collected findings." }]);
+      ? continuationSummary
+      : index === 1 ? "collected evidence ".repeat(1000) : "Collected findings." }], 16_384);
     const summary = runtimeStopSummary("time budget reached");
     options.provider.supportsNonThinkingCompaction = () => true;
+    options.maxOutputTokens = 10_000;
     options.conversationHistory = [userMessage("Inspect the memory issue.")];
     for (let index = 0; index < 8; index++) options.conversationHistory.push({ role: "assistant", content: [{ type: "text", text: `Retained observation ${index}: inspect the cancellation listener.`, trust: "untrusted_tool" }] });
     options.contextPolicy = { compactAtRatio: .6, maxAfterCompactionRatio: .4, retainRecentTurns: 1 };

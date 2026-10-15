@@ -1,4 +1,4 @@
-import type { AgentEvent, AttachmentRef, CacheDiagnostic, ModelDescriptor, ModelRequest, Profile, ToolCall, Usage } from "@harness/protocol";
+import type { AgentEvent, AttachmentRef, CacheDiagnostic, ModelDescriptor, ModelRequest, Profile, ReasoningEffort, ToolCall, Usage } from "@harness/protocol";
 
 export interface ResolvedAttachment {
   mimeType: string;
@@ -26,10 +26,13 @@ export interface ModelProvider {
 }
 
 export interface RouteRequirements {
+  reasoningEffort?: ReasoningEffort | null;
   needsVision: boolean;
   needsTools: boolean;
   needsStructuredOutput: boolean;
   estimatedInputTokens: number;
+  /** Noncompressible input when retained conversation history can be compacted before dispatch. */
+  minimumInputTokens?: number;
   estimatedOutputTokens: number;
 }
 

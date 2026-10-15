@@ -44,7 +44,7 @@ function detail(runs: SessionDetail["runs"]): SessionDetail {
       createdAt: at,
       updatedAt: at,
     },
-    runs,
+    runs: runs.map((run, index) => ({ ...run, spec: { ...run.spec, createdAt: new Date(Date.parse(at) + index).toISOString() } })),
   };
 }
 
@@ -53,42 +53,46 @@ function text(messages: ReturnType<typeof buildSessionContext>): string {
 }
 
 describe("buildSessionContext", () => {
-  it("replays completed turns in order, excludes the current run, and keeps history untrusted", () => {
+  it("replays completed turns in order, excludes the current run, and preserves genuine user requirements", () => {
     const messages = buildSessionContext(detail([
       run("run-1", "first request", "completed", "first answer"),
       run("run-2", "second request", "completed", "second answer"),
       run("run-current", "current request", "queued"),
-    ]), "run-current", 10_000);
+    ]), "run-current");
 
     expect(messages.map((message) => message.role)).toEqual(["user", "assistant", "user", "assistant"]);
     expect(text(messages)).toMatch(/first request[\s\S]*first answer[\s\S]*second request[\s\S]*second answer/);
     expect(text(messages)).not.toContain("current request");
-    expect(messages.flatMap((message) => message.content).filter((part) => part.type === "text").every((part) => part.trust === "untrusted_tool")).toBe(true);
+    expect(messages.filter(message => message.role === "user").flatMap(message => message.content).filter(part => part.type === "text").every(part => part.trust === "user_request")).toBe(true);
+    expect(messages.filter(message => message.role === "assistant").flatMap(message => message.content).filter(part => part.type === "text").every(part => part.trust === "untrusted_tool")).toBe(true);
   });
 
   it("marks unfinished prior turns instead of inventing an assistant result", () => {
     const messages = buildSessionContext(detail([
       run("run-paused", "continue the refactor", "paused"),
       run("run-current", "what remains?", "queued"),
-    ]), "run-current", 10_000);
+    ]), "run-current");
 
     expect(text(messages)).toContain("continue the refactor");
     expect(text(messages)).toContain("未完成");
     expect(text(messages)).toContain("paused");
   });
 
-  it("keeps the most recent full turn and compacts older turns within the character budget", () => {
+  it("retains complete older requests and answers without a fixed character or excerpt budget", () => {
+    const oldRequest = "old-request-".repeat(5_000) + "critical constraint at the end";
+    const oldAnswer = "old-answer-".repeat(5_000) + "verified evidence at the end";
     const messages = buildSessionContext(detail([
-      run("run-old", "old-request-".repeat(30), "completed", "old-answer-".repeat(30)),
+      run("run-old", oldRequest, "completed", oldAnswer),
       run("run-recent", "recent request", "completed", "recent answer"),
       run("run-current", "current request", "queued"),
-    ]), "run-current", 240);
+    ]), "run-current");
     const rendered = text(messages);
 
-    expect(rendered).toContain("较早会话摘要");
+    expect(rendered).toContain(oldRequest);
+    expect(rendered).toContain(oldAnswer);
     expect(rendered).toContain("recent request");
     expect(rendered).toContain("recent answer");
-    expect(rendered.length).toBeLessThanOrEqual(240);
+    expect(rendered.length).toBeGreaterThan(48_000);
   });
 });
 

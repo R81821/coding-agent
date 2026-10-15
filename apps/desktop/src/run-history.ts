@@ -15,6 +15,7 @@ export interface ProjectSessionGroup {
 export interface TurnUsage { turns: number; tools: number; inputTokens: number; outputTokens: number; usd: number; costKnown: boolean }
 export interface SessionTurn {
   view?: { lastSequence: number; eventsComplete: boolean };
+  parentRunId?: string;
   continuation?: { runId: string; checkpointId: string; note?: string | undefined };
   usage?: TurnUsage;
   chainUsage?: TurnUsage;
@@ -33,6 +34,24 @@ function compareRunSpec(left: RunRecord, right: RunRecord): number {
 export function latestSessionRun(runs: SessionDetail["runs"]): SessionDetail["runs"][number] | undefined {
   let latest: RunRecord | undefined;
   for (const run of runs) if (!latest || compareRunSpec(latest, run) <= 0) latest = run;
+  return latest;
+}
+
+export function latestConversationRun(runs: SessionDetail["runs"]): RunRecord | undefined {
+  return latestSessionRun(runs.filter(run => run.spec.parentRunId === undefined));
+}
+
+/** Only the latest human conversation round can be withdrawn after it has actually paused. */
+export function eligibleWithdrawalRun(detail: SessionDetail | undefined): RunRecord | undefined {
+  const latest = detail && latestConversationRun(detail.runs);
+  if (latest?.status !== "paused") return;
+  const submittedIds = new Set(latest.events?.flatMap(event => event.type === "steering_submitted" ? [event.messageId] : []));
+  const message = latest.events?.findLast((event): event is Extract<AgentEvent, { type: "steering_submitted" | "steering_delivered" }> =>
+    event.type === "steering_submitted" || event.type === "steering_delivered" && (!event.messageId || !submittedIds.has(event.messageId)));
+  if (message) {
+    const submitted = latest.events.findLast(event => event.type === "steering_submitted" && event.messageId === message.messageId);
+    if (submitted?.type !== "steering_submitted" || !submitted.withdrawable) return;
+  }
   return latest;
 }
 
@@ -116,7 +135,7 @@ export function sessionTurns(detail: SessionDetail | undefined): SessionTurn[] {
     .slice()
     .sort(compareRunSpec)
     .map((run) => {
-      if (run.view && !run.view.eventsComplete) return { runId: run.spec.id, request: run.spec.request, status: run.status, events: run.events, view: run.view, ...(run.spec.continuation ? { continuation: run.spec.continuation } : {}) };
+      if (run.view && !run.view.eventsComplete) return { runId: run.spec.id, request: run.spec.request, status: run.status, events: run.events, view: run.view, ...(run.spec.parentRunId !== undefined ? { parentRunId: run.spec.parentRunId } : {}), ...(run.spec.continuation ? { continuation: run.spec.continuation } : {}) };
       const usage = runUsage(run);
       const chainUsage = { ...usage };
       const seen = new Set([run.spec.id]);
@@ -130,7 +149,7 @@ export function sessionTurns(detail: SessionDetail | undefined): SessionTurn[] {
         chainUsage.costKnown &&= previous.costKnown;
         parent = prior.spec.continuation?.runId;
       }
-      return { runId: run.spec.id, request: run.spec.request, status: run.status, events: run.events, ...(run.view ? { view: run.view } : {}), ...(run.view && !run.view.eventsComplete ? {} : { usage, chainUsage }), ...(run.spec.continuation ? { continuation: run.spec.continuation } : {}) };
+      return { runId: run.spec.id, request: run.spec.request, status: run.status, events: run.events, ...(run.view ? { view: run.view } : {}), ...(run.view && !run.view.eventsComplete ? {} : { usage, chainUsage }), ...(run.spec.parentRunId !== undefined ? { parentRunId: run.spec.parentRunId } : {}), ...(run.spec.continuation ? { continuation: run.spec.continuation } : {}) };
     });
 }
 
@@ -140,7 +159,7 @@ export function createSessionTurnSelector() {
   return (detail: SessionDetail | undefined): SessionTurn[] => {
     const turns = sessionTurns(detail).map(turn => {
       const old = previous.get(turn.runId);
-      return old && old.events === turn.events && old.status === turn.status && old.request === turn.request && old.view === turn.view && old.continuation === turn.continuation &&
+      return old && old.events === turn.events && old.status === turn.status && old.request === turn.request && old.view === turn.view && old.continuation === turn.continuation && old.parentRunId === turn.parentRunId &&
         sameUsage(old.usage, turn.usage) && sameUsage(old.chainUsage, turn.chainUsage) ? old : turn;
     });
     previous = new Map(turns.map(turn => [turn.runId, turn]));

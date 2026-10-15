@@ -6,6 +6,11 @@ export class ModelRouter {
   constructor(private readonly providers: ModelProvider[]) {}
 
   async route(profile: Profile, requirements: RouteRequirements): Promise<RouteDecision> {
+    const capacityInputTokens = requirements.minimumInputTokens ?? requirements.estimatedInputTokens;
+    if (requirements.minimumInputTokens !== undefined && (
+      !Number.isFinite(capacityInputTokens) || capacityInputTokens < 0 ||
+      !Number.isFinite(requirements.estimatedInputTokens) || capacityInputTokens > requirements.estimatedInputTokens
+    )) throw new Error("最小输入估算必须为非负有限数，且不能超过总输入估算");
     const weights = routeWeights(profile);
     const candidates: RouteDecision[] = [];
     const exclusions: string[] = [];
@@ -31,7 +36,7 @@ export class ModelRouter {
         if (requirements.needsVision && !model.capabilities.vision) reasons.push("不支持图片输入");
         if (requirements.needsTools && !model.capabilities.tools) reasons.push("不支持工具调用");
         if (requirements.needsStructuredOutput && !model.capabilities.structuredOutput) reasons.push("不支持结构化输出");
-        const requiredTokens = requirements.estimatedInputTokens + requirements.estimatedOutputTokens;
+        const requiredTokens = capacityInputTokens + requirements.estimatedOutputTokens;
         if (model.capabilities.maxContextTokens < requiredTokens) reasons.push(`上下文容量不足：需要 ${requiredTokens}，上限 ${model.capabilities.maxContextTokens} tokens`);
         const estimatedUsd = provider.estimateCost(model, requirements.estimatedInputTokens, requirements.estimatedOutputTokens);
         if (estimatedUsd > profile.budget.maxUsd) reasons.push(`预计费用 $${estimatedUsd.toFixed(4)} 超过预算 $${profile.budget.maxUsd}`);
@@ -55,6 +60,10 @@ export class ModelRouter {
         ? "后台未加载任何模型服务商。请在设置中保存 API Key；使用 OpenAI-compatible 时还须保存 Base URL 和模型名称。"
         : exclusions.slice(0, 12).join("\n");
       throw new Error(`无法选择模型：${detail}`);
+    }
+    // Effort can reject the normal routing decision, never change which model wins.
+    if (requirements.reasoningEffort != null && !decision.model.capabilities.reasoningEfforts?.includes(requirements.reasoningEffort)) {
+      throw new Error(`当前配置模型 ${decision.provider.id}/${decision.model.modelId} 不支持推理等级：${requirements.reasoningEffort}`);
     }
     return decision;
   }

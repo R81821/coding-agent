@@ -20,6 +20,7 @@ export function ApprovalDialog({
   onConfirm,
   onCancel,
   onDismiss,
+  onPause,
 }: {
   title: string;
   description: string;
@@ -34,6 +35,8 @@ export function ApprovalDialog({
   onConfirm: () => void | Promise<void>;
   onCancel: () => void | Promise<void>;
   onDismiss: () => void;
+  /** Stop the current round without approving the operation. */
+  onPause?: () => void | Promise<void>;
 }) {
   const [showAlternatives, setShowAlternatives] = React.useState(false);
   const panelId = React.useId();
@@ -48,18 +51,23 @@ export function ApprovalDialog({
       onConfirm={onConfirm}
       onCancel={onCancel}
       onDismiss={onDismiss}
-      {...(hasAlternatives
+      {...(hasAlternatives || onPause
         ? {
             extraAction: (
-              <button
-                type="button"
-                className="decision-alternatives"
-                aria-expanded={showAlternatives}
-                aria-controls={panelId}
-                onClick={() => setShowAlternatives((value) => !value)}
-              >
-                {alternativesLabel}
-              </button>
+              <>
+                {onPause && <button type="button" className="decision-secondary" onClick={() => void onPause()}>暂停本轮</button>}
+                {hasAlternatives && (
+                  <button
+                    type="button"
+                    className="decision-alternatives"
+                    aria-expanded={showAlternatives}
+                    aria-controls={panelId}
+                    onClick={() => setShowAlternatives((value) => !value)}
+                  >
+                    {alternativesLabel}
+                  </button>
+                )}
+              </>
             ),
           }
         : {})}

@@ -1,0 +1,99 @@
+.prompt-cache-stats {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: .45em 1.4em;
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+  margin: 0;
+  padding: .1em .8em 0;
+  color: var(--color-text-muted, var(--muted, #929398));
+  font-family: var(--ui-font, var(--font-sans, inherit));
+  font-size: max(10px, calc(var(--ui-font-size, 14px) - 2px));
+  font-weight: var(--ui-font-weight, 400);
+  line-height: 1.65;
+}
+
+.prompt-cache-metrics {
+  display: flex;
+  flex: 1 1 auto;
+  flex-wrap: nowrap;
+  align-items: center;
+  gap: 1.3em;
+  max-width: 100%;
+  min-width: 0;
+  overflow-x: auto;
+  white-space: nowrap;
+  scrollbar-width: none;
+}
+
+.prompt-cache-metrics::-webkit-scrollbar {
+  display: none;
+}
+
+.prompt-cache-metrics > span {
+  flex-shrink: 0;
+}
+
+.prompt-cache-metrics strong {
+  color: var(--color-text, #eeebf0);
+  font-weight: inherit;
+  font-variant-numeric: tabular-nums;
+}
+
+.prompt-context-usage {
+  --context-tone: var(--color-success, #34d399);
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: .65em;
+  max-width: 100%;
+  margin-inline-start: auto;
+  white-space: nowrap;
+}
+
+.prompt-context-usage[data-level="high"] {
+  --context-tone: var(--color-warning, #fbbf24);
+}
+
+.prompt-context-usage[data-level="critical"] {
+  --context-tone: var(--color-danger, #f87171);
+}
+
+.prompt-context-usage[data-level="unknown"] {
+  --context-tone: var(--color-text-muted, var(--muted, #929398));
+}
+
+.prompt-context-label {
+  flex-shrink: 0;
+}
+
+.prompt-context-meter {
+  width: clamp(88px, 8.7em, 112px);
+  height: 5px;
+  overflow: hidden;
+  border-radius: 99px;
+  background: color-mix(in srgb, var(--color-text, #eeebf0) 9%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--color-text, #eeebf0) 3%, transparent);
+}
+
+.prompt-context-fill {
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, color-mix(in srgb, var(--context-tone) 72%, transparent), var(--context-tone));
+  transition: width 240ms ease, background-color 180ms ease;
+}
+
+.prompt-context-percentage {
+  min-width: 3.2em;
+  color: var(--context-tone);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .prompt-context-fill {
+    transition: none;
+  }
+}

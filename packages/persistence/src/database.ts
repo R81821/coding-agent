@@ -1,5 +1,5 @@
 import { isDeepStrictEqual } from "node:util";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { mkdir } from "node:fs/promises";
 import { dirname } from "node:path";
 import type {
@@ -25,12 +25,14 @@ import type {
   ProjectRecord,
   RunSpec,
   RunStatus,
+  RunWithdrawal,
   SkillManifest,
   TaskSpec,
   VerificationRun,
 } from "@harness/protocol";
 import {
   ProfileSchema,
+  isCommittedContextAdjustment,
   migrateContextPolicy,
   ProjectRecordSchema,
   SessionRecordSchema,
@@ -49,6 +51,21 @@ interface EventRow {
 interface GenericRow {
   id: string;
   payload: string;
+}
+export interface SteeringWithdrawalBoundary {
+  runId: string;
+  messageId: string;
+  checkpointId: string;
+  beforeSequence: number;
+  descendantRunIds: string[];
+  memoryIds: string[];
+}
+const steeringRestoreTables = ["plans", "approvals", "compactions", "verification_runs", "traces"] as const;
+type SteeringRestoreTable = typeof steeringRestoreTables[number];
+interface StoredSteeringWithdrawal extends SteeringWithdrawalBoundary {
+  sessionId: string;
+  runs: Array<{ runId: string; status: RunStatus; beforeSequence: number; checkpointId?: string; checkpointIds: string[] }>;
+  records: Record<SteeringRestoreTable, Array<Record<string, unknown> & { id: string; runId: string }>>;
 }
 type GenericTable =
   | "profiles"
@@ -143,6 +160,7 @@ export class HarnessDatabase {
   }
 
   saveRun(spec: RunSpec, status: RunStatus = "queued"): void {
+    if (this.isRunWithdrawn(spec.id)) throw new Error("已撤回的运行不能重新保存");
     const now = new Date().toISOString();
     this.db
       .prepare(
@@ -159,6 +177,7 @@ export class HarnessDatabase {
   }
 
   updateRunStatus(runId: string, status: RunStatus): void {
+    if (this.isRunWithdrawn(runId)) throw new Error("已撤回的运行不能改变状态");
     this.flushEvents();
     this.db
       .prepare("UPDATE runs SET status=?, updated_at=? WHERE id=?")
@@ -172,6 +191,7 @@ export class HarnessDatabase {
 
   getRun(runId: string): { spec: RunSpec; status: RunStatus } | undefined {
     this.flushEvents();
+    if (this.isRunWithdrawn(runId)) return;
     const row = this.db
       .prepare("SELECT id, status, payload FROM runs WHERE id=?")
       .get(runId) as RunRow | undefined;
@@ -180,6 +200,253 @@ export class HarnessDatabase {
       spec: this.crypto.decryptJson<RunSpec>(row.payload, `run:${row.id}`),
       status: row.status,
     };
+  }
+
+  isRunWithdrawn(runId: string): boolean {
+    return Boolean(this.db.prepare("SELECT 1 FROM withdrawn_runs WHERE run_id=?").get(runId));
+  }
+
+  /** Includes the visible root and every descendant, even if a child has a different session ID. */
+  getRunDescendants(runId: string): Array<{ spec: RunSpec; status: RunStatus }> {
+    this.flushEvents();
+    const all = this.allRuns();
+    if (!all.some(item => item.spec.id === runId)) return [];
+    const ids = new Set([runId]);
+    let size = 0;
+    while (size !== ids.size) {
+      size = ids.size;
+      for (const item of all) if (item.spec.parentRunId && ids.has(item.spec.parentRunId)) ids.add(item.spec.id);
+    }
+    return all.filter(item => ids.has(item.spec.id));
+  }
+
+  /** Commit only after the engine has stopped and restored the workspace. Audit and spent usage remain. */
+  withdrawLatestRun(runId: string): RunWithdrawal {
+    this.flushEvents();
+    const run = this.getRun(runId);
+    if (!run || run.spec.parentRunId || run.status !== "paused") throw new Error("只能撤回已暂停的最新一轮对话");
+    if (!this.visibleSession(run.spec.sessionId)) throw new Error("会话不存在或已删除");
+    const latest = this.runsForSession(run.spec.sessionId).filter(item => !item.spec.parentRunId).at(-1);
+    if (latest?.spec.id !== runId) throw new Error("只能撤回最新一轮对话");
+    if (this.latestSteeringEvent(runId)) throw new Error("本轮已有追加消息，请撤回最新一条消息");
+    const tree = this.getRunDescendants(runId);
+    const ids = new Set(tree.map(item => item.spec.id));
+    if (tree.some(item => liveStatuses.has(item.status))) throw new Error("本轮仍有运行中的任务，请等待暂停完成");
+    const memories = this.listMemories().filter(memory => ids.has(memory.source.replace(/^run:/, "")) && memory.source.startsWith("run:"));
+    const at = new Date().toISOString();
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      for (const item of tree) {
+        this.db.prepare("INSERT INTO withdrawn_runs (run_id,session_id,withdrawn_at) VALUES (?,?,?)").run(item.spec.id, item.spec.sessionId, at);
+        this.db.prepare("UPDATE runs SET status='cancelled',updated_at=? WHERE id=?").run(at, item.spec.id);
+      }
+      for (const memory of memories) {
+        this.db.prepare("DELETE FROM memory_search WHERE memory_id=?").run(memory.id);
+        this.db.prepare("DELETE FROM memories WHERE id=?").run(memory.id);
+      }
+      this.touchSession(run.spec.sessionId, { updatedAt: at });
+      this.db.exec("COMMIT");
+      this.clearOutputPages();
+      return { run: run.spec, withdrawnRunIds: [...ids] };
+    } catch (error) {
+      this.db.exec("ROLLBACK");
+      throw error;
+    }
+  }
+
+  /** Freeze the durable paused state before a safely snapshotted additional message is submitted. */
+  prepareSteeringWithdrawal(runId: string, messageId: string, checkpointId: string): void {
+    this.flushEvents();
+    const run = this.assertSteeringWithdrawalRun(runId);
+    const checkpoint = this.getLatestCheckpoint(runId);
+    if (!checkpoint || checkpoint.id !== checkpointId || checkpoint.status !== "paused") throw new Error("追加消息前的暂停检查点已改变");
+    const tree = this.getRunDescendants(runId);
+    if (tree.some(item => liveStatuses.has(item.status))) throw new Error("本轮仍有运行中的任务，请等待暂停完成");
+    const ids = new Set(tree.map(item => item.spec.id));
+    const records = Object.fromEntries(steeringRestoreTables.map(table => [table,
+      this.list<Record<string, unknown> & { id: string; runId: string }>(table).filter(record => ids.has(record.runId)),
+    ])) as StoredSteeringWithdrawal["records"];
+    const runs = tree.map(item => ({
+      runId: item.spec.id, status: item.status, beforeSequence: this.lastEventSequence(item.spec.id),
+      ...(this.getLatestCheckpoint(item.spec.id) ? { checkpointId: this.getLatestCheckpoint(item.spec.id)!.id } : {}),
+      checkpointIds: (this.db.prepare("SELECT id FROM checkpoints WHERE run_id=?").all(item.spec.id) as Array<{ id: string }>).map(row => row.id),
+    }));
+    const state: StoredSteeringWithdrawal = {
+      runId, messageId, checkpointId, beforeSequence: this.lastEventSequence(runId), sessionId: run.spec.sessionId,
+      descendantRunIds: [...ids].filter(id => id !== runId),
+      memoryIds: this.listMemories().filter(memory => memory.source.startsWith("run:") && ids.has(memory.source.slice(4))).map(memory => memory.id),
+      runs, records,
+    };
+    const id = JSON.stringify([runId, messageId]);
+    this.db.prepare("INSERT INTO steering_withdrawals (id,run_id,session_id,payload) VALUES (?,?,?,?)").run(
+      id, runId, run.spec.sessionId, this.crypto.encryptJson(state, `steering_withdrawals:${id}`),
+    );
+  }
+
+  getSteeringWithdrawal(runId: string, messageId?: string): SteeringWithdrawalBoundary | undefined {
+    this.flushEvents();
+    const id = messageId ?? this.latestSteeringEvent(runId)?.messageId;
+    if (!id) return;
+    const state = this.steeringWithdrawal(runId, id);
+    if (!state) return;
+    return { runId: state.runId, messageId: state.messageId, checkpointId: state.checkpointId,
+      beforeSequence: state.beforeSequence, descendantRunIds: [...state.descendantRunIds], memoryIds: [...state.memoryIds] };
+  }
+
+  discardSteeringWithdrawal(runId: string, messageId: string): void {
+    this.db.prepare("DELETE FROM steering_withdrawals WHERE id=?").run(JSON.stringify([runId, messageId]));
+  }
+
+  /** The filesystem has already been restored; commit the matching conversation branch atomically. */
+  withdrawLatestSteering(runId: string, messageId: string): RunWithdrawal & { messageId: string; text: string } {
+    this.flushEvents();
+    const run = this.assertSteeringWithdrawalRun(runId);
+    const message = this.latestSteeringEvent(runId);
+    if (message?.type !== "steering_submitted" || message.messageId !== messageId) throw new Error("只能撤回最新一条追加消息");
+    const state = this.steeringWithdrawal(runId, messageId);
+    if (!state || state.sessionId !== run.spec.sessionId || message.sequence <= state.beforeSequence) throw new Error("本条消息没有可恢复的暂停记录，无法安全撤回");
+    const tree = this.getRunDescendants(runId);
+    if (tree.some(item => liveStatuses.has(item.status))) throw new Error("本轮仍有运行中的任务，请等待暂停完成");
+    const baselineIds = new Set(state.runs.map(item => item.runId));
+    if (state.runs.some(item => !tree.some(current => current.spec.id === item.runId))) throw new Error("暂停前的子任务记录已改变，无法安全撤回");
+    const added = tree.filter(item => !baselineIds.has(item.spec.id));
+    const allIds = new Set(tree.map(item => item.spec.id));
+    const contentCandidates = this.contentReferences(baselineIds);
+    const priorMemoryIds = new Set(state.memoryIds);
+    const memories = this.listMemories().filter(memory => memory.source.startsWith("run:") && allIds.has(memory.source.slice(4)) && !priorMemoryIds.has(memory.id));
+    const at = new Date().toISOString();
+    // Resolve every immutable baseline before changing rows. A missing checkpoint must never
+    // silently turn a message withdrawal into a full conversation reset.
+    const restored = state.runs.map(item => {
+      const baseline = item.checkpointId ? this.get<RunCheckpoint>("checkpoints", item.checkpointId) : undefined;
+      const latest = this.getLatestCheckpoint(item.runId);
+      if (item.runId === runId && (!baseline || baseline.runId !== runId)) throw new Error("追加消息前的检查点不存在，无法安全撤回");
+      const sequence = Math.max(this.lastEventSequence(item.runId), latest?.sequence ?? -1, baseline?.sequence ?? -1,
+        Number(this.db.prepare("SELECT MAX(sequence) AS sequence FROM withdrawn_message_events WHERE run_id=?").get(item.runId)?.sequence ?? -1)) + 1;
+      const workflow = baseline?.workflow ? structuredClone(baseline.workflow) : undefined;
+      // Child costs already charged to the parent must keep their accounting watermark even
+      // though the child execution's conversational/verification state returns to the baseline.
+      for (const execution of workflow?.sequential?.taskExecutions ?? []) {
+        if (!execution.childRunId) continue;
+        const ledgers = [execution.accountedUsage, ...(latest?.workflow?.sequential?.taskExecutions ?? [])
+          .filter(current => current.childRunId === execution.childRunId).map(current => current.accountedUsage)]
+          .filter((usage): usage is NonNullable<typeof usage> => Boolean(usage));
+        if (!ledgers.length) continue;
+        execution.accountedUsage = {
+          inputTokens: Math.max(...ledgers.map(usage => usage.inputTokens)), outputTokens: Math.max(...ledgers.map(usage => usage.outputTokens)),
+          estimatedUsd: Math.max(...ledgers.map(usage => usage.estimatedUsd)), turns: Math.max(...ledgers.map(usage => usage.turns)),
+          toolCalls: Math.max(...ledgers.map(usage => usage.toolCalls)), costKnown: ledgers.every(usage => usage.costKnown !== false),
+        };
+      }
+      const checkpoint: RunCheckpoint | undefined = baseline ? {
+        ...baseline, id: `checkpoint_withdraw_${randomUUID()}`, sequence, status: item.status, reason: "manual", createdAt: at,
+        ...(workflow ? { workflow } : {}),
+        usage: latest ? { ...latest.usage,
+          inputTokens: Math.max(baseline.usage.inputTokens, latest.usage.inputTokens),
+          outputTokens: Math.max(baseline.usage.outputTokens, latest.usage.outputTokens),
+          estimatedUsd: Math.max(baseline.usage.estimatedUsd, latest.usage.estimatedUsd) } : baseline.usage,
+        turns: Math.max(baseline.turns, latest?.turns ?? 0), toolCalls: Math.max(baseline.toolCalls, latest?.toolCalls ?? 0),
+        ...(baseline.elapsedMs !== undefined || latest?.elapsedMs !== undefined ? { elapsedMs: Math.max(baseline.elapsedMs ?? 0, latest?.elapsedMs ?? 0) } : {}),
+        ...(baseline.repairAttemptsUsed !== undefined || latest?.repairAttemptsUsed !== undefined ? { repairAttemptsUsed: Math.max(baseline.repairAttemptsUsed ?? 0, latest?.repairAttemptsUsed ?? 0) } : {}),
+      } : undefined;
+      return { ...item, checkpoint };
+    });
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      for (const item of restored) {
+        this.archiveWithdrawnMessageEvents(item.runId, tree.find(current => current.spec.id === item.runId)!.spec.sessionId, item.beforeSequence);
+        this.db.prepare("DELETE FROM tool_evidence WHERE run_id=? AND sequence>?").run(item.runId, item.beforeSequence);
+        this.db.prepare("DELETE FROM events WHERE run_id=? AND sequence>?").run(item.runId, item.beforeSequence);
+        const kept = new Set(item.checkpointIds);
+        for (const row of this.db.prepare("SELECT id FROM checkpoints WHERE run_id=?").all(item.runId)) {
+          if (!kept.has(String(row.id))) this.db.prepare("DELETE FROM checkpoints WHERE id=?").run(row.id);
+        }
+        this.db.prepare("UPDATE runs SET status=?,updated_at=? WHERE id=?").run(item.status, at, item.runId);
+        if (item.checkpoint) {
+          this.upsert("checkpoints", item.checkpoint.id, item.checkpoint);
+          this.writeEvent({ id: `event_withdraw_${randomUUID()}`, runId: item.runId, sequence: item.checkpoint.sequence, at,
+            type: "checkpoint_saved", checkpointId: item.checkpoint.id, reason: "manual", messages: item.checkpoint.transcript.length });
+        }
+      }
+      for (const table of steeringRestoreTables) {
+        for (const record of this.list<Record<string, unknown> & { id: string; runId?: string }>(table)) {
+          if (record.runId && baselineIds.has(record.runId)) this.db.prepare(`DELETE FROM ${table} WHERE id=?`).run(record.id);
+        }
+        for (const record of state.records[table]) this.upsert(table, record.id, record);
+      }
+      for (const item of added) {
+        this.db.prepare("INSERT INTO withdrawn_runs (run_id,session_id,withdrawn_at) VALUES (?,?,?)").run(item.spec.id, item.spec.sessionId, at);
+        this.db.prepare("UPDATE runs SET status='cancelled',updated_at=? WHERE id=?").run(at, item.spec.id);
+      }
+      for (const memory of memories) {
+        this.db.prepare("DELETE FROM memory_search WHERE memory_id=?").run(memory.id);
+        this.db.prepare("DELETE FROM memories WHERE id=?").run(memory.id);
+      }
+      this.discardSteeringWithdrawal(runId, messageId);
+      this.touchSession(run.spec.sessionId, { updatedAt: at });
+      const retainedContent = this.contentReferences();
+      for (const id of contentCandidates) if (!retainedContent.has(id)) this.db.prepare("DELETE FROM content_objects WHERE id=?").run(id);
+      this.db.exec("COMMIT");
+      this.contentAddresses = new WeakMap();
+      this.clearOutputPages();
+      return { run: run.spec, withdrawnRunIds: added.map(item => item.spec.id), messageId, text: message.text };
+    } catch (error) {
+      this.db.exec("ROLLBACK");
+      this.contentAddresses = new WeakMap();
+      throw error;
+    }
+  }
+
+  private assertSteeringWithdrawalRun(runId: string): { spec: RunSpec; status: RunStatus } {
+    const run = this.getRun(runId);
+    if (!run || run.spec.parentRunId || run.status !== "paused") throw new Error("只能撤回已暂停的最新一轮对话");
+    if (!this.visibleSession(run.spec.sessionId)) throw new Error("会话不存在或已删除");
+    const latest = this.runsForSession(run.spec.sessionId).filter(item => !item.spec.parentRunId).at(-1);
+    if (latest?.spec.id !== runId) throw new Error("只能撤回最新一轮对话");
+    return run;
+  }
+
+  private lastEventSequence(runId: string): number {
+    return Number(this.db.prepare("SELECT MAX(sequence) AS sequence FROM events WHERE run_id=?").get(runId)?.sequence ?? -1);
+  }
+
+  private latestSteeringEvent(runId: string): Extract<AgentEvent, { type: "steering_submitted" | "steering_delivered" }> | undefined {
+    const rows = this.db.prepare("SELECT sequence,payload FROM events WHERE run_id=? AND type IN ('steering_submitted','steering_delivered') ORDER BY sequence").all(runId) as unknown as Array<EventRow & { sequence: number }>;
+    const events = rows.map(row => this.decodeEvent(row.payload, runId, row.sequence)) as Array<Extract<AgentEvent, { type: "steering_submitted" | "steering_delivered" }>>;
+    const submitted = new Set(events.flatMap(event => event.type === "steering_submitted" ? [event.messageId] : []));
+    // Delivering an older queued message after the latest submission does not make that older
+    // bubble the withdrawal target. Legacy delivery-only messages remain distinct boundaries.
+    return events.findLast(event => event.type === "steering_submitted" || !event.messageId || !submitted.has(event.messageId));
+  }
+
+  private steeringWithdrawal(runId: string, messageId: string): StoredSteeringWithdrawal | undefined {
+    const id = JSON.stringify([runId, messageId]);
+    const row = this.db.prepare("SELECT payload FROM steering_withdrawals WHERE id=?").get(id) as { payload: string } | undefined;
+    return row ? this.crypto.decryptJson<StoredSteeringWithdrawal>(row.payload, `steering_withdrawals:${id}`) : undefined;
+  }
+
+  private archiveWithdrawnMessageEvents(runId: string, sessionId: string, afterSequence: number): void {
+    const rows = this.db.prepare("SELECT sequence,payload,created_at,type FROM events WHERE run_id=? AND sequence>? AND type IN ('usage','context_compacted') ORDER BY sequence").all(runId, afterSequence) as unknown as Array<EventRow & { sequence: number; created_at: string; type: string }>;
+    for (const row of rows) {
+      const event = this.decodeEvent(row.payload, runId, row.sequence);
+      const safe = event.type === "context_compacted" ? { ...event, record: { ...event.record, summary: "" } } : event;
+      this.db.prepare("INSERT INTO withdrawn_message_events (run_id,sequence,session_id,type,payload,created_at) VALUES (?,?,?,?,?,?)").run(
+        runId, row.sequence, sessionId, row.type, this.crypto.encryptJson(safe, `event:${runId}:${row.sequence}`), row.created_at,
+      );
+    }
+  }
+
+  private withdrawnEvents(sessionId: string): AgentEvent[] {
+    const rows = this.db.prepare(`SELECT e.run_id,e.sequence,e.payload FROM events e
+      JOIN withdrawn_runs w ON w.run_id=e.run_id
+      WHERE w.session_id=? AND e.type IN ('usage','context_compacted')
+      ORDER BY e.created_at,e.run_id,e.sequence`).all(sessionId) as unknown as Array<EventRow & { run_id: string; sequence: number }>;
+    const archived = this.db.prepare("SELECT run_id,sequence,payload FROM withdrawn_message_events WHERE session_id=? ORDER BY created_at,run_id,sequence").all(sessionId) as unknown as Array<EventRow & { run_id: string; sequence: number }>;
+    return [...rows, ...archived].map(row => {
+      const event = this.decodeEvent(row.payload, row.run_id, row.sequence);
+      // The statistics panel needs the count and usage, never the withdrawn summary itself.
+      return event.type === "context_compacted" ? { ...event, record: { ...event.record, summary: "" } } : event;
+    });
   }
 
   listRunHistory(limit = 50, offset = 0): RunHistoryPage {
@@ -194,7 +461,7 @@ export class HarnessDatabase {
       throw new Error("Invalid history pagination");
     const rows = this.db
       .prepare(
-        "SELECT id, status, payload FROM runs ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?",
+        "SELECT id, status, payload FROM runs WHERE id NOT IN (SELECT run_id FROM withdrawn_runs) ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?",
       )
       .all(limit + 1, offset) as unknown as RunRow[];
     return {
@@ -273,7 +540,7 @@ export class HarnessDatabase {
 
   touchSession(
     id: string,
-    patch: Partial<Pick<SessionRecord, "title" | "profileId" | "updatedAt" | "skillSelection">>,
+    patch: Partial<Pick<SessionRecord, "title" | "profileId" | "updatedAt" | "skillSelection" | "reasoningEffort">>,
   ): SessionRecord {
     const current = this.get<SessionRecord>("sessions", id);
     if (!current) throw new Error(`Unknown Session: ${id}`);
@@ -308,9 +575,9 @@ export class HarnessDatabase {
       throw new Error("Invalid Session pagination");
     this.flushEvents();
     const rows = this.db.prepare(`SELECT s.id,s.payload,
-      (SELECT count(*) FROM runs r WHERE r.session_id=s.id) AS run_count,
-      (SELECT id FROM runs r WHERE r.session_id=s.id ORDER BY created_at DESC,id DESC LIMIT 1) AS latest_id,
-      (SELECT status FROM runs r WHERE r.session_id=s.id ORDER BY created_at DESC,id DESC LIMIT 1) AS latest_status
+      (SELECT count(*) FROM runs r WHERE r.session_id=s.id AND r.id NOT IN (SELECT run_id FROM withdrawn_runs)) AS run_count,
+      (SELECT id FROM runs r WHERE r.session_id=s.id AND r.id NOT IN (SELECT run_id FROM withdrawn_runs) ORDER BY created_at DESC,id DESC LIMIT 1) AS latest_id,
+      (SELECT status FROM runs r WHERE r.session_id=s.id AND r.id NOT IN (SELECT run_id FROM withdrawn_runs) ORDER BY created_at DESC,id DESC LIMIT 1) AS latest_status
       FROM sessions s WHERE s.deleted=? AND (?=1 OR EXISTS(SELECT 1 FROM projects p WHERE p.id=s.project_id AND p.deleted=0))
       ORDER BY s.sort_at DESC,s.id DESC LIMIT ? OFFSET ?`).all(Number(deleted), Number(deleted), limit + 1, offset) as unknown as Array<GenericRow & { run_count: number; latest_id: string | null; latest_status: RunStatus }>;
     return {
@@ -337,6 +604,7 @@ export class HarnessDatabase {
             ...run,
             events: this.listEvents(run.spec.id),
           })),
+          withdrawnEvents: this.withdrawnEvents(id),
         }
       : undefined;
   }
@@ -346,26 +614,143 @@ export class HarnessDatabase {
     if (!Number.isInteger(limit) || limit < 1 || limit > 20) throw new Error("Invalid session view limit");
     const session = this.visibleSession(id);
     if (!session) return;
-    const rows = this.db.prepare(`SELECT id,status,payload FROM runs WHERE session_id=?
+    const rows = this.db.prepare(`SELECT id,status,payload FROM runs WHERE session_id=? AND id NOT IN (SELECT run_id FROM withdrawn_runs)
       ${before ? "AND (created_at < ? OR (created_at = ? AND id < ?))" : ""}
       ORDER BY created_at DESC,id DESC LIMIT ?`).all(id, ...(before ? [before.createdAt, before.createdAt, before.id] : []), limit + 1) as unknown as RunRow[];
     const runs = rows.slice(0, limit).reverse().map(row => {
       const spec = this.crypto.decryptJson<RunSpec>(row.payload, `run:${row.id}`);
       const lastSequence = Number(this.db.prepare("SELECT COALESCE(max(sequence),-1) AS n FROM events WHERE run_id=?").get(row.id)?.n);
-      const latest = (type: string) => {
-        const event = this.db.prepare("SELECT sequence,payload FROM events WHERE run_id=? AND type=? ORDER BY sequence DESC LIMIT 1").get(row.id, type) as (EventRow & { sequence: number }) | undefined;
+      const latest = (type: string, afterSequence = -1, beforeSequence = lastSequence + 1) => {
+        const event = this.db.prepare("SELECT sequence,payload FROM events WHERE run_id=? AND type=? AND sequence>? AND sequence<? ORDER BY sequence DESC LIMIT 1").get(row.id, type, afterSequence, beforeSequence) as (EventRow & { sequence: number }) | undefined;
         return event ? this.decodeEvent(event.payload, row.id, event.sequence) : undefined;
       };
+      // Purpose/source fields are encrypted. Search only small telemetry records,
+      // in bounded pages, and stop as soon as their useful latest marker is found.
+      // A long tail of auxiliary requests or character-only adjustments must not
+      // hide the last measured context or committed token adjustment.
+      const telemetry = function* (database: HarnessDatabase, type: AgentEvent["type"], afterSequence = -1, beforeSequence = lastSequence + 1): Generator<AgentEvent> {
+        const query = database.db.prepare("SELECT sequence,payload FROM events WHERE run_id=? AND type=? AND sequence>? AND sequence<? ORDER BY sequence DESC LIMIT 32");
+        for (;;) {
+          const page = query.all(row.id, type, afterSequence, beforeSequence) as unknown as Array<EventRow & { sequence: number }>;
+          for (const event of page) yield database.decodeEvent(event.payload, row.id, event.sequence);
+          if (page.length < 32) return;
+          beforeSequence = page.at(-1)!.sequence;
+        }
+      };
+      const latestMatching = (type: AgentEvent["type"], matches: (event: AgentEvent) => boolean, afterSequence = -1, beforeSequence = lastSequence + 1) => {
+        for (const event of telemetry(this, type, afterSequence, beforeSequence)) if (matches(event)) return event;
+        return undefined;
+      };
+      type RouteEvent = Extract<AgentEvent, { type: "route" }>;
+      type RouteEpoch = { firstRoute: RouteEvent | undefined; route: RouteEvent | undefined; routeBoundary: number; beforeSequence: number };
+      const epochs: RouteEpoch[] = [];
+      let route: RouteEvent | undefined, firstRoute: RouteEvent | undefined;
+      let beforeSequence = lastSequence + 1;
+      for (const event of telemetry(this, "route")) {
+        if (event.type !== "route") continue;
+        if (route && (event.providerId !== route.providerId || event.modelId !== route.modelId)) {
+          epochs.push({ firstRoute, route, routeBoundary: firstRoute!.sequence - 1, beforeSequence });
+          beforeSequence = firstRoute!.sequence;
+          route = event;
+        }
+        route ??= event;
+        firstRoute = event;
+      }
+      epochs.push({ firstRoute, route, routeBoundary: -1, beforeSequence });
+      // Keep each changed route's small footprint separately. A new model's
+      // initial estimate must not erase the earlier conversation display, while
+      // the route boundary still prevents borrowing its capacity for new usage.
+      const footprint = ({ firstRoute, route, routeBoundary, beforeSequence }: RouteEpoch) => {
+        const lastContext = latest("context_usage", routeBoundary, beforeSequence);
+        const context = lastContext && lastContext.sequence > routeBoundary ? lastContext : undefined;
+        const measuredContext = context?.type === "context_usage" && context.context.source === "provider" ? context
+          : latestMatching("context_usage", event => event.type === "context_usage" && event.context.source === "provider", routeBoundary, beforeSequence);
+        const mainUsage = latestMatching("usage", event => event.type === "usage"
+          && (event.usage.purpose === undefined || event.usage.purpose === "main")
+          && Number.isFinite(event.usage.inputTokens) && event.usage.inputTokens > 0, routeBoundary, beforeSequence);
+        const mainFinished = latestMatching("model_request_finished", event => event.type === "model_request_finished" && event.purpose === "main", routeBoundary, beforeSequence);
+        const mainSucceeded = mainFinished?.type === "model_request_finished" && mainFinished.succeeded ? mainFinished
+          : latestMatching("model_request_finished", event => event.type === "model_request_finished" && event.purpose === "main" && event.succeeded, routeBoundary, beforeSequence);
+        const adjustments: AgentEvent[] = [];
+        let hasCapacity = false, hasTokens = false, hasCommittedAdjustment = false;
+        for (const event of telemetry(this, "context_adjusted", routeBoundary, beforeSequence)) {
+          if (event.type !== "context_adjusted") continue;
+          const { capacityTokens, afterTokens } = event.adjustment;
+          const capacity: boolean = !hasCapacity && capacityTokens !== undefined && Number.isFinite(capacityTokens) && capacityTokens > 0;
+          const tokens: boolean = !hasTokens && afterTokens !== undefined && Number.isFinite(afterTokens) && afterTokens >= 0;
+          const committed: boolean = !hasCommittedAdjustment && isCommittedContextAdjustment(event.adjustment);
+          if (capacity || tokens || committed) adjustments.push(event);
+          hasCapacity ||= capacity;
+          hasTokens ||= tokens;
+          hasCommittedAdjustment ||= committed;
+          if (hasCapacity && hasTokens && hasCommittedAdjustment) break;
+        }
+        const committedAdjustment = adjustments.find(event => event.type === "context_adjusted" && isCommittedContextAdjustment(event.adjustment));
+        const resetSequence = Math.max(routeBoundary, measuredContext?.sequence ?? -1, mainUsage?.sequence ?? -1, committedAdjustment?.sequence ?? -1);
+        const contexts = telemetry(this, "context_usage", routeBoundary, beforeSequence);
+        const changes = telemetry(this, "context_adjusted", routeBoundary, beforeSequence);
+        let nextContext: AgentEvent | undefined = contexts.next().value;
+        let nextChange: AgentEvent | undefined = changes.next().value;
+        let capacityAnchor: AgentEvent | undefined, peakEstimate: AgentEvent | undefined;
+        let currentCapacity: number | undefined, peakTokens = -1;
+        // Preserve the high estimate after the last trusted replacement. A later
+        // resume estimate can otherwise hide an estimate-only provider's baseline.
+        // Merge bounded telemetry pages backwards; only two anchors are returned.
+        while (nextContext || nextChange) {
+          let event: AgentEvent;
+          if (nextContext && (!nextChange || nextContext.sequence > nextChange.sequence)) {
+            event = nextContext;
+            nextContext = contexts.next().value;
+          } else {
+            event = nextChange!;
+            nextChange = changes.next().value;
+          }
+          const capacity = event.type === "context_usage" ? event.context.capacityTokens
+            : event.type === "context_adjusted" ? event.adjustment.capacityTokens : undefined;
+          const validCapacity = capacity !== undefined && Number.isFinite(capacity) && capacity > 0;
+          if (validCapacity) {
+            if (currentCapacity !== undefined && capacity !== currentCapacity) break;
+            currentCapacity = capacity;
+            capacityAnchor = event;
+          }
+          const tokens = event.type === "context_usage" && event.context.source === "estimate" ? event.context.usedTokens
+            : event.type === "context_adjusted" ? event.adjustment.afterTokens : undefined;
+          if (event.sequence > resetSequence && tokens !== undefined && Number.isFinite(tokens) && tokens > peakTokens) {
+            peakEstimate = event;
+            peakTokens = tokens;
+          }
+          if (event.sequence <= resetSequence && validCapacity) break;
+        }
+        return [firstRoute, route, context, measuredContext, mainUsage, mainFinished, mainSucceeded, ...adjustments, capacityAnchor, peakEstimate];
+      };
       const result = latest("result");
+      const userRows = this.db.prepare("SELECT sequence,payload FROM events WHERE run_id=? AND type IN ('steering_submitted','steering_delivered') ORDER BY sequence").all(row.id) as unknown as Array<EventRow & { sequence: number }>;
+      const userEvents = userRows.map(event => this.decodeEvent(event.payload, row.id, event.sequence));
+      const submittedMessages = new Set(userEvents.flatMap(event => event.type === "steering_submitted" ? [event.messageId] : []));
+      const userBoundaries = userEvents.filter(event => event.type === "steering_submitted" || (event.type === "steering_delivered" && (!event.messageId || !submittedMessages.has(event.messageId))));
       const textRows = this.db.prepare("SELECT sequence,payload FROM events WHERE run_id=? AND type='text_delta' AND sequence>? ORDER BY sequence").all(row.id, result?.sequence ?? -1) as unknown as Array<EventRow & { sequence: number }>;
       const deltas = textRows.map(event => this.decodeEvent(event.payload, row.id, event.sequence)).filter((event): event is Extract<AgentEvent, { type: "text_delta" }> => event.type === "text_delta");
-      const lastDelta = deltas.at(-1);
-      const events = [latest("route"), latest("status"), result, lastDelta ? { ...lastDelta, delta: deltas.map(event => event.delta).join("") } : undefined]
-        .filter((event): event is AgentEvent => Boolean(event)).sort((a, b) => a.sequence - b.sequence);
+      const textPreview: AgentEvent[] = [];
+      let pendingDeltas: typeof deltas = [];
+      const flushDeltas = () => {
+        const lastDelta = pendingDeltas.at(-1);
+        if (lastDelta) textPreview.push({ ...lastDelta, delta: pendingDeltas.map(event => event.delta).join("") });
+        pendingDeltas = [];
+      };
+      // Keep human replies visible before hydration, and never aggregate text across them.
+      for (const event of [...deltas, ...userBoundaries].sort((a, b) => a.sequence - b.sequence)) {
+        if (event.type === "text_delta") pendingDeltas.push(event);
+        else flushDeltas();
+      }
+      flushDeltas();
+      const preview = [...epochs.reverse().flatMap(footprint), latest("status"),
+        result, ...userEvents, ...textPreview]
+        .filter((event): event is AgentEvent => Boolean(event));
+      const events = [...new Map(preview.map(event => [event.sequence, event])).values()].sort((a, b) => a.sequence - b.sequence);
       return { spec, status: row.status, events, view: { lastSequence, eventsComplete: lastSequence < 0 } };
     });
     const first = runs[0];
-    return { session, runs, hasMore: rows.length > limit, ...(first ? { before: { createdAt: first.spec.createdAt, id: first.spec.id } } : {}) };
+    return { session, runs, withdrawnEvents: this.withdrawnEvents(id), hasMore: rows.length > limit, ...(first ? { before: { createdAt: first.spec.createdAt, id: first.spec.id } } : {}) };
   }
 
   private visibleSession(id: string): SessionRecord | undefined {
@@ -485,7 +870,7 @@ export class HarnessDatabase {
     if (!session) throw new Error(`Unknown Session: ${id}`);
     if (!session.deletedAt)
       throw new Error("Session must be deleted before permanent deletion");
-    const runs = this.runsForSession(id);
+    const runs = this.runsForSession(id, true);
     if (runs.some((run) => liveStatuses.has(run.status)))
       throw new Error("Cannot purge a Session with an active run");
     const runIds = new Set(runs.map((run) => run.spec.id));
@@ -521,6 +906,9 @@ export class HarnessDatabase {
           this.db.prepare(`DELETE FROM ${table} WHERE id=?`).run(recordId);
       for (const runId of runIds)
         this.db.prepare("DELETE FROM runs WHERE id=?").run(runId);
+      this.db.prepare("DELETE FROM withdrawn_runs WHERE session_id=?").run(id);
+      this.db.prepare("DELETE FROM steering_withdrawals WHERE session_id=?").run(id);
+      this.db.prepare("DELETE FROM withdrawn_message_events WHERE session_id=?").run(id);
       this.db.prepare("DELETE FROM sessions WHERE id=?").run(id);
       const retained = this.contentReferences();
       for (const contentId of candidates) {
@@ -536,7 +924,7 @@ export class HarnessDatabase {
 
   private allRuns(): Array<{ spec: RunSpec; status: RunStatus }> {
     const rows = this.db
-      .prepare("SELECT id, status, payload FROM runs ORDER BY created_at, id")
+      .prepare("SELECT id, status, payload FROM runs WHERE id NOT IN (SELECT run_id FROM withdrawn_runs) ORDER BY created_at, id")
       .all() as unknown as RunRow[];
     return rows.map((row) => ({
       spec: this.crypto.decryptJson<RunSpec>(row.payload, `run:${row.id}`),
@@ -546,11 +934,12 @@ export class HarnessDatabase {
 
   private runsForSession(
     sessionId: string,
+    includeWithdrawn = false,
   ): Array<{ spec: RunSpec; status: RunStatus }> {
     this.flushEvents();
     const rows = this.db
       .prepare(
-        "SELECT id, status, payload FROM runs WHERE session_id=? ORDER BY created_at, id",
+        `SELECT id, status, payload FROM runs WHERE session_id=? ${includeWithdrawn ? "" : "AND id NOT IN (SELECT run_id FROM withdrawn_runs)"} ORDER BY created_at, id`,
       )
       .all(sessionId) as unknown as RunRow[];
     return rows.map((row) => ({
@@ -731,14 +1120,20 @@ export class HarnessDatabase {
       .sort((left, right) => right.version - left.version)[0];
   }
 
-  saveCheckpoint(checkpoint: RunCheckpoint): void {
+  /** Working context, accepted compaction and its visible events commit together. */
+  saveCheckpoint(checkpoint: RunCheckpoint, compaction?: CompactionRecord, events: AgentEvent[] = []): void {
     this.flushEvents();
     this.db.exec("BEGIN IMMEDIATE");
     try {
+      if (compaction) this.upsert("compactions", compaction.id, compaction);
       this.upsert("checkpoints", checkpoint.id, checkpoint);
+      for (const event of events) this.writeEvent(event);
       this.db.exec("COMMIT");
     } catch (error) {
       this.db.exec("ROLLBACK");
+      // A failed save may have remembered transcript addresses for rows just rolled back.
+      // Retrying the same message objects must create those encrypted rows again.
+      this.contentAddresses = new WeakMap();
       throw error;
     }
   }
@@ -969,12 +1364,29 @@ export class HarnessDatabase {
       : undefined;
   }
 
-  private storeContent(value: unknown): string {
+  /**
+   * Content objects are addressed by the hash of their JSON, so storing the same object twice repeats
+   * the stringify, the hash and the existence check. Consecutive checkpoint saves hand over the same
+   * transcript array — a checkpoint written for a reason other than a new turn re-stores the very
+   * same message objects — so remembering an object's address skips that work.
+   *
+   * Opt-in per call: it is only sound for values the caller owns and will not mutate, which is true
+   * of the checkpoint transcript and not guaranteed for objects arriving on the event path.
+   */
+  private contentAddresses = new WeakMap<object, string>();
+
+  private storeContent(value: unknown, remember = false): string {
+    const cacheable = remember && typeof value === "object" && value !== null;
+    if (cacheable) {
+      const remembered = this.contentAddresses.get(value as object);
+      if (remembered !== undefined) return remembered;
+    }
     const id = this.crypto.contentAddress(JSON.stringify(value));
     if (!this.db.prepare("SELECT id FROM content_objects WHERE id=?").get(id))
       this.db
         .prepare("INSERT INTO content_objects (id,payload) VALUES (?,?)")
         .run(id, this.crypto.encryptJson(value, `content:${id}`));
+    if (cacheable) this.contentAddresses.set(value as object, id);
     return id;
   }
 
@@ -1049,7 +1461,7 @@ export class HarnessDatabase {
         refs: Record<string, string | string[]> = {};
       if (Array.isArray(stored.transcript)) {
         refs.transcript = stored.transcript.map((message) =>
-          this.storeContent(message),
+          this.storeContent(message, true),
         );
         delete stored.transcript;
       }
@@ -1113,6 +1525,13 @@ export class HarnessDatabase {
   private migrate(): void {
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS runs (id TEXT PRIMARY KEY, status TEXT NOT NULL, payload TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS withdrawn_runs (run_id TEXT PRIMARY KEY, session_id TEXT NOT NULL, withdrawn_at TEXT NOT NULL);
+      CREATE INDEX IF NOT EXISTS withdrawn_runs_session ON withdrawn_runs(session_id);
+      CREATE TABLE IF NOT EXISTS steering_withdrawals (id TEXT PRIMARY KEY,run_id TEXT NOT NULL,session_id TEXT NOT NULL,payload TEXT NOT NULL);
+      CREATE INDEX IF NOT EXISTS steering_withdrawals_run ON steering_withdrawals(run_id);
+      CREATE INDEX IF NOT EXISTS steering_withdrawals_session ON steering_withdrawals(session_id);
+      CREATE TABLE IF NOT EXISTS withdrawn_message_events (run_id TEXT NOT NULL,sequence INTEGER NOT NULL,session_id TEXT NOT NULL,type TEXT NOT NULL,payload TEXT NOT NULL,created_at TEXT NOT NULL,PRIMARY KEY(run_id,sequence));
+      CREATE INDEX IF NOT EXISTS withdrawn_message_events_session ON withdrawn_message_events(session_id);
       CREATE TABLE IF NOT EXISTS events (run_id TEXT NOT NULL, sequence INTEGER NOT NULL, type TEXT NOT NULL, payload TEXT NOT NULL, created_at TEXT NOT NULL, PRIMARY KEY (run_id, sequence), FOREIGN KEY (run_id) REFERENCES runs(id));
       CREATE INDEX IF NOT EXISTS events_run_type ON events(run_id, type);
       CREATE TABLE IF NOT EXISTS tool_evidence (run_id TEXT NOT NULL, call_id TEXT NOT NULL, sequence INTEGER NOT NULL, PRIMARY KEY (run_id, call_id));
