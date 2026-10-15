@@ -24,6 +24,8 @@ export interface ToolResult {
 }
 
 export interface ToolDefinition {
+  /** Runtime-reviewed implementation; never supplied by a model or external MCP contract. */
+  parallelReadScope?: "workspace" | "stateless";
   /** External reads can transmit project data and must not use local-read defaults. */
   requiresApproval?: boolean;
   external?: { serverId: string; serverName: string; toolName: string; revision: number; contractHash: string };

@@ -79,8 +79,9 @@ export class SequentialWorkflow extends LightweightWorkflow {
   private ready(step: PlanStep): boolean {
     return this.dependencies(step).every(id => this.sequence.steps.some(item => item.id === id && item.status === "verified" && item.check.status === "passed" && !!item.check.runId && item.check.epoch === this.state.epoch));
   }
+  taskDispatchReady(): boolean { return this.prepared && this.state.effect !== "unknown"; }
   availableTaskSteps(): StoredStep[] {
-    const running = new Set(this.sequence.taskExecutions.filter(task => task.status === "running").map(task => task.stepId));
+    const running = new Set(this.sequence.taskExecutions.filter(task => ["blocked", "queued", "running", "awaiting_integration"].includes(task.status)).map(task => task.stepId));
     const depths = new Map<string, number>();
     const depth = (id: string): number => {
       if (!depths.has(id)) depths.set(id, 1 + Math.max(0, ...this.sequence.steps.filter(step => this.dependencies(step).includes(id)).map(step => depth(step.id))));
@@ -344,7 +345,7 @@ export class SequentialWorkflow extends LightweightWorkflow {
   verificationGate(stage: "local" | "broader"): string | undefined {
     if (!this.needsChange) return;
     if (!this.prepared || !this.sequence.steps.length) return "workflow_preparation_required: " + this.nextAction();
-    if (this.sequence.taskExecutions.some(task => task.status === "running")) return "Wait for running graph tasks to settle before recording parent verification.";
+    if (this.sequence.taskExecutions.some(task => task.status === "running" || task.status === "awaiting_integration")) return "Wait for running graph tasks and integrate their results before recording parent verification.";
     if (stage === "local" && !this.activeStep) return "Start or reopen a step before local verification.";
     if (stage === "broader" && this.sequence.mode === "ordered" && (!this.sequence.steps.every(step => step.status === "verified" && step.check.epoch === this.state.epoch) || this.state.localCheck.status !== "passed" || this.state.localCheck.revision !== this.state.revision || this.state.localCheck.epoch !== this.state.epoch)) return "Verify all implementation steps before integration tests.";
   }
@@ -433,7 +434,7 @@ export class SequentialWorkflow extends LightweightWorkflow {
 
   override checksCurrent(): boolean {
     if (!this.needsChange) return super.checksCurrent();
-    return this.prepared && !this.sequence.taskExecutions.some(task => task.status === "running") && this.sequence.steps.length > 0 && this.sequence.steps.every(step => step.status === "verified" && step.check.status === "passed" && step.check.epoch === this.state.epoch && step.check.revision === this.state.revision) && this.sequence.integration.length > 0 && super.checksCurrent();
+    return this.prepared && !this.sequence.taskExecutions.some(task => ["blocked", "queued", "running", "awaiting_integration"].includes(task.status)) && this.sequence.steps.length > 0 && this.sequence.steps.every(step => step.status === "verified" && step.check.status === "passed" && step.check.epoch === this.state.epoch && step.check.revision === this.state.revision) && this.sequence.integration.length > 0 && super.checksCurrent();
   }
 
   nextAction(): string {
@@ -452,7 +453,7 @@ export class SequentialWorkflow extends LightweightWorkflow {
     if (active?.status === "in_progress") return this.sequence.mode === "ordered" ? `Implement/repair step ${active.id}, then run_verification stage=local with its planned suite and cumulative preceding suites. Write or update real test files; real results determine progress.` : `Implement/repair step ${active.id}, or start another available independent step, then run_verification stage=local with the planned suite command to verify all started steps together. Write or update real test files; real results determine progress.`;
     const next = this.availableTaskSteps()[0];
     if (next) return `Choose an eligible task with advance_workflow select_next; recommended stepId=${next.id} by priority and critical path. You may choose another eligible node or adjust the graph with update_plan and a reason.${next.execution && !this.sequence.taskExecutions.some(task => task.stepId === next.id) ? " Use run_tasks to execute independent nodes concurrently, then integrate their saved artifacts and run parent suites." : ""}`;
-    if (this.sequence.taskExecutions.some(task => task.status === "running")) return "Wait for running child tasks to settle; inspect their persisted outcomes and integrate artifacts before parent verification.";
+    if (this.sequence.taskExecutions.some(task => ["queued", "running", "awaiting_integration"].includes(task.status))) return "Use wait_tasks for queued/running children; inspect ready outputs with read_evidence and acknowledge integration with integrate_tasks before real parent verification.";
     if (this.state.localCheck.status !== "passed" || this.state.localCheck.epoch !== this.state.epoch || this.state.localCheck.revision !== this.state.revision) return "Checks were invalidated by a failure or workspace change; repair and reverify with run_verification stage=local. Use reopen_step with a reason when code needs repair, then rerun integration.";
     if (!this.checksCurrent()) return "Run run_verification stage=broader with a planned integration command; on failure reopen_step with a reason, repair, and reverify.";
     if (this.state.diffRevision !== this.state.revision) return "Read a complete current workspace_diff, then call check_requirements with test and diff evidence for every requirement. Reuse an existing complete diff only when its runtime fingerprint matches current passing tests.";

@@ -35,8 +35,9 @@ export const SequentialPlanStepSchema = z.object({
   verification: z.array(StepVerificationSchema).min(1).max(8),
 });
 export const TaskExecutionSchema = z.object({
+  attemptId: z.string().optional(), planGeneration: z.number().int().nonnegative().optional(), blockedReason: z.string().optional(),
   stepId: z.string(), taskId: z.string(), childRunId: z.string().optional(), mode: z.enum(["read", "write"]),
-  status: z.enum(["running", "completed", "failed", "interrupted"]), startedAt: z.string().datetime(), finishedAt: z.string().datetime().optional(),
+  status: z.enum(["blocked", "queued", "running", "awaiting_integration", "completed", "failed", "interrupted", "cancelled"]), startedAt: z.string().datetime().optional(), finishedAt: z.string().datetime().optional(),
   workspacePath: z.string().trim().min(1).max(4000).optional(), baselineTree: z.string().regex(/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/).optional(),
   writePaths: z.array(z.string().trim().min(1).max(500)).max(100).optional(),
   accountedUsage: z.object({ inputTokens: z.number().int().nonnegative(), outputTokens: z.number().int().nonnegative(), estimatedUsd: z.number().nonnegative(), costKnown: z.boolean().optional(), turns: z.number().int().nonnegative(), toolCalls: z.number().int().nonnegative() }).optional(),
@@ -49,7 +50,7 @@ export const SequentialWorkflowSchema = z.object({
   evidenceIds: z.array(z.string()).default([]), generation: z.number().int().nonnegative().default(0),
   mode: z.enum(["ordered", "adaptive"]).default("ordered"),
   selectionPolicy: z.enum(["manual", "autonomous"]).default("manual"),
-  taskExecutions: z.array(TaskExecutionSchema).max(80).default([]),
+  taskExecutions: z.array(TaskExecutionSchema).max(10000).default([]),
   patchRecovery: z.object({
     callId: z.string(), kind: z.enum(["format", "conflict"]), paths: z.array(z.string()).max(20),
     contextReadRequired: z.boolean(),

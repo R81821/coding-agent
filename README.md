@@ -18,6 +18,7 @@ Harness Agent 是面向 Windows 11 x64 的本地优先软件开发 Agent。它�
 - 会话与项目支持软删除和设置页恢复；只有已删除会话可永久清理运行历史，长期记忆始终保留，项目删除绝不触碰磁盘仓库。
 - `SKILL.md` 哈希信任、`AGENTS.md` 首次预览与变更后重新确认。
 - 独立 Git worktree 子任务、最多 1–8 并发、脏工作区内部快照与非 Git 降级。
+- 单对话加密持久任务队列、跨批次空槽补位、事件等待、独立验收和有界只读工具并行。
 - Kanban、五段 Cron、Asia/Shanghai 默认时区、重启恢复和无人值守预授权。
 - Telegram Bot API、飞书长连接、一次性配对、图片输入、远程审批和摘要输出。
 - PostgreSQL 团队 Gateway：设备配对、加密 BYOK、模型白名单、预算和仅元数据审计。
@@ -139,6 +140,12 @@ Gateway 默认监听 `http://127.0.0.1:8787`。管理员先调用 `/admin/provid
 会话创建、上下文续接、删除/恢复与永久删除边界见 [Session 生命周期](./docs/session-lifecycle.md)。
 
 暂停后的消息撤回与文件恢复见 [聊天撤回](./docs/conversation-withdrawal.md)。
+
+单对话任务队列由 daemon 内的 SQLite 管理。主模型用 `run_tasks` 提交计划节点，立即获得任务 ID；用 `wait_tasks` 等待进展，检查产物后用 `integrate_tasks` 确认集成，最后在父对话运行真实测试。子任务完成不会自动验证节点或解锁依赖。会话内的任务面板显示排队、阻塞、执行、待集成及失败原因；未启动项可取消，失败或中断项需提供检查产物后的原因才能重试。暂停会停止派发并等待已启动操作安全结束；重启后的未知执行需要检查，不能自动重放。
+
+四个独立环境变量控制资源：`HARNESS_TASK_CONCURRENCY`（默认 4，范围 1–8）、`HARNESS_TASK_QUEUE_LENGTH`（默认 80，范围 1–10000）、`HARNESS_TOOL_CONCURRENCY` 和 `HARNESS_MODEL_CONCURRENCY`（默认均为 4，范围 1–32）。每次 `run_tasks` 提交最多 8 个节点，可连续提交多批；单次提交上限与整个队列容量独立。`run_tasks.maxParallel` 可以进一步降低本轮任务并发。队列满时明确报错；这些配置不改变模型上下文容量、输出上限或摘要策略。工具并行仅用于运行时确认的幂等只读实现；浏览器、外部 MCP 和共享写操作继续串行。旧版嵌入式引擎若未提供队列执行器，保留原同步委派协议。
+
+可复现的并发测试和性能边界见 [任务队列性能记录](./docs/superpowers/plans/2026-10-15-conversation-task-queue-performance.md)。
 
 安全模型、威胁边界和密钥处理见 [SECURITY.md](./SECURITY.md)。
 

@@ -47,7 +47,8 @@ async function chunks(root: string): Promise<string[]> {
   return output;
 }
 
-describe("withdrawal filesystem snapshots", () => {
+// Real Git processes, encrypted snapshots and chunk collection share Windows disk resources.
+describe("withdrawal filesystem snapshots", { timeout: 20000 }, () => {
   it("restores non-Git dirty bytes, binary files, ignored directories and deletions without retaining created files", async () => {
     const { workspace, store, run } = await fixture();
     const binary = Buffer.alloc(2 * 1024 * 1024 + 17, 0x7e); binary[8] = 0;

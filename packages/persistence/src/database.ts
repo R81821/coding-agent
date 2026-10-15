@@ -29,6 +29,8 @@ import type {
   SkillManifest,
   TaskSpec,
   VerificationRun,
+  ConversationTask,
+  ConversationTaskInput,
 } from "@harness/protocol";
 import {
   ProfileSchema,
@@ -39,6 +41,8 @@ import {
 } from "@harness/protocol";
 import type { VaultCrypto } from "./crypto.js";
 import { SQLiteFile, type StorageProgress } from "./sqlite.js";
+import { ConversationTaskStore, type ConversationTaskCommit, type ConversationTaskClaimOptions, type ConversationTaskPatch, type ConversationTaskUpdateOptions, type ConversationTaskAccountOptions, type ConversationTaskAccountResult } from "./conversation-task-store.js";
+export type { ConversationTaskCommit, ConversationTaskClaimOptions, ConversationTaskPatch, ConversationTaskUpdateOptions, ConversationTaskAccountOptions, ConversationTaskAccountResult } from "./conversation-task-store.js";
 
 interface RunRow {
   id: string;
@@ -63,6 +67,7 @@ export interface SteeringWithdrawalBoundary {
 const steeringRestoreTables = ["plans", "approvals", "compactions", "verification_runs", "traces"] as const;
 type SteeringRestoreTable = typeof steeringRestoreTables[number];
 interface StoredSteeringWithdrawal extends SteeringWithdrawalBoundary {
+  conversationTasks?: Record<string, ConversationTask[]>;
   sessionId: string;
   runs: Array<{ runId: string; status: RunStatus; beforeSequence: number; checkpointId?: string; checkpointIds: string[] }>;
   records: Record<SteeringRestoreTable, Array<Record<string, unknown> & { id: string; runId: string }>>;
@@ -102,6 +107,7 @@ function toolCallId(event: AgentEvent): string | undefined {
 
 export class HarnessDatabase {
   private readonly db: SQLiteFile;
+  private readonly conversationTasks: ConversationTaskStore;
   private pendingEvents: AgentEvent[] = [];
   private pendingBytes = 0;
   private eventTimer: ReturnType<typeof setTimeout> | undefined;
@@ -119,6 +125,22 @@ export class HarnessDatabase {
   ) {
     this.db = database;
     this.migrate();
+    this.conversationTasks = new ConversationTaskStore(database, crypto, (parentRunId, sessionId) => {
+      const run = this.getRun(parentRunId);
+      if (!run || (sessionId !== undefined && run.spec.sessionId !== sessionId) || !this.visibleSession(run.spec.sessionId)) throw new Error("Conversation task parent does not exist in this session");
+    }, () => this.flushEvents(), (commit, parentRunId) => {
+      try {
+        if (commit.checkpoint) {
+          if (commit.checkpoint.runId !== parentRunId) throw new Error("Conversation task checkpoint belongs to another parent");
+          const checkpoint = this.projectConversationTaskCheckpoint(commit.checkpoint);
+          this.upsert("checkpoints", checkpoint.id, checkpoint);
+        }
+        for (const event of commit.events ?? []) {
+          if (event.runId !== parentRunId) throw new Error("Conversation task event belongs to another parent");
+          this.writeEvent(event);
+        }
+      } catch (error) { this.contentAddresses = new WeakMap(); throw error; }
+    });
   }
 
   static async open(
@@ -128,7 +150,68 @@ export class HarnessDatabase {
   ): Promise<HarnessDatabase> {
     await mkdir(dirname(path), { recursive: true });
     const file = await SQLiteFile.open(path, staged => { new HarnessDatabase(staged, crypto, onProgress); }, onProgress);
-    return new HarnessDatabase(file, crypto, onProgress);
+    const database = new HarnessDatabase(file, crypto, onProgress);
+    database.conversationTasks.recover();
+    return database;
+  }
+
+  listConversationTasks(parentRunId: string, options: { includeWithdrawn?: boolean } = {}): ConversationTask[] { return this.conversationTasks.list(parentRunId, options.includeWithdrawn); }
+  listSessionConversationTasks(sessionId: string, parentRunId?: string): ConversationTask[] {
+    if (!this.visibleSession(sessionId)) throw new Error("会话不存在");
+    const parents = this.runsForSession(sessionId).filter(run => !run.spec.parentRunId);
+    const parent = parentRunId ? parents.find(run => run.spec.id === parentRunId) : parents.at(-1);
+    if (!parent && parentRunId) throw new Error("任务不属于当前会话");
+    return parent ? this.conversationTasks.list(parent.spec.id) : [];
+  }
+  getConversationTask(taskId: string): ConversationTask | undefined { return this.conversationTasks.get(taskId); }
+  getConversationTaskQueueVersion(parentRunId: string): number { return this.conversationTasks.version(parentRunId); }
+  enqueueConversationTasks(tasks: ConversationTaskInput[], options: ConversationTaskCommit & { maxQueueLength?: number } = {}): ConversationTask[] {
+    const sources = new Map<string, Set<string>>();
+    for (const task of tasks) {
+      if (task.source.kind === "steering") {
+        let ids = sources.get(task.parentRunId);
+        if (!ids) {
+          ids = new Set([...this.listEvents(task.parentRunId), ...(options.events ?? [])].flatMap(event => event.runId === task.parentRunId && event.type === "steering_submitted" ? [event.messageId] : []));
+          sources.set(task.parentRunId, ids);
+        }
+        if (!task.source.messageId || !ids.has(task.source.messageId)) throw new Error("Conversation task source message does not exist or was withdrawn");
+      }
+      if (task.source.checkpointId) {
+        const source = this.get<RunCheckpoint>("checkpoints", task.source.checkpointId);
+        if (!source || source.runId !== task.parentRunId) throw new Error("Conversation task source checkpoint does not belong to its parent");
+      }
+    }
+    return this.conversationTasks.enqueue(tasks, options);
+  }
+  claimConversationTask(taskId: string, options: ConversationTaskClaimOptions = {}): ConversationTask | undefined { return this.conversationTasks.claim(taskId, options); }
+  updateConversationTask(taskId: string, patch: ConversationTaskPatch, options: ConversationTaskUpdateOptions = {}): ConversationTask { return this.conversationTasks.update(taskId, patch, options); }
+  accountConversationTaskAttempt(taskId: string, attemptId: string, usage: Parameters<ConversationTaskStore["account"]>[2], options: ConversationTaskAccountOptions = {}): ConversationTaskAccountResult { return this.conversationTasks.account(taskId, attemptId, usage, options); }
+  interruptConversationTasks(parentRunId: string, reason: string, options: ConversationTaskCommit = {}): ConversationTask[] { return this.conversationTasks.interrupt(parentRunId, reason, options); }
+
+  private projectConversationTaskCheckpoint(checkpoint: RunCheckpoint): RunCheckpoint {
+    const tasks = this.listConversationTasks(checkpoint.runId);
+    if (!tasks.length && !checkpoint.conversationTaskQueue) return checkpoint;
+    const generation = checkpoint.conversationTaskQueue?.planGeneration ?? Math.max(checkpoint.workflow?.sequential?.generation ?? 0, ...tasks.map(task => task.planGeneration));
+    const current = tasks.filter(task => task.planGeneration === generation);
+    const workflow = checkpoint.workflow ? structuredClone(checkpoint.workflow) : undefined;
+    if (workflow?.sequential) {
+      workflow.sequential.taskExecutions = current.map(task => ({
+        taskId: task.taskId, stepId: task.stepId, mode: task.mode, status: task.executionState, planGeneration: task.planGeneration,
+        ...(task.attemptId ? { attemptId: task.attemptId } : {}), ...(task.childRunId ? { childRunId: task.childRunId } : {}),
+        ...(task.startedAt ? { startedAt: task.startedAt } : {}), ...(task.finishedAt ? { finishedAt: task.finishedAt } : {}),
+        ...(task.blockedReason ? { blockedReason: task.blockedReason } : {}), ...(task.workspacePath ? { workspacePath: task.workspacePath } : {}),
+        ...(task.baselineTree ? { baselineTree: task.baselineTree } : {}), writePaths: task.writePaths,
+        ...(task.summary ? { summary: task.summary } : {}), ...(task.patch !== undefined ? { patch: task.patch } : {}),
+        ...(task.attempts.find(attempt => attempt.attemptId === task.attemptId) ? { accountedUsage: task.attempts.find(attempt => attempt.attemptId === task.attemptId)!.accountedUsage } : {}),
+      }));
+      if (workflow.todos) workflow.todos = workflow.todos.map(todo => {
+        const task = current.find(item => item.stepId === (todo.stepId ?? todo.id));
+        if (!task) return todo;
+        const status = task.executionState === "cancelled" ? "cancelled" : task.acceptanceState === "verified" ? "completed" : ["running", "awaiting_integration"].includes(task.executionState) ? "in_progress" : "pending";
+        return { ...todo, status };
+      });
+    }
+    return { ...checkpoint, ...(workflow ? { workflow } : {}), conversationTaskQueue: { version: this.getConversationTaskQueueVersion(checkpoint.runId), taskIds: tasks.map(task => task.taskId), planGeneration: generation, ...(checkpoint.conversationTaskQueue?.sourceMessageId ? { sourceMessageId: checkpoint.conversationTaskQueue.sourceMessageId } : {}) } };
   }
 
   close(): void {
@@ -202,6 +285,13 @@ export class HarnessDatabase {
     };
   }
 
+  /** Internal billing audit: withdrawn runs remain hidden from conversational reads. */
+  getRunForAccounting(runId: string): { spec: RunSpec; status: RunStatus } | undefined {
+    this.flushEvents();
+    const row = this.db.prepare("SELECT id,status,payload FROM runs WHERE id=?").get(runId) as RunRow | undefined;
+    return row ? { spec: this.crypto.decryptJson<RunSpec>(row.payload, `run:${row.id}`), status: row.status } : undefined;
+  }
+
   isRunWithdrawn(runId: string): boolean {
     return Boolean(this.db.prepare("SELECT 1 FROM withdrawn_runs WHERE run_id=?").get(runId));
   }
@@ -237,6 +327,7 @@ export class HarnessDatabase {
     this.db.exec("BEGIN IMMEDIATE");
     try {
       for (const item of tree) {
+        this.conversationTasks.restore(item.spec.id, []);
         this.db.prepare("INSERT INTO withdrawn_runs (run_id,session_id,withdrawn_at) VALUES (?,?,?)").run(item.spec.id, item.spec.sessionId, at);
         this.db.prepare("UPDATE runs SET status='cancelled',updated_at=? WHERE id=?").run(at, item.spec.id);
       }
@@ -276,6 +367,7 @@ export class HarnessDatabase {
       descendantRunIds: [...ids].filter(id => id !== runId),
       memoryIds: this.listMemories().filter(memory => memory.source.startsWith("run:") && ids.has(memory.source.slice(4))).map(memory => memory.id),
       runs, records,
+      conversationTasks: Object.fromEntries(tree.map(item => [item.spec.id, this.listConversationTasks(item.spec.id)])),
     };
     const id = JSON.stringify([runId, messageId]);
     this.db.prepare("INSERT INTO steering_withdrawals (id,run_id,session_id,payload) VALUES (?,?,?,?)").run(
@@ -353,6 +445,7 @@ export class HarnessDatabase {
     });
     this.db.exec("BEGIN IMMEDIATE");
     try {
+      for (const item of tree) this.conversationTasks.restore(item.spec.id, state.conversationTasks?.[item.spec.id] ?? []);
       for (const item of restored) {
         this.archiveWithdrawnMessageEvents(item.runId, tree.find(current => current.spec.id === item.runId)!.spec.sessionId, item.beforeSequence);
         this.db.prepare("DELETE FROM tool_evidence WHERE run_id=? AND sequence>?").run(item.runId, item.beforeSequence);
@@ -363,7 +456,7 @@ export class HarnessDatabase {
         }
         this.db.prepare("UPDATE runs SET status=?,updated_at=? WHERE id=?").run(item.status, at, item.runId);
         if (item.checkpoint) {
-          this.upsert("checkpoints", item.checkpoint.id, item.checkpoint);
+          this.upsert("checkpoints", item.checkpoint.id, this.projectConversationTaskCheckpoint(item.checkpoint));
           this.writeEvent({ id: `event_withdraw_${randomUUID()}`, runId: item.runId, sequence: item.checkpoint.sequence, at,
             type: "checkpoint_saved", checkpointId: item.checkpoint.id, reason: "manual", messages: item.checkpoint.transcript.length });
         }
@@ -898,6 +991,9 @@ export class HarnessDatabase {
     this.db.exec("BEGIN TRANSACTION");
     try {
       for (const runId of runIds) {
+        this.db.prepare("DELETE FROM conversation_task_attempts WHERE task_id IN (SELECT id FROM conversation_tasks WHERE parent_run_id=?)").run(runId);
+        this.db.prepare("DELETE FROM conversation_tasks WHERE parent_run_id=?").run(runId);
+        this.db.prepare("DELETE FROM conversation_task_queues WHERE parent_run_id=?").run(runId);
         this.db.prepare("DELETE FROM tool_evidence WHERE run_id=?").run(runId);
         this.db.prepare("DELETE FROM events WHERE run_id=?").run(runId);
       }
@@ -1126,7 +1222,7 @@ export class HarnessDatabase {
     this.db.exec("BEGIN IMMEDIATE");
     try {
       if (compaction) this.upsert("compactions", compaction.id, compaction);
-      this.upsert("checkpoints", checkpoint.id, checkpoint);
+      this.upsert("checkpoints", checkpoint.id, this.projectConversationTaskCheckpoint(checkpoint));
       for (const event of events) this.writeEvent(event);
       this.db.exec("COMMIT");
     } catch (error) {
@@ -1541,6 +1637,12 @@ export class HarnessDatabase {
       CREATE TABLE IF NOT EXISTS memory_search (memory_id TEXT PRIMARY KEY, terms TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS skills (id TEXT PRIMARY KEY, payload TEXT NOT NULL, updated_at TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS tasks (id TEXT PRIMARY KEY, payload TEXT NOT NULL, updated_at TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS conversation_task_queues (parent_run_id TEXT PRIMARY KEY,version INTEGER NOT NULL);
+      CREATE TABLE IF NOT EXISTS conversation_task_attempts (attempt_id TEXT PRIMARY KEY,child_run_id TEXT UNIQUE NOT NULL,task_id TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS conversation_tasks (id TEXT PRIMARY KEY,parent_run_id TEXT NOT NULL,session_id TEXT NOT NULL,execution_state TEXT NOT NULL,priority INTEGER NOT NULL,plan_generation INTEGER NOT NULL,submission_key TEXT NOT NULL,attempt_id TEXT,child_run_id TEXT,created_at TEXT NOT NULL,withdrawn_at TEXT,payload TEXT NOT NULL);
+      CREATE UNIQUE INDEX IF NOT EXISTS conversation_tasks_submission ON conversation_tasks(parent_run_id,submission_key) WHERE withdrawn_at IS NULL;
+      CREATE INDEX IF NOT EXISTS conversation_tasks_dispatch ON conversation_tasks(parent_run_id,execution_state,priority DESC,created_at);
+      CREATE INDEX IF NOT EXISTS conversation_tasks_session ON conversation_tasks(session_id);
       CREATE TABLE IF NOT EXISTS attachments (id TEXT PRIMARY KEY, payload TEXT NOT NULL, updated_at TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS project_trust (id TEXT PRIMARY KEY, payload TEXT NOT NULL, updated_at TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS plans (id TEXT PRIMARY KEY, payload TEXT NOT NULL, updated_at TEXT NOT NULL);

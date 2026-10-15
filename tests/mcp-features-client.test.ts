@@ -74,7 +74,9 @@ test.each(["stdio", "streamable_http", "sse"])("%s supports paged resources, tem
 test.each(["stdio", "streamable_http", "sse"])("%s routes sampling, form and URL elicitation through supplied handlers", async mode => {
   const onSampling = vi.fn(sampling);
   const onElicitation = vi.fn<NonNullable<McpRequestHandlers["onElicitation"]>>(async params => params.mode === "url" ? { action: "decline" } : { action: "accept", content: { topic: "Chosen topic" } });
-  const connection = await open(mode === "stdio" ? {} : { transport: { type: mode, url: await remote(mode) } }, { requestHandlers: { onSampling, onElicitation } });
+  // Reverse HTTP/SSE callbacks schedule several local server turns under full-suite load.
+  // Deadline/cancellation behavior has separate tests with explicit short callTimeoutMs.
+  const connection = await open({ callTimeoutMs: 5000, ...(mode === "stdio" ? {} : { transport: { type: mode, url: await remote(mode) } }) }, { requestHandlers: { onSampling, onElicitation } });
   const inspection = await connection.callTool("inspect", {}, signal());
   expect(inspection.structuredContent).toMatchObject({ capabilities: { sampling: {}, elicitation: { form: {}, url: {} } }, roots: [{ uri: pathToFileURL(project).href }] });
   expect((await connection.callTool("sample", {}, signal())).structuredContent).toMatchObject({ model: "fixture-model", content: { text: "Sampled answer" } });

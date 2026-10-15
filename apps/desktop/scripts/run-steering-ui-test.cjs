@@ -56,6 +56,7 @@ async function fixtureRequest(request) {
   requests.push(request);
   const params = request.params ?? {};
   switch (request.method) {
+    case "conversationTasks.list": return { tasks: [], limits: { maxConcurrentTasks: 4, maxQueueLength: 80 } };
     case "profiles.list": return [profile];
     case "model.current": return { model };
     case "mcp.interactions.list": return { requests: [] };

@@ -16,6 +16,7 @@ import type { ToolDefinition } from "./types.js";
 
 const readFileInput = z.object({ path: z.string(), maxBytes: z.number().int().positive().max(5_000_000).default(16_384) });
 export const readFileTool: ToolDefinition = {
+  parallelReadScope: "workspace",
   contract: {
     name: "read_file",
     description: "Read a bounded UTF-8 overview (default 16 KiB). First locate files with search_text (grep), then use read_range for exact code spans. Increase maxBytes only when the full file is necessary.",
@@ -41,6 +42,7 @@ export const readFileTool: ToolDefinition = {
 
 const rangeInput = z.object({ path: z.string(), startLine: z.number().int().min(1), endLine: z.number().int().min(1) }).refine(value => value.endLine >= value.startLine && value.endLine - value.startLine < 500, "Request 1 to 500 lines in increasing order");
 export const readRangeTool: ToolDefinition = {
+  parallelReadScope: "workspace",
   contract: { name: "read_range", description: "Read exact UTF-8 code lines after search_text/read_file. Inclusive one-based startLine/endLine; at most 500 lines and 64 KiB output.", inputSchema: { type: "object", properties: { path: { type: "string" }, startLine: { type: "integer", minimum: 1 }, endLine: { type: "integer", minimum: 1 } }, required: ["path", "startLine", "endLine"], additionalProperties: false }, risk: "read", idempotent: true, timeoutMs: 10000 },
   async execute(input, context) {
     const parsed = rangeInput.parse(input);
@@ -65,6 +67,7 @@ export const readRangeTool: ToolDefinition = {
 
 const listInput = z.object({ glob: z.string().default("**/*"), limit: z.number().int().positive().max(5_000).default(500) });
 export const listFilesTool: ToolDefinition = {
+  parallelReadScope: "workspace",
   contract: {
     name: "list_files",
     description: "List files under the trusted workspace with a glob pattern.",
@@ -83,6 +86,7 @@ export const listFilesTool: ToolDefinition = {
 
 const searchInput = z.object({ query: z.string().min(1), glob: z.string().default("**/*"), limit: z.number().int().positive().max(1_000).default(200) });
 export const searchTextTool: ToolDefinition = {
+  parallelReadScope: "workspace",
   contract: {
     name: "search_text",
     description: "Search text with ripgrep inside the trusted workspace.",

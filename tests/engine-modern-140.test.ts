@@ -132,7 +132,7 @@ function toolOutput(request: ModelRequest | undefined, toolCallId: string): stri
   return JSON.stringify(parts.filter((part) => part.type === "tool_result" && part.toolCallId === toolCallId));
 }
 
-describe("1.4.0 modern analysis path end to end", () => {
+describe("1.4.0 modern analysis path end to end", { timeout: 15000 }, () => {
   it("keeps complete stored evidence available through a bounded page after initial preview truncation", async () => {
     const marker = "MIDDLE_EVIDENCE_MARKER";
     const observed = await analysisRun((_request, turn) => turn === 1

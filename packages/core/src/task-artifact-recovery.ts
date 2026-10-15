@@ -98,6 +98,18 @@ async function recoverRecord(database: HarnessDatabase, parentId: string, parent
       current.patch = patch;
     }
     current.summary = summary.slice(0, 6000);
+    const queued = database.getConversationTask(current.taskId);
+    if (queued) {
+      // Queue-backed records are only projections. Fence the actual attempt before publishing
+      // an inspected artifact, otherwise the next checkpoint would silently discard it.
+      if (queued.parentRunId !== parentId || queued.stepId !== current.stepId || queued.childRunId !== current.childRunId
+        || (current.attemptId !== undefined && queued.attemptId !== current.attemptId)
+        || (current.planGeneration !== undefined && queued.planGeneration !== current.planGeneration)) return;
+      database.updateConversationTask(queued.taskId, { summary: current.summary, ...(patch !== undefined ? { patch } : {}) }, {
+        ...(queued.attemptId ? { expectedAttemptId: queued.attemptId } : {}), expectedPlanGeneration: queued.planGeneration, checkpoint,
+      });
+      return;
+    }
     database.saveCheckpoint(checkpoint);
   } catch { /* Keep startup usable even if one checkpoint cannot be updated. */ }
 }

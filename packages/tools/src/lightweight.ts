@@ -8,6 +8,7 @@ import { runProcess } from "./process.js";
 
 const readInput = z.object({ path: z.string(), offset: z.number().int().min(1).default(1), limit: z.number().int().min(1).max(2000).default(200) });
 export const pagedReadTool: ToolDefinition = {
+  parallelReadScope: "workspace",
   contract: { name: "read_file", description: "Read numbered UTF-8 lines. offset is one-based, default 1; limit defaults to 200, maximum 2000. Output capped at 64 KiB. Continue using nextOffset.", inputSchema: z.toJSONSchema(readInput, { io: "input" }), risk: "read", idempotent: true, timeoutMs: 10000 },
   async execute(input, context) {
     const { path, offset, limit } = readInput.parse(input);
@@ -29,6 +30,7 @@ export const pagedReadTool: ToolDefinition = {
 };
 const searchInput = z.object({ query: z.string().optional(), glob: z.string().default("**/*"), mode: z.enum(["name", "content"]).default("content"), offset: z.number().int().min(0).default(0), limit: z.number().int().min(1).max(200).default(50) });
 export const searchFilesTool: ToolDefinition = {
+  parallelReadScope: "workspace",
   contract: { name: "search_files", description: "Search file names or content inside the workspace, with zero-based result offset and limit. Use mode=name for glob paths; mode=content requires query.", inputSchema: z.toJSONSchema(searchInput, { io: "input" }), risk: "read", idempotent: true, timeoutMs: 20000 },
   async execute(input, context) {
     const value = searchInput.parse(input);

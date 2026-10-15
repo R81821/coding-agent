@@ -47,6 +47,7 @@ import { ConversationProcessSummary, conversationDurationMs, terminalConversatio
 import { shouldExpandToolGroup, shouldPreviewProcessText, shouldShowHistoryLoading, summarizeActivityMessage } from "./conversation-layout.js";
 import { buildConversationStream, type ConversationStreamItem, type ToolTimelineItem } from "./conversation-stream.js";
 import { WorkflowProgress } from "./components/WorkflowProgress.js";
+import { ConversationTaskQueue } from "./components/ConversationTaskQueue.js";
 import { SessionCacheStats } from "./components/SessionCacheStats.js";
 import { RunStopCard } from "./components/RunStopCard.js";
 import { FinalReportStatus } from "./components/FinalReportStatus.js";
@@ -1344,6 +1345,7 @@ function App() {
               events={events}
               turns={conversationTurns}
               hasSession={Boolean(activeSessionId)}
+              {...(activeSessionId ? { sessionId: activeSessionId } : {})}
               busy={busy || switching || Boolean(activeSessionId && steeringSessions.has(activeSessionId))}
               steering={Boolean(activeSessionId && steeringSessions.has(activeSessionId))}
               switching={switching}
@@ -1475,6 +1477,7 @@ function ChatView(props: {
   events: AgentEvent[];
   turns: SessionTurn[];
   hasSession: boolean;
+  sessionId?: string;
   switching: boolean;
   hasOlder: boolean;
   withdrawnEvents?: readonly AgentEvent[];
@@ -1505,6 +1508,7 @@ function ChatView(props: {
     <div className="chat-layout">
       {props.contentError && <div role="alert">{props.contentError}<BuiButton onClick={props.onContentRetry}>重试</BuiButton></div>}
       <div className="conversation-stage">
+      {props.sessionId && !props.switching && <ConversationTaskQueue key={props.sessionId} sessionId={props.sessionId} disabled={props.withdrawing} />}
       <VirtualConversation items={props.turns} itemKey={turnKey} className={props.turns.length ? "conversation" : "conversation conversation-empty"} contentClassName="conversation-content"
         onVisibleItems={props.onVisibleItems}
         initialPosition={props.initialScroll} onPosition={props.onScrollPosition}

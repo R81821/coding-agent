@@ -38,6 +38,10 @@ import { messageHttpUrl } from "./message-links.js";
 import { runDesktopCommand } from "./desktop-menu.js";
 import { DesktopBrowserHost } from "./browser-host.js";
 import { BrowserLayoutSchema, type RunSpec, type SessionDetail } from "@harness/protocol";
+import { guardProcessOutput } from "./output-pipe-guard.js";
+
+// Install before startup logs and before asynchronous Node/Electron warnings are emitted.
+guardProcessOutput();
 
 ipcMain.handle("harness:open-external", async (_event, value: unknown) => {
   const url = messageHttpUrl(value);

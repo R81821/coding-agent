@@ -1,7 +1,14 @@
 import { WorkspaceDiff } from "./workspace-diff.js";
+import { ConversationTaskScheduler } from "./conversation-task-scheduler.js";
+import { projectConversationTasks } from "./conversation-task-projection.js";
+import { graphTasksCompatible } from "./graph-task-execution.js";
+import type { ConversationTask, ConversationTaskInput } from "@harness/protocol";
+import type { ConversationTaskPatch } from "@harness/persistence";
+import type { ToolContext, ToolResult } from "@harness/tools";
 import { activeElapsedMs, reconcileTaskExecutions, reconcileTaskUsage, restoredElapsedMs, reusableVerificationResults, verificationItemFingerprint } from "./durable-recovery.js";
 import { analyzeVerificationDependencies, canReuseVerificationDependencies } from "./test-dependencies.js";
 import { ReadEvidenceCache } from "./read-evidence-cache.js";
+import { BoundedExecutionPool, boundModelProvider, concurrencyLimit, SerialCommitQueue, type ExecutionConcurrency } from "./tool-concurrency.js";
 import { persistToolImages } from "./tool-images.js";
 import { matchesVerificationCheck, sameVerificationCwd, verificationPlanMismatch } from "./verification-matching.js";
 import { summarizeVerificationReuse, type VerificationCacheDecision } from "./verification-reuse.js";
@@ -87,6 +94,7 @@ const transitions: Record<RunStatus, RunStatus[]> = {
 };
 
 export interface EngineDependencies {
+  concurrency?: ExecutionConcurrency;
   database: HarnessDatabase;
   providers: ModelProvider[];
   tools: ToolRegistry;
@@ -96,6 +104,11 @@ export interface EngineDependencies {
   review?: RunReviewService;
   mcp?: McpService;
   blobs?: EncryptedBlobStore;
+  /** Omission preserves the legacy synchronous delegate contract for older embedders. */
+  conversationTasks?: {
+    isolatedWrites(workspace: string, signal: AbortSignal): Promise<boolean>;
+    execute(task: ConversationTask, context: ToolContext): Promise<ToolResult>;
+  };
 }
 
 function planStepFor(call: ToolCall, risk: "read" | "write" | "high" | "destructive", index: number): PlanSpec["steps"][number] {
@@ -146,6 +159,10 @@ function planCovers(plan: PlanSpec, call: ToolCall, risk: "read" | "write" | "hi
 }
 
 interface ActiveRun {
+  taskScheduler?: ConversationTaskScheduler;
+  queueGeneration?: number;
+  queuePlanKey?: string;
+  queueSourceMessageId?: string | undefined;
   workflow?: CodingWorkflow;
   /** Retain recovery data if capability/skill initialization fails before a workflow exists. */
   initialCheckpoint?: RunCheckpoint;
@@ -199,6 +216,7 @@ function workspacesOverlap(left: string, right: string): boolean {
 }
 
 export class HarnessEngine extends EventEmitter {
+  private readonly externalOperationGates = new Map<string, BoundedExecutionPool>();
   readonly approvals: ApprovalBroker;
   readonly mcpInteractions = new McpInteractionBroker();
   private readonly permission = new PermissionEngine();
@@ -213,11 +231,57 @@ export class HarnessEngine extends EventEmitter {
   private closing: Promise<void> | undefined;
   private readonly planDecisions = new Map<string, (decision: { approved: boolean; actor: string; feedback?: string }) => void>();
   private readonly tracer = trace.getTracer("harness-agent", "2.0.0");
+  private readonly workspaceOperationGates = new Map<string, BoundedExecutionPool>();
 
   constructor(private readonly deps: EngineDependencies) {
     super();
-    this.router = new ModelRouter(deps.providers);
+    const requestPool = new BoundedExecutionPool(concurrencyLimit(deps.concurrency?.modelRequests, 4, "model request concurrency"));
+    concurrencyLimit(deps.concurrency?.tools, 4, "tool concurrency");
+    this.router = new ModelRouter(deps.providers.map(provider => boundModelProvider(provider, requestPool, request => {
+      // A queued model request can outlive the duration budget checked at its turn boundary.
+      const state = this.active.get(request.runId);
+      if (state) {
+        if (state.pauseRequested) throw new Error("Model request paused before provider dispatch; the request did not start.");
+        this.checkBudget(state.spec, state);
+      }
+    })));
     this.approvals = new ApprovalBroker(deps.database);
+  }
+
+  /** Child runners hold this once for a shared-workspace lifetime; their tools do not reenter it. */
+  async withConversationWorkspace<T>(runId: string, mode: "read" | "write", execute: () => Promise<T>, signal?: AbortSignal): Promise<T> {
+    const state = this.active.get(runId);
+    const spec = state?.spec ?? this.deps.database.getRun(runId)?.spec;
+    if (!spec) throw new Error(`Unknown workspace owner: ${runId}`);
+    let workspace = resolve(spec.workspacePath);
+    try { workspace = realpathSync.native(workspace); } catch { /* a missing path fails in the operation itself */ }
+    const key = normalizeSessionWorkspace(workspace);
+    let gate = this.workspaceOperationGates.get(key);
+    if (!gate) { gate = new BoundedExecutionPool(1024); this.workspaceOperationGates.set(key, gate); }
+    const operationSignal = signal ?? state?.controller.signal ?? new AbortController().signal;
+    return gate.run(operationSignal, mode === "read", async () => {
+      if (state?.pauseRequested) throw new Error("Workspace operation paused before dispatch; the operation did not start.");
+      return execute();
+    });
+  }
+
+  /** Shared child writes invalidate parent receipts while holding the same workspace lock. */
+  async withConversationTaskWorkspace<T>(runId: string, mode: "read" | "write", execute: () => Promise<T>, signal: AbortSignal): Promise<T> {
+    return this.withConversationWorkspace(runId, mode, async () => {
+      const state = this.active.get(runId);
+      if (mode === "read" || !state?.workflow) return execute();
+      const before = await snapshotWorkspace(state.spec.workspacePath, signal);
+      if (state.workflow instanceof LightweightWorkflow) state.workflow.applyEffect({ kind: "unknown", changedFiles: [] });
+      this.saveCheckpoint(runId, state, "tool_batch");
+      try { return await execute(); }
+      finally {
+        const after = await snapshotWorkspace(state.spec.workspacePath, AbortSignal.timeout(30_000));
+        state.workspaceSnapshot = after;
+        if (state.workflow instanceof LightweightWorkflow) state.workflow.applyEffect(compareWorkspace(before, after));
+        state.verifiedSnapshot = undefined;
+        this.saveCheckpoint(runId, state, "tool_batch");
+      }
+    }, signal);
   }
 
   start(spec: RunSpec, profile: Profile, recovery?: RunCheckpoint): void {
@@ -448,6 +512,7 @@ export class HarnessEngine extends EventEmitter {
     const run = this.active.get(runId);
     if (!run) return false;
     run.pauseRequested = true;
+    run.taskScheduler?.pause();
     this.mcpInteractions.cancelRun(runId);
     this.approvals.denyRun(runId);
     for (const child of this.active.values()) if (child.spec.parentRunId === runId) this.pause(child.spec.id);
@@ -558,6 +623,206 @@ export class HarnessEngine extends EventEmitter {
     return this.active.has(runId);
   }
 
+  listConversationTasks(sessionId: string, parentRunId?: string): { tasks: ConversationTask[]; limits: { maxConcurrentTasks: number; maxQueueLength: number } } {
+    return { tasks: this.deps.database.listSessionConversationTasks(sessionId, parentRunId), limits: this.queueLimits() };
+  }
+
+  private queueLimits() {
+    const maxConcurrentTasks = this.deps.concurrency?.tasks ?? 4;
+    const maxQueueLength = this.deps.concurrency?.queueLength ?? 80;
+    if (!Number.isInteger(maxConcurrentTasks) || maxConcurrentTasks < 1 || maxConcurrentTasks > 8 || !Number.isInteger(maxQueueLength) || maxQueueLength < 1 || maxQueueLength > 10000) throw new Error("Invalid conversation task queue limits");
+    return { maxConcurrentTasks, maxQueueLength };
+  }
+
+  private ownedConversationTask(sessionId: string, parentRunId: string, taskId: string): ConversationTask {
+    const task = this.deps.database.getConversationTask(taskId);
+    const parent = this.deps.database.getRun(parentRunId);
+    if (!task || task.sessionId !== sessionId || task.parentRunId !== parentRunId || parent?.spec.sessionId !== sessionId || this.deps.database.isRunWithdrawn(parentRunId)) throw new Error("任务不属于当前会话");
+    this.assertNoWithdrawal(parent.spec);
+    return task;
+  }
+
+  cancelConversationTask(sessionId: string, parentRunId: string, taskId: string): ConversationTask {
+    const task = this.ownedConversationTask(sessionId, parentRunId, taskId);
+    if (!["queued", "blocked"].includes(task.executionState)) throw new Error("只能取消尚未启动的任务");
+    return this.changeConversationTask(task, { executionState: "cancelled", finishedAt: nowIso(), summary: "Cancelled before dispatch by user" });
+  }
+
+  retryConversationTask(sessionId: string, parentRunId: string, taskId: string, reason: string): ConversationTask {
+    const task = this.ownedConversationTask(sessionId, parentRunId, taskId);
+    if (!["failed", "interrupted"].includes(task.executionState) || !reason.trim() || reason.trim().length > 4000) throw new Error("失败或中断任务重试需要检查产物并提供原因");
+    const run = this.active.get(parentRunId);
+    const workflow = run?.workflow;
+    if (!run || run.pauseRequested || !(workflow instanceof SequentialWorkflow)) throw new Error("请先继续父对话，再重试任务");
+    if (task.planGeneration !== run.queueGeneration || !workflow.state.sequential?.steps.some(step => step.id === task.stepId && step.execution)) throw new Error("计划已变化，请从当前计划重新提交任务");
+    const updated = this.changeConversationTask(task, { executionState: "queued", retryReason: reason.trim() });
+    run.taskScheduler?.notify();
+    return updated;
+  }
+
+  private changeConversationTask(task: ConversationTask, patch: ConversationTaskPatch): ConversationTask {
+    const state = this.active.get(task.parentRunId);
+    let updated!: ConversationTask;
+    const commit = (checkpoint?: RunCheckpoint, events?: AgentEvent[]) => {
+      updated = this.deps.database.updateConversationTask(task.taskId, patch, {
+        ...(task.attemptId ? { expectedAttemptId: task.attemptId } : {}), expectedPlanGeneration: task.planGeneration,
+        ...(checkpoint ? { checkpoint } : {}), ...(events ? { events } : {}),
+      });
+    };
+    if (state) this.saveCheckpoint(task.parentRunId, state, "tool_batch", undefined, { commit: (checkpoint, events) => commit(checkpoint, events) });
+    else commit();
+    if (state?.workflow) projectConversationTasks(state.workflow.state, this.deps.database.listConversationTasks(task.parentRunId), state.queueGeneration);
+    state?.taskScheduler?.notify();
+    return updated;
+  }
+
+  private async initializeConversationScheduler(spec: RunSpec, state: ActiveRun): Promise<void> {
+    if (!this.deps.conversationTasks || spec.parentRunId || !(state.workflow instanceof SequentialWorkflow)) return;
+    const rows = this.deps.database.listConversationTasks(spec.id);
+    const sourceIds = this.deps.database.listEvents(spec.id).flatMap(event => event.type === "steering_submitted" ? [event.messageId] : []);
+    const baselineSource = state.initialCheckpoint?.conversationTaskQueue?.sourceMessageId ?? [...rows].sort((a, b) => b.planGeneration - a.planGeneration).find(task => task.source.messageId)?.source.messageId;
+    const newSources = baselineSource ? sourceIds.length - sourceIds.indexOf(baselineSource) - 1 : sourceIds.length;
+    state.queueGeneration = Math.max(state.initialCheckpoint?.conversationTaskQueue?.planGeneration ?? 0, ...rows.map(task => task.planGeneration)) + Math.max(0, newSources);
+    state.queueSourceMessageId = sourceIds.at(-1);
+    state.queuePlanKey = this.conversationPlanKey(state.workflow);
+    projectConversationTasks(state.workflow.state, rows, state.queueGeneration);
+    const isolatedWrites = await this.deps.conversationTasks.isolatedWrites(spec.workspacePath, state.controller.signal);
+    state.taskScheduler = new ConversationTaskScheduler({
+      maxParallel: this.queueLimits().maxConcurrentTasks, isolatedWrites,
+      list: () => this.deps.database.listConversationTasks(spec.id),
+      eligible: task => {
+        if (state.pauseRequested || state.controller.signal.aborted || this.closing || this.deps.database.isRunWithdrawn(spec.id)) return false;
+        const current = this.deps.database.getConversationTask(task.taskId);
+        if (!current || !["queued", "blocked"].includes(current.executionState)) return false;
+        if (current.planGeneration !== state.queueGeneration) return false;
+        if (current.blockedReason?.startsWith("Budget:")) {
+          try { this.childBudget(spec.id, this.queueLimits().maxConcurrentTasks + 1); }
+          catch { return false; }
+        }
+        const workflow = state.workflow as SequentialWorkflow;
+        if (!workflow.taskDispatchReady()) return false;
+        if (current.workspaceVersion && state.workspaceSnapshot?.complete && current.workspaceVersion !== workspaceFingerprint(state.workspaceSnapshot)) return false;
+        const sequence = workflow.state.sequential!;
+        const step = sequence.steps.find(item => item.id === task.stepId);
+        if (!step?.execution) return false;
+        const ready = task.dependsOn.every(id => sequence.steps.some(item => item.id === id && item.status === "verified" && item.check.status === "passed" && item.check.epoch === workflow.state.epoch && !!item.check.runId));
+        if (!ready) return false;
+        return true;
+      },
+      execute: task => this.executeConversationTask(spec, state, task),
+      onError: error => { process.stderr.write(`Conversation queue ${spec.id}: ${String(error)}\n`); },
+    });
+    state.taskScheduler.notify();
+  }
+
+  private async executeConversationTask(spec: RunSpec, state: ActiveRun, task: ConversationTask): Promise<void> {
+    if (state.pauseRequested || state.controller.signal.aborted) return;
+    if (task.executionState === "blocked") task = this.changeConversationTask(task, { executionState: "queued" });
+    let claimed: ConversationTask | undefined;
+    try {
+      const budget = this.childBudget(spec.id, this.queueLimits().maxConcurrentTasks + 1);
+      this.saveCheckpoint(spec.id, state, "tool_batch", undefined, { commit: (checkpoint, events) => {
+        claimed = this.deps.database.claimConversationTask(task.taskId, { expectedPlanGeneration: task.planGeneration, budgetReservation: budget, budgetLimit: spec.budget,
+          accountedUsage: { inputTokens: state.inputTokens, outputTokens: state.outputTokens, estimatedUsd: state.spentUsd, turns: state.turns, toolCalls: state.toolCalls, durationMs: activeElapsedMs(state), cachedInputTokens: 0 }, checkpoint, events });
+      } });
+      if (!claimed) return;
+      projectConversationTasks(state.workflow!.state, this.deps.database.listConversationTasks(spec.id), state.queueGeneration);
+      if (state.pauseRequested || state.controller.signal.aborted) {
+        this.changeConversationTask(claimed, { executionState: "interrupted", summary: "Paused after claim and before child start; inspect before retry" }); return;
+      }
+      const result = await this.deps.conversationTasks!.execute(claimed, { runId: spec.id, sessionId: spec.sessionId, workspacePath: spec.workspacePath, grants: spec.grants, signal: state.controller.signal });
+      const current = this.deps.database.getConversationTask(task.taskId);
+      if (!current || current.attemptId !== claimed.attemptId || this.deps.database.isRunWithdrawn(spec.id)) return;
+      if (current.executionState === "running") this.changeConversationTask(current, { executionState: result.isError ? "failed" : "interrupted", summary: "Executor did not publish a matching durable child receipt; inspect artifacts before retry" });
+    } catch (error) {
+      const current = this.deps.database.getConversationTask(task.taskId);
+      if (current && !claimed && current.executionState === "queued") {
+        this.changeConversationTask(current, { executionState: "blocked", blockedReason: `Budget: ${String(error).slice(0, 3900)}` });
+        return;
+      }
+      if (current && claimed && current.attemptId === claimed.attemptId && current.executionState === "running") {
+        this.changeConversationTask(current, { executionState: state.pauseRequested || state.controller.signal.aborted ? "interrupted" : "failed", error: String(error).slice(0, 6000), finishedAt: nowIso() });
+      }
+    }
+  }
+
+  private conversationPlanKey(workflow: SequentialWorkflow): string {
+    const sequence = workflow.state.sequential!;
+    return JSON.stringify({ steps: sequence.steps.map(({ id, text, dependsOn, priority, execution, verification }) => ({ id, text, dependsOn, priority, execution, verification })), requirements: workflow.state.requirements, integration: sequence.integration, mode: sequence.mode });
+  }
+
+  private refreshConversationQueue(state: ActiveRun): void {
+    if (!state.taskScheduler || !(state.workflow instanceof SequentialWorkflow)) return;
+    const sequence = state.workflow.state.sequential!;
+    const key = this.conversationPlanKey(state.workflow);
+    if (state.queuePlanKey !== key) {
+      state.queuePlanKey = key;
+      state.queueGeneration = (state.queueGeneration ?? 0) + 1;
+    }
+    for (const task of this.deps.database.listConversationTasks(state.spec.id)) {
+      if (["queued", "blocked"].includes(task.executionState) && task.planGeneration !== state.queueGeneration) {
+        this.changeConversationTask(task, { executionState: "cancelled", summary: "Plan or user requirements changed before dispatch; submit the current node again" });
+        continue;
+      }
+      if (["queued", "blocked"].includes(task.executionState) && task.workspaceVersion && state.workspaceSnapshot?.complete && task.workspaceVersion !== workspaceFingerprint(state.workspaceSnapshot)) {
+        state.queueGeneration = (state.queueGeneration ?? 0) + 1;
+        this.changeConversationTask(task, { executionState: "cancelled", summary: "Workspace changed before dispatch; inspect the current inputs and submit the node again" });
+        continue;
+      }
+      if (["queued", "blocked"].includes(task.executionState) && !task.blockedReason?.startsWith("Budget:")) {
+        const ready = state.workflow.taskDispatchReady() && task.dependsOn.every(id => sequence.steps.some(item => item.id === id && item.status === "verified" && item.check.status === "passed" && item.check.epoch === state.workflow!.state.epoch && !!item.check.runId));
+        if (ready && task.executionState === "blocked") this.changeConversationTask(task, { executionState: "queued", blockedReason: "" });
+        if (!ready && task.executionState === "queued") this.changeConversationTask(task, { executionState: "blocked", blockedReason: "Waiting for current repository evidence, workflow preparation or real prerequisite verification" });
+      }
+      const step = sequence.steps.find(item => item.id === task.stepId);
+      if (task.executionState === "completed" && step?.status === "verified" && step.check.status === "passed" && step.check.epoch === state.workflow.state.epoch && task.acceptanceState !== "verified") {
+        this.changeConversationTask(task, { acceptanceState: "verified", verificationIds: [step.check.runId] });
+      }
+    }
+    projectConversationTasks(state.workflow.state, this.deps.database.listConversationTasks(state.spec.id), state.queueGeneration);
+    state.taskScheduler.notify();
+  }
+
+  private async enqueueConversationSteps(spec: RunSpec, state: ActiveRun, workflow: SequentialWorkflow, input: { stepIds?: string[] | undefined; maxParallel: number; reason?: string | undefined }): Promise<ToolResult> {
+    this.refreshConversationQueue(state);
+    const sequence = workflow.state.sequential!;
+    const previous = this.deps.database.listConversationTasks(spec.id);
+    const ids = input.stepIds ?? sequence.steps.filter(step => step.execution && step.status !== "verified" && !previous.some(task => task.stepId === step.id && task.planGeneration === state.queueGeneration)).slice(0, 8).map(step => step.id);
+    const selected = ids.map(id => sequence.steps.find(step => step.id === id));
+    if (!ids.length || new Set(ids).size !== ids.length || selected.some(step => !step?.execution || step.status === "verified")) return { isError: true, output: { code: "graph_tasks_ineligible" } };
+    const authorizationCall: ToolCall = { id: newId("graph-dispatch"), name: "delegate", input: { tasks: selected.map(step => ({ id: step!.id, stepId: step!.id, prompt: step!.execution!.prompt ?? step!.text, mode: step!.execution!.mode, writePaths: step!.execution!.writePaths })), maxParallel: this.queueLimits().maxConcurrentTasks } };
+    const authorization = await this.authorizeTool(spec, state, authorizationCall);
+    if (authorization.block) return { isError: true, output: { code: "graph_tasks_permission_denied", error: authorization.reason } };
+    if (state.pauseRequested || state.controller.signal.aborted) return { isError: true, output: { code: "graph_tasks_paused" } };
+    state.taskScheduler!.setConcurrency(Math.min(input.maxParallel, this.queueLimits().maxConcurrentTasks));
+    const at = nowIso();
+    const tasks: ConversationTaskInput[] = selected.map(step => {
+      const dependsOn = sequence.mode === "ordered" ? [...new Set([...sequence.steps.slice(0, sequence.steps.indexOf(step!)).map(item => item.id), ...step!.dependsOn ?? []])] : step!.dependsOn ?? [];
+      const ready = dependsOn.every(id => sequence.steps.some(item => item.id === id && item.status === "verified" && item.check.status === "passed" && item.check.epoch === workflow.state.epoch));
+      const task: ConversationTaskInput = {
+        taskId: newId("task"), sessionId: spec.sessionId, parentRunId: spec.id, stepId: step!.id, planGeneration: state.queueGeneration ?? 0,
+        source: state.queueSourceMessageId ? { kind: "steering", messageId: state.queueSourceMessageId } : { kind: "run" },
+        submissionKey: `${state.queueGeneration}:${step!.id}`, executionState: ready ? "queued" : "blocked", dependsOn,
+        ...(ready ? {} : { blockedReason: "Waiting for current real parent verification of prerequisite nodes" }),
+        priority: step!.priority ?? 0, prompt: (step!.execution!.prompt ?? `${step!.text}\nRequirements: ${workflow.state.requirements.join("; ")}\nArchitecture: ${sequence.architecture}\nReturn task-specific evidence and incremental changes; the parent integrates and verifies.`).slice(0, 10000),
+        mode: step!.execution!.mode, writePaths: step!.execution!.writePaths ?? [], evidenceIds: sequence.evidenceIds,
+        dependencyArtifacts: previous.filter(item => dependsOn.includes(item.stepId)).map(item => item.taskId),
+        ...(state.workspaceSnapshot?.complete ? { workspaceVersion: workspaceFingerprint(state.workspaceSnapshot) } : {}), createdAt: at, updatedAt: at,
+      };
+      // Validate scopes even when no other task is active.
+      graphTasksCompatible({ id: task.taskId, prompt: task.prompt, mode: task.mode, writePaths: task.writePaths ?? [] }, { id: "scope-check", prompt: "", mode: "write", writePaths: ["."] }, true);
+      return task;
+    });
+    let accepted: ConversationTask[] = [];
+    this.saveCheckpoint(spec.id, state, "tool_batch", undefined, { commit: (checkpoint, events) => {
+      accepted = this.deps.database.enqueueConversationTasks(tasks, { maxQueueLength: this.queueLimits().maxQueueLength, checkpoint, events });
+    } });
+    for (const task of accepted) if (["failed", "interrupted"].includes(task.executionState) && input.reason) this.retryConversationTask(spec.sessionId, spec.id, task.taskId, input.reason);
+    projectConversationTasks(workflow.state, this.deps.database.listConversationTasks(spec.id), state.queueGeneration);
+    state.taskScheduler!.notify();
+    return { output: { parentRunId: spec.id, tasks: accepted.map(task => ({ taskId: task.taskId, stepId: task.stepId, executionState: task.executionState, blockedReason: task.blockedReason })), limits: this.queueLimits(), next: "Use wait_tasks for event-driven progress, read_evidence for full artifacts, and integrate_tasks to acknowledge inspected results. Child completion never verifies a node." } };
+  }
+
   /** Called by the real child executor; model text cannot publish a task receipt. */
   recordTaskExecution(runId: string, input: TaskExecution): void {
     const run = this.active.get(runId);
@@ -568,6 +833,18 @@ export class HarnessEngine extends EventEmitter {
       const child = this.deps.database.getRun(record.childRunId);
       if (!child || child.spec.parentRunId !== runId || child.spec.parentStepId !== record.stepId) throw new Error("Task receipt must reference a real child of this graph node.");
       if (record.workspacePath && resolve(record.workspacePath) !== resolve(child.spec.workspacePath)) throw new Error("Task artifact workspace must match its real child workspace.");
+    }
+    const queued = this.deps.database.getConversationTask(record.taskId);
+    if (queued) {
+      if (queued.parentRunId !== runId || queued.stepId !== record.stepId || queued.mode !== record.mode || queued.childRunId !== record.childRunId || queued.attemptId !== record.attemptId || queued.planGeneration !== record.planGeneration) throw new Error("Queue receipt must match its claimed task, attempt, plan and child identity");
+      if (record.writePaths && JSON.stringify(queued.writePaths) !== JSON.stringify(record.writePaths)) throw new Error("Task execution cannot expand its claimed write scope");
+      this.changeConversationTask(queued, {
+        executionState: record.status === "completed" ? "awaiting_integration" : record.status,
+        ...(record.startedAt ? { startedAt: record.startedAt } : {}), ...(record.finishedAt ? { finishedAt: record.finishedAt } : {}),
+        ...(record.summary ? { summary: record.summary } : {}), ...(record.patch !== undefined ? { patch: record.patch } : {}),
+        ...(record.workspacePath ? { workspacePath: record.workspacePath } : {}), ...(record.baselineTree ? { baselineTree: record.baselineTree } : {}),
+      });
+      return;
     }
     run.workflow.recordTask(record);
     this.saveCheckpoint(runId, run, "tool_batch");
@@ -582,6 +859,9 @@ export class HarnessEngine extends EventEmitter {
   }
 
   private async settleRun(runId: string): Promise<void> {
+    const scheduler = this.active.get(runId)?.taskScheduler;
+    scheduler?.pause();
+    await scheduler?.settle();
     try {
       const paused = this.deps.database.getRun(runId)?.status === "paused";
       if (!paused || !this.active.get(runId)?.pauseSnapshotFinalized)
@@ -630,6 +910,11 @@ export class HarnessEngine extends EventEmitter {
       run.steeringVersion++;
       try { this.saveCheckpoint(runId, run, "manual", undefined, { submittedSteering: message }); }
       catch (error) { run.steering = run.steering.filter(item => item.id !== message.id); run.steeringVersion--; throw error; }
+      if (run.taskScheduler) {
+        run.queueGeneration = (run.queueGeneration ?? 0) + 1;
+        run.queueSourceMessageId = message.id;
+        this.refreshConversationQueue(run);
+      }
       return { accepted: true, messageId: message.id, queued: run.steering.length, status };
     }
     const checkpoint = this.deps.database.getLatestCheckpoint(runId);
@@ -750,17 +1035,19 @@ export class HarnessEngine extends EventEmitter {
     const parent = this.active.get(parentRunId);
     if (!parent) throw new Error(`Parent run is not active: ${parentRunId}`);
     if (!Number.isInteger(divisor) || divisor < 1) throw new Error("Child budget divisor must be a positive integer");
-    const remainingUsd = Math.max(0, parent.spec.budget.maxUsd - parent.spentUsd);
-    const remainingToolCalls = Math.max(0, parent.spec.budget.maxToolCalls - parent.toolCalls);
-    const remainingTurns = Math.max(0, parent.spec.budget.maxTurns - parent.turns);
-    const remainingMs = Math.max(0, parent.spec.budget.maxDurationMs - activeElapsedMs(parent));
+    const attempts = this.deps.database.listConversationTasks(parentRunId, { includeWithdrawn: true }).flatMap(task => task.attempts);
+    const held = attempts.filter(attempt => attempt.reservationState === "held" && attempt.reservation);
+    const remainingUsd = Math.max(0, parent.spec.budget.maxUsd - Math.max(parent.spentUsd, attempts.reduce((sum, item) => sum + item.accountedUsage.estimatedUsd, 0)) - held.reduce((sum, item) => sum + Math.max(0, item.reservation!.maxUsd - item.accountedUsage.estimatedUsd), 0));
+    const remainingToolCalls = Math.max(0, parent.spec.budget.maxToolCalls - Math.max(parent.toolCalls, attempts.reduce((sum, item) => sum + item.accountedUsage.toolCalls, 0)) - held.reduce((sum, item) => sum + Math.max(0, item.reservation!.maxToolCalls - item.accountedUsage.toolCalls), 0));
+    const remainingTurns = Math.max(0, parent.spec.budget.maxTurns - Math.max(parent.turns, attempts.reduce((sum, item) => sum + item.accountedUsage.turns, 0)) - held.reduce((sum, item) => sum + Math.max(0, item.reservation!.maxTurns - item.accountedUsage.turns), 0));
+    const remainingMs = Math.max(0, parent.spec.budget.maxDurationMs - Math.max(activeElapsedMs(parent), attempts.reduce((sum, item) => sum + item.accountedUsage.durationMs, 0)) - held.reduce((sum, item) => sum + Math.max(0, item.reservation!.maxDurationMs - item.accountedUsage.durationMs), 0));
     const budget = { maxTurns: Math.floor(remainingTurns / divisor), maxToolCalls: Math.floor(remainingToolCalls / divisor), maxDurationMs: Math.floor(remainingMs / divisor), maxUsd: remainingUsd / divisor };
     if (budget.maxTurns < 1 || budget.maxToolCalls < 1 || budget.maxDurationMs < 1 || budget.maxUsd <= 0) throw new Error("Parent remaining budget cannot fund the delegated tasks");
     return budget;
   }
 
   /** Fold a finished child run's usage into the parent's budget. Throws when the parent budget is exceeded. */
-  reportChildUsage(parentRunId: string, usage: { inputTokens: number; outputTokens: number; estimatedUsd: number; costKnown?: boolean; turns?: number; toolCalls?: number }, childRunId?: string): void {
+  reportChildUsage(parentRunId: string, usage: { inputTokens: number; outputTokens: number; estimatedUsd: number; costKnown?: boolean; turns?: number; toolCalls?: number; cachedInputTokens?: number; durationMs?: number }, childRunId?: string): void {
     const parent = this.active.get(parentRunId);
     if (!parent) return;
     const record = childRunId && parent.workflow?.state.sequential?.taskExecutions.find(task => task.childRunId === childRunId);
@@ -768,7 +1055,15 @@ export class HarnessEngine extends EventEmitter {
       const child = this.deps.database.getRun(childRunId!);
       if (!child || child.spec.parentRunId !== parentRunId || child.spec.parentStepId !== record.stepId) throw new Error("Child budget receipt must match the real graph child.");
     }
-    const previous = record ? record.accountedUsage : undefined;
+    const queueTask = childRunId ? this.deps.database.listConversationTasks(parentRunId, { includeWithdrawn: true }).find(task => task.attempts.some(attempt => attempt.childRunId === childRunId)) : undefined;
+    const attempt = queueTask?.attempts.find(attempt => attempt.childRunId === childRunId);
+    if (queueTask) {
+      const child = this.deps.database.getRunForAccounting(childRunId!);
+      if (!child || child.spec.parentRunId !== parentRunId || child.spec.parentStepId !== queueTask.stepId) throw new Error("Child usage must belong to the persisted queue attempt");
+    } else if (childRunId && this.deps.database.isRunWithdrawn(childRunId)) return;
+    const previous = attempt?.accountedUsage ?? (record ? record.accountedUsage : undefined);
+    const before = { inputTokens: parent.inputTokens, outputTokens: parent.outputTokens, spentUsd: parent.spentUsd, turns: parent.turns, toolCalls: parent.toolCalls, costKnown: parent.costKnown };
+    const previousRecord = record ? record.accountedUsage : undefined;
     parent.inputTokens += Math.max(0, usage.inputTokens - (previous?.inputTokens ?? 0));
     parent.outputTokens += Math.max(0, usage.outputTokens - (previous?.outputTokens ?? 0));
     parent.spentUsd += Math.max(0, usage.estimatedUsd - (previous?.estimatedUsd ?? 0));
@@ -776,7 +1071,17 @@ export class HarnessEngine extends EventEmitter {
     parent.toolCalls += Math.max(0, (usage.toolCalls ?? 0) - (previous?.toolCalls ?? 0));
     parent.costKnown &&= usage.costKnown !== false;
     if (record) record.accountedUsage = { inputTokens: Math.max(previous?.inputTokens ?? 0, usage.inputTokens), outputTokens: Math.max(previous?.outputTokens ?? 0, usage.outputTokens), estimatedUsd: Math.max(previous?.estimatedUsd ?? 0, usage.estimatedUsd), costKnown: previous?.costKnown !== false && usage.costKnown !== false, turns: Math.max(previous?.turns ?? 0, usage.turns ?? 0), toolCalls: Math.max(previous?.toolCalls ?? 0, usage.toolCalls ?? 0) };
-    this.saveCheckpoint(parentRunId, parent, "tool_batch");
+    try {
+      if (queueTask && attempt) this.saveCheckpoint(parentRunId, parent, "tool_batch", undefined, { commit: (checkpoint, events) => {
+        this.deps.database.accountConversationTaskAttempt(queueTask.taskId, attempt.attemptId, { ...usage, turns: usage.turns ?? 0, toolCalls: usage.toolCalls ?? 0 }, { checkpoint, events });
+      } });
+      else this.saveCheckpoint(parentRunId, parent, "tool_batch");
+    } catch (error) {
+      Object.assign(parent, before);
+      if (record) { if (previousRecord) record.accountedUsage = previousRecord; else delete record.accountedUsage; }
+      throw error;
+    }
+    if (queueTask && parent.workflow) projectConversationTasks(parent.workflow.state, this.deps.database.listConversationTasks(parentRunId), parent.queueGeneration);
     this.checkBudget(parent.spec, parent);
     if (parent.turns > parent.spec.budget.maxTurns) throw new BudgetExceededError("model_turn_limit", "Model-turn budget exceeded");
   }
@@ -805,6 +1110,20 @@ export class HarnessEngine extends EventEmitter {
   }
 
   private reconcileRecoveryTasks(checkpoint: RunCheckpoint): boolean {
+    const queue = this.deps.database.listConversationTasks(checkpoint.runId, { includeWithdrawn: true });
+    if (queue.length) {
+      let reconciled = checkpoint;
+      for (const task of queue) for (const attempt of task.attempts) {
+        const child = this.deps.database.getRunForAccounting(attempt.childRunId);
+        const saved = this.deps.database.getLatestCheckpoint(attempt.childRunId);
+        if (!saved || child?.spec.parentRunId !== checkpoint.runId || child.spec.parentStepId !== task.stepId) continue;
+        const actual = { inputTokens: saved.usage.inputTokens, outputTokens: saved.usage.outputTokens, estimatedUsd: saved.usage.estimatedUsd, cachedInputTokens: saved.usage.cachedInputTokens ?? 0, costKnown: saved.usage.costKnown, turns: saved.turns, toolCalls: saved.toolCalls };
+        reconciled = this.deps.database.accountConversationTaskAttempt(task.taskId, attempt.attemptId, actual, { checkpoint: reconciled, applyUsageToCheckpoint: true }).checkpoint!;
+      }
+      Object.assign(checkpoint, reconciled);
+      if (checkpoint.workflow) projectConversationTasks(checkpoint.workflow, this.deps.database.listConversationTasks(checkpoint.runId), checkpoint.conversationTaskQueue?.planGeneration);
+      return true;
+    }
     const usageChanged = reconcileTaskUsage(checkpoint, this.deps.database);
     const sequence = checkpoint.workflow?.sequential;
     if (!sequence?.taskExecutions.length) return usageChanged;
@@ -968,16 +1287,28 @@ export class HarnessEngine extends EventEmitter {
       if (recovery?.pendingNonIdempotentToolCalls.length) workflow.fail("Execution state is unknown after restart. Inspect current repository state and diagnose before any new mutation or verification command.");
       const workflowTool = workflow.tool();
       const runtimeTools = new Map<string, ToolDefinition>();
+      await this.initializeConversationScheduler(spec, state);
       if (workflow instanceof LightweightWorkflow) {
-        if (workflow instanceof SequentialWorkflow && spec.taskMode !== "analysis") runtimeTools.set("advance_workflow", workflow.planningTool());
+        if (workflow instanceof SequentialWorkflow && spec.taskMode !== "analysis") {
+          const planning = workflow.planningTool();
+          runtimeTools.set("advance_workflow", { ...planning, execute: async (input, context) => {
+            const result = await planning.execute(input, context);
+            if (!result.isError && input.action === "reopen_step" && state.taskScheduler) {
+              state.queueGeneration = (state.queueGeneration ?? 0) + 1;
+              this.refreshConversationQueue(state);
+            }
+            return result;
+          } });
+        }
         const delegate = this.deps.tools.get("delegate");
         if (workflow instanceof SequentialWorkflow && spec.taskMode !== "analysis" && delegate && profile.toolNames.includes("delegate")) {
           const inputSchema = z.object({ stepIds: z.array(z.string()).min(1).max(8).optional(), maxParallel: z.number().int().min(1).max(8).default(4), reason: z.string().trim().min(1).max(3000).optional() });
           runtimeTools.set("run_tasks", {
-            contract: { name: "run_tasks", description: "Execute eligible task graph nodes with execution definitions as bounded concurrent child agents. Omit stepIds to schedule eligible nodes by priority and critical path. Read tasks run concurrently; scoped independent Git write tasks use worktrees with the current dirty baseline. Conflicting/unknown scopes serialize. Runtime records real child IDs, status and incremental artifacts. Parent must authorize integration and run real tests; child completion never verifies a node. Interrupted tasks need an explicit retry reason after inspecting their saved artifacts. This tool does not grant delegate or write permission.", inputSchema: z.toJSONSchema(inputSchema, { io: "input" }), risk: "high", idempotent: false, timeoutMs: 1_800_000 },
+            contract: { name: "run_tasks", description: state.taskScheduler ? "Submit graph nodes to the encrypted persistent queue and immediately return task IDs. Nodes with unverified dependencies remain blocked. New independent submissions fill available slots across batches. maxParallel can lower the configured concurrency. Wait without polling using wait_tasks, inspect read_evidence, acknowledge applicability using integrate_tasks, then run real parent verification. Write tasks retain existing permissions and isolated worktrees when available. Interrupted or failed tasks require an explicit retry reason after inspecting artifacts. Child completion never verifies a graph node." : "Execute eligible task graph nodes as bounded concurrent child agents and wait for this legacy batch. Parent must integrate saved artifacts and run real tests; child completion never verifies a node. Interrupted tasks require an explicit retry reason after inspecting artifacts. This tool grants no additional permissions.", inputSchema: z.toJSONSchema(inputSchema, { io: "input" }), risk: "high", idempotent: false, timeoutMs: 1_800_000 },
             selfAuthorized: true, handlesInputValidation: true,
             execute: async (input, context) => {
               const value = inputSchema.parse(input);
+              if (state.taskScheduler) return this.enqueueConversationSteps(spec, state, workflow, value);
               // Validate graph selection without dispatching or mutating it before authorization.
               const available = workflow.availableTaskSteps();
               const stepIds = value.stepIds ?? available.filter(step => step.execution && !workflow.state.sequential!.taskExecutions.some(task => task.stepId === step.id)).slice(0, 8).map(step => step.id);
@@ -1004,6 +1335,40 @@ export class HarnessEngine extends EventEmitter {
               }
             },
           });
+          if (state.taskScheduler) {
+            runtimeTools.set("wait_tasks", {
+              contract: { name: "wait_tasks", description: "Wait for selected durable queue tasks to change or settle without model polling. Omit taskIds for this run. mode=any returns selected progress; all waits for all selected execution outcomes. timeoutMs is bounded at 60000. Blocked dependencies still require real parent verification. Pause wakes the wait immediately.", inputSchema: { type: "object", properties: { taskIds: { type: "array", items: { type: "string" } }, mode: { enum: ["any", "all"] }, timeoutMs: { type: "integer", minimum: 1, maximum: 60000 } }, additionalProperties: false }, risk: "read", idempotent: true, timeoutMs: 65000 },
+              execute: async (input, context) => {
+                const value = z.object({ taskIds: z.array(z.string()).default([]), mode: z.enum(["any", "all"]).default("any"), timeoutMs: z.number().int().min(1).max(60000).default(30000) }).parse(input);
+                for (const id of value.taskIds) this.ownedConversationTask(spec.sessionId, spec.id, id);
+                this.refreshConversationQueue(state);
+                const selectedIds = value.taskIds.length ? value.taskIds : this.deps.database.listConversationTasks(spec.id).filter(task => task.planGeneration === state.queueGeneration && ["queued", "blocked", "running", "awaiting_integration"].includes(task.executionState)).map(task => task.taskId);
+                if (!selectedIds.length) return { output: { tasks: [], idle: true, paused: state.pauseRequested } };
+                const tasks = await state.taskScheduler!.wait(selectedIds, value.mode, context.signal, value.timeoutMs);
+                return { output: { tasks: tasks.map(({ patch, prompt: _prompt, attempts, ...task }) => ({ ...task, hasPatch: patch !== undefined, attempts: attempts.length })), paused: state.pauseRequested } };
+              },
+            });
+            runtimeTools.set("integrate_tasks", {
+              contract: { name: "integrate_tasks", description: "Acknowledge inspected child outputs after parent integration. Read tasks require no patch receipt. Write tasks with patches require a successful current parent apply_patch evidenceId. This records applicability only; graph nodes still require real parent test receipts. Old plan generations require an explicit reason for adopting their results.", inputSchema: { type: "object", properties: { taskIds: { type: "array", minItems: 1, items: { type: "string" } }, evidenceId: { type: "string" }, reason: { type: "string" } }, required: ["taskIds"] }, risk: "read", idempotent: false, timeoutMs: 1000 },
+              execute: async input => {
+                const value = z.object({ taskIds: z.array(z.string()).min(1), evidenceId: z.string().optional(), reason: z.string().trim().min(1).optional() }).parse(input);
+                const tasks = value.taskIds.map(id => this.ownedConversationTask(spec.sessionId, spec.id, id));
+                const evidence = value.evidenceId ? this.deps.database.getToolEvidence(spec.id, value.evidenceId) : undefined;
+                const started = value.evidenceId ? this.deps.database.listEvents(spec.id).find(event => event.type === "tool_started" && event.call.id === value.evidenceId) : undefined;
+                for (const task of tasks) {
+                  if (task.executionState !== "awaiting_integration") throw new Error("Only ready child outputs can be integrated");
+                  if (task.planGeneration !== state.queueGeneration && !value.reason) throw new Error("Older plan outputs require an explicit applicability reason");
+                  if (task.mode === "write" && task.patch) {
+                    const result = evidence?.type === "tool_finished" ? evidence.output as Record<string, unknown> | null : undefined;
+                    if (!evidence || evidence.type !== "tool_finished" || evidence.isError || started?.type !== "tool_started" || !["patch", "apply_patch"].includes(started.call.name) || result?.applied !== true || task.finishedAt && evidence.at < task.finishedAt) throw new Error("Write integration requires a successful parent patch evidence receipt after the child finished");
+                    if (started.call.input.patch !== task.patch && !value.reason) throw new Error("Adapted child patches require an explicit integration reason");
+                  }
+                }
+                for (const task of tasks) this.changeConversationTask(task, { executionState: "completed", integrationReceipt: value.evidenceId ?? `parent-inspected:${value.reason ?? "current-plan"}` });
+                return { output: { taskIds: value.taskIds, executionState: "completed", acceptanceState: "pending", next: "Run the real parent verification suites" } };
+              },
+            });
+          }
         }
         for (const tool of lightweightTools(this.deps.tools, profile.toolNames)) runtimeTools.set(tool.contract.name, tool);
         runtimeTools.set("todo", todoTool(workflow));
@@ -1018,7 +1383,8 @@ export class HarnessEngine extends EventEmitter {
             const review = workflow.state.independentReview;
             const failure = workflow.state.observations.find(item => item.id === value.id && item.kind === "failure");
             const verification = !event && readableEvidenceRunIds.flatMap(id => this.deps.database.listVerificationRuns(id)).find(run => run.id === value.id);
-            const task = workflow.state.sequential?.taskExecutions.find(item => item.taskId === value.id || item.childRunId === value.id);
+            const queueTask = this.deps.database.getConversationTask(value.id) ?? this.deps.database.listConversationTasks(spec.id).find(item => item.attempts.some(attempt => attempt.childRunId === value.id || attempt.attemptId === value.id));
+            const task = queueTask && readableEvidenceRunIds.includes(queueTask.parentRunId) ? queueTask : workflow.state.sequential?.taskExecutions.find(item => item.taskId === value.id || item.childRunId === value.id);
             const saved = event?.type === "tool_finished" ? event.output : value.id === review.runId ? { kind: "independent_review", ...review, requirements: workflow.state.requirementReceipts } : verification ?? task ?? failure;
             if (saved === undefined) return { isError: true, output: { code: "evidence_not_found", id: value.id } };
             const text = JSON.stringify(saved);
@@ -1129,6 +1495,7 @@ export class HarnessEngine extends EventEmitter {
       let verificationRequested = false;
       const progress = new RunProgress();
       const readCache = new ReadEvidenceCache();
+      const toolCommits = new SerialCommitQueue();
       if (state.turns >= spec.budget.maxTurns || (state.toolCalls > 0 && state.toolCalls >= spec.budget.maxToolCalls)) {
         this.status(spec.id, state, "review");
         const code = state.turns >= spec.budget.maxTurns ? "model_turn_limit" : "tool_call_limit";
@@ -1160,7 +1527,10 @@ export class HarnessEngine extends EventEmitter {
         externalSignal: state.controller.signal,
         maxOutputTokens: resolveMainOutputTokens(spec.generationPolicy),
         ...(spec.reasoningEffort != null ? { reasoningEffort: spec.reasoningEffort } : {}),
-        parallelToolCalls: modern ? false : route.model.capabilities.parallelTools,
+        parallelToolCalls: route.model.capabilities.parallelTools && concurrencyLimit(this.deps.concurrency?.tools, 4, "tool concurrency") > 1,
+        maxConcurrentTools: concurrencyLimit(this.deps.concurrency?.tools, 4, "tool concurrency"),
+        canRunToolConcurrently: () => workflow.state.effect !== "unknown" && !state.pauseRequested,
+        canDispatchTool: () => !state.pauseRequested,
         providerRetryPolicy: {
           maxAttempts: resiliencePolicy.maxProviderAttempts,
           baseDelayMs: resiliencePolicy.providerRetryBaseDelayMs,
@@ -1171,6 +1541,7 @@ export class HarnessEngine extends EventEmitter {
         onContextUsage: context => { this.emitEvent(spec.id, state, { type: "context_usage", context }); },
         drainSteering: () => this.drainSteering(state),
         getPinnedContext: () => JSON.stringify({
+          ...(state.taskScheduler ? { conversationTasks: this.deps.database.listConversationTasks(spec.id).map(task => ({ taskId: task.taskId, stepId: task.stepId, executionState: task.executionState, blockedReason: task.blockedReason, summary: task.summary?.slice(0, 600), hasPatch: task.patch !== undefined, planGeneration: task.planGeneration, acceptanceState: task.acceptanceState })), taskQueueLimits: this.queueLimits() } : {}),
           projectBaseSnapshot: repositorySnapshot,
           approvedPlan: state.plan?.status === "approved" ? state.plan : undefined,
           permissionSnapshot: spec.grants,
@@ -1237,126 +1608,229 @@ export class HarnessEngine extends EventEmitter {
         },
         executeTool: async (call, tool, signal) => {
           const external = capabilities?.resolve(call);
-          if (external) { call = external.call; tool = external.tool; }
-          // Pick the four origin fields explicitly: `external.tool.external` also carries `contractHash`,
-          // and emitEvent does not schema-strip, so spreading it whole would persist the hash into events.
-          this.emitEvent(spec.id, state, { type: "tool_started", call, ...(external?.tool.external ? { origin: { serverId: external.tool.external.serverId, serverName: external.tool.external.serverName, toolName: external.tool.external.toolName, revision: external.tool.external.revision } } : {}) });
-          const started = Date.now();
-          const measureEffect = modern && !["todo", "check_requirements", "read_evidence", "run_verification"].includes(call.name) && ((tool.assessRisk?.(call.input) ?? tool.contract.risk) !== "read" || ["git_diff", "workspace_diff"].includes(call.name));
-          if (measureEffect || call.name === "workspace_diff") await state.workspaceDiff?.prepare(signal);
-          const before = measureEffect ? state.workspaceSnapshot ?? await snapshotWorkspace(spec.workspacePath, signal) : undefined;
-          if (!tool.contract.idempotent) state.pendingNonIdempotent.set(call.id, call);
-          if ((tool.assessRisk?.(call.input) ?? tool.contract.risk) !== "read" || call.name === "delegate") {
-            state.hadSideEffect = true;
-            if (!modern) progress.invalidate();
+          if (external) {
+            call = external.call;
+            tool = external.tool;
           }
-          workflow.starting(call, tool);
-          this.saveCheckpoint(spec.id, state, "tool_batch");
-          try {
-            const readIdentity = modern ? await readCache.identify(call, spec.workspacePath, signal) : undefined;
-            const reused = readCache.lookup(readIdentity, new Set(workflow.state.observations.map(item => item.id)));
-            const rawResult = reused ?? await tool.execute(call.input, {
-              runId: spec.id,
-              sessionId: spec.sessionId,
-              workspacePath: spec.workspacePath,
-              grants: spec.grants,
-              signal,
-            });
-            const result = await persistToolImages(rawResult, this.deps.blobs, route.provider.id, call.name === "browser" && call.input.action === "screenshot");
-            for (const image of result.images ?? []) if ("attachment" in image) this.deps.database.saveAttachment(image.attachment);
-            if (readIdentity && !reused) {
-              const afterRead = await readCache.identify(call, spec.workspacePath, signal);
-              if (afterRead?.digest === readIdentity.digest) readCache.remember(readIdentity, call.id, result);
-            }
-            this.emitEvent(spec.id, state, {
-              type: "tool_finished",
-              callId: call.id,
-              output: result.output,
-              isError: result.isError === true,
-              durationMs: Date.now() - started,
-            });
-            if (call.name === "web_search" && result.output && typeof result.output === "object") {
-              const search = result.output as { searchId?: unknown; results?: unknown[]; usage?: Record<string, unknown> };
-              if (typeof search.searchId === "string") this.emitEvent(spec.id, state, { type: "search_usage", providerId: "parallel", searchId: search.searchId, resultCount: Array.isArray(search.results) ? search.results.length : 0, usage: search.usage ?? {} });
-            }
-            let diffFingerprint: string | undefined;
-            let diffChangedDuringRead = false;
-            if (before && workflow instanceof LightweightWorkflow) {
-              const after = await snapshotWorkspace(spec.workspacePath, signal);
-              state.workspaceSnapshot = after;
-              const effect = compareWorkspace(before, after);
-              // A probe that left the repository untouched is recorded as a probe, never as a read: the
-              // run must be able to tell an isolated experiment from an inspection. A probe that did
-              // change tracked content stays a repository write.
-              workflow.applyEffect(modern && call.name === "probe" && effect.kind === "read" ? { kind: "probe", changedFiles: [] } : effect);
-              if (effect.kind === "repository_write" || effect.kind === "unknown") progress.invalidate();
-              if (["git_diff", "workspace_diff"].includes(call.name)) {
-                if (effect.kind === "read" && after.complete && !result.isError && !result.truncated) diffFingerprint = workspaceFingerprint(after);
-                else diffChangedDuringRead = true;
+          const execute = async () => {
+            const started = Date.now();
+            let before: WorkspaceSnapshot | undefined;
+            let terminalRecorded = false;
+            let observed = false;
+            try {
+              before = await toolCommits.run(async () => {
+                // Pick the four origin fields explicitly: `external.tool.external` also carries `contractHash`,
+                // and emitEvent does not schema-strip, so spreading it whole would persist the hash into events.
+                this.emitEvent(spec.id, state, {
+                  type: "tool_started",
+                  call,
+                  ...(external?.tool.external
+                    ? {
+                        origin: {
+                          serverId: external.tool.external.serverId,
+                          serverName: external.tool.external.serverName,
+                          toolName: external.tool.external.toolName,
+                          revision: external.tool.external.revision,
+                        },
+                      }
+                    : {}),
+                });
+                const measureEffect =
+                  modern &&
+                  !["todo", "check_requirements", "read_evidence", "run_verification", "run_tasks", "wait_tasks", "integrate_tasks"].includes(call.name) &&
+                  ((tool.assessRisk?.(call.input) ?? tool.contract.risk) !== "read" || ["git_diff", "workspace_diff"].includes(call.name));
+                if (measureEffect || call.name === "workspace_diff") await state.workspaceDiff?.prepare(signal);
+                const before = measureEffect ? (state.workspaceSnapshot ?? (await snapshotWorkspace(spec.workspacePath, signal))) : undefined;
+                if (!tool.contract.idempotent) state.pendingNonIdempotent.set(call.id, call);
+                if ((tool.assessRisk?.(call.input) ?? tool.contract.risk) !== "read" || call.name === "delegate") {
+                  state.hadSideEffect = true;
+                  if (!modern) progress.invalidate();
+                }
+                workflow.starting(call, tool);
+                this.saveCheckpoint(spec.id, state, "tool_batch");
+                return before;
+              });
+              const readIdentity = modern ? await readCache.identify(call, spec.workspacePath, signal) : undefined;
+              const readVersion = `${workflow.state.epoch}:${workflow.state.revision}`;
+              const readSnapshot =
+                modern && tool.parallelReadScope === "workspace" && !readIdentity ? await snapshotWorkspace(spec.workspacePath, signal) : undefined;
+              const reused = readCache.lookup(readIdentity, new Set(workflow.state.observations.map((item) => item.id)));
+              const executeOperation = async () => {
+                signal.throwIfAborted();
+                if (state.pauseRequested) throw new Error("Run paused before tool dispatch");
+                return tool.execute(call.input, {
+                  runId: spec.id,
+                  sessionId: spec.sessionId,
+                  workspacePath: spec.workspacePath,
+                  grants: spec.grants,
+                  signal,
+                });
+              };
+              let externalGate: BoundedExecutionPool | undefined;
+              const statefulResource = tool.external ? `mcp:${tool.external.serverId}` : call.name === "browser" ? "browser:global" : undefined;
+              if (statefulResource) {
+                externalGate = this.externalOperationGates.get(statefulResource);
+                if (!externalGate) { externalGate = new BoundedExecutionPool(1); this.externalOperationGates.set(statefulResource, externalGate); }
               }
-            }
-            workflow.observe(call, result);
-            if (workflow instanceof LightweightWorkflow && ["git_diff", "workspace_diff"].includes(call.name)) {
-              if (diffFingerprint) {
-                workflow.bindObservationFingerprint(call.id, diffFingerprint);
-                // Only a complete stable runtime inspection can resolve a previously unknown
-                // execution effect. Previously invalidated test receipts remain invalidated.
-                if (workflow.state.effect === "unknown") workflow.state.effect = "read";
-                workflow.move(workflow.state.phase, "完整 diff 已绑定运行时代码指纹；代码不变时可复用证据");
-              } else if (diffChangedDuringRead) {
-                const observation = workflow.state.observations.find(item => item.id === call.id);
-                if (observation) observation.complete = false;
-                workflow.state.diffRevision = -1;
-                workflow.move("inspect_result", "读取 diff 期间代码变化或快照不完整；仅刷新受影响范围后继续验证");
+              const rawResult = reused ?? await (externalGate ? externalGate.run(signal, false, executeOperation) : executeOperation());
+              const result = await persistToolImages(
+                rawResult,
+                this.deps.blobs,
+                route.provider.id,
+                call.name === "browser" && call.input.action === "screenshot",
+              );
+              const afterRead = readIdentity ? await readCache.identify(call, spec.workspacePath, signal) : undefined;
+              const afterReadSnapshot = readSnapshot ? await snapshotWorkspace(spec.workspacePath, signal) : undefined;
+              const staleRead =
+                (!!readIdentity && afterRead?.digest !== readIdentity.digest) ||
+                (!!readSnapshot && !!afterReadSnapshot && compareWorkspace(readSnapshot, afterReadSnapshot).kind !== "read") ||
+                (tool.parallelReadScope === "workspace" && readVersion !== `${workflow.state.epoch}:${workflow.state.revision}`);
+              if (staleRead) {
+                result.truncated = true;
+                result.output = {
+                  result: result.output,
+                  stale: true,
+                  guidance: "Workspace content changed during this read. Inspect the current range before citing this result as verification evidence.",
+                };
               }
+              return await toolCommits.run(async () => {
+                for (const image of result.images ?? []) if ("attachment" in image) this.deps.database.saveAttachment(image.attachment);
+                if (readIdentity && !reused) {
+                  if (afterRead?.digest === readIdentity.digest) readCache.remember(readIdentity, call.id, result);
+                }
+                if (call.name === "web_search" && result.output && typeof result.output === "object") {
+                  const search = result.output as { searchId?: unknown; results?: unknown[]; usage?: Record<string, unknown> };
+                  if (typeof search.searchId === "string")
+                    this.emitEvent(spec.id, state, {
+                      type: "search_usage",
+                      providerId: "parallel",
+                      searchId: search.searchId,
+                      resultCount: Array.isArray(search.results) ? search.results.length : 0,
+                      usage: search.usage ?? {},
+                    });
+                }
+                let diffFingerprint: string | undefined;
+                let diffChangedDuringRead = false;
+                if (before && workflow instanceof LightweightWorkflow) {
+                  const after = await snapshotWorkspace(spec.workspacePath, signal);
+                  state.workspaceSnapshot = after;
+                  const effect = compareWorkspace(before, after);
+                  // A probe that left the repository untouched is recorded as a probe, never as a read: the
+                  // run must be able to tell an isolated experiment from an inspection. A probe that did
+                  // change tracked content stays a repository write.
+                  workflow.applyEffect(modern && call.name === "probe" && effect.kind === "read" ? { kind: "probe", changedFiles: [] } : effect);
+                  if (effect.kind === "repository_write" || effect.kind === "unknown") progress.invalidate();
+                  if (["git_diff", "workspace_diff"].includes(call.name)) {
+                    if (effect.kind === "read" && after.complete && !result.isError && !result.truncated) diffFingerprint = workspaceFingerprint(after);
+                    else diffChangedDuringRead = true;
+                  }
+                }
+                workflow.observe(call, result);
+                observed = true;
+                if (workflow instanceof LightweightWorkflow && ["git_diff", "workspace_diff"].includes(call.name)) {
+                  if (diffFingerprint) {
+                    workflow.bindObservationFingerprint(call.id, diffFingerprint);
+                    // Only a complete stable runtime inspection can resolve a previously unknown
+                    // execution effect. Previously invalidated test receipts remain invalidated.
+                    if (workflow.state.effect === "unknown") workflow.state.effect = "read";
+                    workflow.move(workflow.state.phase, "完整 diff 已绑定运行时代码指纹；代码不变时可复用证据");
+                  } else if (diffChangedDuringRead) {
+                    const observation = workflow.state.observations.find((item) => item.id === call.id);
+                    if (observation) observation.complete = false;
+                    workflow.state.diffRevision = -1;
+                    workflow.move("inspect_result", "读取 diff 期间代码变化或快照不完整；仅刷新受影响范围后继续验证");
+                  }
+                }
+                if (call.name === "update_workflow" && call.input.action === "request_verification" && !result.isError) verificationRequested = true;
+                const repetition = progress.record(call, tool, result);
+                if (repetition && !stopReason && !modern) stop("repeated_observation", repetition);
+                state.pendingNonIdempotent.delete(call.id);
+                this.emitEvent(spec.id, state, {
+                  type: "tool_finished",
+                  callId: call.id,
+                  output: result.output,
+                  isError: result.isError === true,
+                  durationMs: Date.now() - started,
+                });
+                terminalRecorded = true;
+                this.saveCheckpoint(spec.id, state, "tool_batch");
+                // Evidence pages already enforce their own bounded range; truncating them again
+                // would hide the requested middle of the original result and its next offset.
+                if (result.trustedInstruction || call.name === "read_evidence") return result;
+                if (modern || call.name === "terminal") {
+                  const preview = compactObservation(result.output, 6000);
+                  const original = typeof result.output === "string" ? result.output : (JSON.stringify(result.output) ?? "");
+                  if (original.length > preview.length)
+                    this.emitEvent(spec.id, state, {
+                      type: "context_adjusted",
+                      adjustment: { kind: "tool_result_bound", beforeCharacters: original.length, afterCharacters: preview.length },
+                    });
+                  return {
+                    ...result,
+                    output: modern
+                      ? { evidenceId: call.id, result: preview, isError: result.isError === true }
+                      : { observation: preview, isError: result.isError === true },
+                  };
+                }
+                return result;
+              });
+            } catch (error) {
+              return toolCommits.run(async () => {
+                const uncertainMcp = error instanceof McpUncertainCallError;
+                if (uncertainMcp) stop("review_incomplete", error.message);
+                const output = {
+                  error: error instanceof Error ? error.message : String(error),
+                  ...(uncertainMcp ? { code: error.code, outcome: "unknown", replayed: false } : {}),
+                };
+                if (before && workflow instanceof LightweightWorkflow) {
+                  try {
+                    const after = await snapshotWorkspace(spec.workspacePath, signal);
+                    state.workspaceSnapshot = after;
+                    const effect = compareWorkspace(before, after);
+                    workflow.applyEffect(modern && call.name === "probe" && effect.kind === "read" ? { kind: "probe", changedFiles: [] } : effect);
+                  } catch {
+                    // Cancellation can prevent a second snapshot. Preserve uncertainty and still
+                    // publish the one terminal receipt for the tool that actually started.
+                    workflow.applyEffect({ kind: "unknown", changedFiles: [] });
+                  }
+                }
+                if (!observed) workflow.observe(call, { output, isError: true });
+                const repetition = progress.record(call, tool, { output, isError: true });
+                if (repetition && !stopReason && !modern) stop("repeated_observation", repetition);
+                if (!terminalRecorded)
+                  this.emitEvent(spec.id, state, {
+                    type: "tool_finished",
+                    callId: call.id,
+                    output,
+                    isError: true,
+                    durationMs: Date.now() - started,
+                  });
+                if (!uncertainMcp) state.pendingNonIdempotent.delete(call.id);
+                this.saveCheckpoint(spec.id, state, "tool_batch");
+                // A thrown failure carries no result reference on the wire: pi turns the exception into a
+                // bare error message. Hand the model the same evidence envelope a structured failure
+                // returns so a failed call is still retrievable by read_evidence. The legacy path keeps
+                // throwing, because its recovery and tests depend on the exception.
+                if (modern) return { output: { evidenceId: call.id, result: compactObservation(output, 6000), isError: true }, isError: true };
+                throw error;
+              });
             }
-            if (call.name === "update_workflow" && call.input.action === "request_verification" && !result.isError) verificationRequested = true;
-            const repetition = progress.record(call, tool, result);
-            if (repetition && !stopReason && !modern) stop("repeated_observation", repetition);
-            state.pendingNonIdempotent.delete(call.id);
-            this.saveCheckpoint(spec.id, state, "tool_batch");
-            // Evidence pages already enforce their own bounded range; truncating them again
-            // would hide the requested middle of the original result and its next offset.
-            if (result.trustedInstruction || call.name === "read_evidence") return result;
-            if (modern || call.name === "terminal") {
-              const preview = compactObservation(result.output, 6000);
-              const original = typeof result.output === "string" ? result.output : JSON.stringify(result.output) ?? "";
-              if (original.length > preview.length) this.emitEvent(spec.id, state, { type: "context_adjusted", adjustment: { kind: "tool_result_bound", beforeCharacters: original.length, afterCharacters: preview.length } });
-              return { ...result, output: modern ? { evidenceId: call.id, result: preview, isError: result.isError === true } : { observation: preview, isError: result.isError === true } };
-            }
-            return result;
-          } catch (error) {
-            const uncertainMcp = error instanceof McpUncertainCallError;
-            if (uncertainMcp) stop("review_incomplete", error.message);
-            const output = {
-              error: error instanceof Error ? error.message : String(error),
-              ...(uncertainMcp ? { code: error.code, outcome: "unknown", replayed: false } : {}),
-            };
-            if (before && workflow instanceof LightweightWorkflow) {
-              const after = await snapshotWorkspace(spec.workspacePath, signal);
-              state.workspaceSnapshot = after;
-              const effect = compareWorkspace(before, after);
-              workflow.applyEffect(modern && call.name === "probe" && effect.kind === "read" ? { kind: "probe", changedFiles: [] } : effect);
-            }
-            workflow.observe(call, { output, isError: true });
-            const repetition = progress.record(call, tool, { output, isError: true });
-            if (repetition && !stopReason && !modern) stop("repeated_observation", repetition);
-            this.emitEvent(spec.id, state, {
-              type: "tool_finished",
-              callId: call.id,
-              output,
-              isError: true,
-              durationMs: Date.now() - started,
-            });
-            if (!uncertainMcp) state.pendingNonIdempotent.delete(call.id);
-            this.saveCheckpoint(spec.id, state, "tool_batch");
-            // A thrown failure carries no result reference on the wire: pi turns the exception into a
-            // bare error message. Hand the model the same evidence envelope a structured failure
-            // returns so a failed call is still retrievable by read_evidence. The legacy path keeps
-            // throwing, because its recovery and tests depend on the exception.
-            if (modern) return { output: { evidenceId: call.id, result: compactObservation(output, 6000), isError: true }, isError: true };
-            throw error;
-          }
+          };
+          // Queue/control tools can wait for children and must never retain the workspace lock.
+          const controls = [
+            "run_tasks",
+            "wait_tasks",
+            "integrate_tasks",
+            "advance_workflow",
+            "update_workflow",
+            "todo",
+            "read_evidence",
+            "check_requirements",
+            "delegate",
+          ];
+          if (spec.parentRunId || controls.includes(call.name) || tool.parallelReadScope === "stateless") return execute();
+          const read = tool.parallelReadScope === "workspace" && (tool.assessRisk?.(call.input) ?? tool.contract.risk) === "read";
+          return this.withConversationWorkspace(spec.id, read ? "read" : "write", execute, signal);
         },
         shouldStopAfterTurn: (context) => {
           this.checkBudget(spec, state);
@@ -1387,6 +1861,7 @@ export class HarnessEngine extends EventEmitter {
         },
         onTranscript: async (transcript, reason) => {
           state.transcript = transcript;
+          this.refreshConversationQueue(state);
           this.saveCheckpoint(spec.id, state, reason);
         },
         onProviderRetry: (retry) => {
@@ -1536,6 +2011,18 @@ export class HarnessEngine extends EventEmitter {
                 return;
               }
               if (modern) {
+                if (state.taskScheduler) {
+                  const pending = this.deps.database.listConversationTasks(spec.id).filter(task => task.planGeneration === state.queueGeneration);
+                  if (!pending.some(task => task.executionState === "running") && pending.some(task => task.executionState === "blocked" && task.blockedReason?.startsWith("Budget:"))) {
+                    stop("model_turn_limit", "子任务预算不足，队列已保留；需要补充预算后继续。");
+                    return;
+                  }
+                  if (pending.some(task => task.executionState === "running") && !pending.some(task => task.executionState === "awaiting_integration")) {
+                    await state.taskScheduler.wait(pending.filter(task => task.executionState === "running").map(task => task.taskId), "any", state.controller.signal, 60000);
+                    if (state.pauseRequested) return;
+                    continue;
+                  }
+                }
                 if (!workflow.needsChange && workflow.checksCurrent() && !workflow.state.explicitRequirementAcceptance && reportIsCurrent(reportCandidate)) return;
                 if (state.turns >= spec.budget.maxTurns || state.toolCalls >= spec.budget.maxToolCalls) {
                   const code = state.turns >= spec.budget.maxTurns ? "model_turn_limit" : "tool_call_limit";
@@ -1605,6 +2092,11 @@ export class HarnessEngine extends EventEmitter {
         },
       });
       state.transcript = bridgeResult.transcript;
+      state.taskScheduler?.pause();
+      if (!state.pauseRequested) {
+        for (const child of this.active.values()) if (child.spec.parentRunId === spec.id) this.pause(child.spec.id);
+      }
+      await state.taskScheduler?.settle();
       // A correction may arrive during the final asynchronous checks, after pi stopped pumping.
       // Keep that accepted input resumable instead of publishing a completed run that cannot read it.
       const retainedSteering = new Set(state.transcript.flatMap(message => message.steeringId ? [message.steeringId] : []));
@@ -1685,6 +2177,9 @@ export class HarnessEngine extends EventEmitter {
       });
     } catch (error) {
       const cancelled = state.controller.signal.aborted;
+      state.taskScheduler?.pause();
+      for (const child of this.active.values()) if (child.spec.parentRunId === spec.id) this.pause(child.spec.id);
+      await state.taskScheduler?.settle();
       // The model bridge serializes exceptions; recover budget identity from runtime counters.
       let failure = error;
       if (!cancelled && !(failure instanceof BudgetExceededError)) {
@@ -2126,7 +2621,7 @@ export class HarnessEngine extends EventEmitter {
   }
 
   private saveCheckpoint(runId: string, state: ActiveRun, reason: RunCheckpoint["reason"], compaction?: CompactionRecord,
-    options: { acknowledgeSteering?: boolean; steeringIds?: ReadonlySet<string>; submittedSteering?: SteeringMessage } = {}): RunCheckpoint {
+    options: { acknowledgeSteering?: boolean; steeringIds?: ReadonlySet<string>; submittedSteering?: SteeringMessage; commit?: (checkpoint: RunCheckpoint, events: AgentEvent[]) => void } = {}): RunCheckpoint {
     // Timed from the top: the cost is the workflow snapshot, the workspace fingerprint and the
     // per-message content store together, which is what a delta would remove.
     const startedAt = performance.now();
@@ -2142,6 +2637,7 @@ export class HarnessEngine extends EventEmitter {
     const checkpoint: RunCheckpoint = {
       id: newId("checkpoint"),
       runId,
+      ...(state.taskScheduler ? { conversationTaskQueue: { version: this.deps.database.getConversationTaskQueueVersion(runId), taskIds: this.deps.database.listConversationTasks(runId).map(task => task.taskId), planGeneration: state.queueGeneration ?? 0, ...(state.queueSourceMessageId ? { sourceMessageId: state.queueSourceMessageId } : {}) } } : {}),
       sequence: state.sequence,
       reason,
       status: state.status,
@@ -2172,7 +2668,8 @@ export class HarnessEngine extends EventEmitter {
     });
     events.push({ id: newId("event"), runId, at: nowIso(), sequence: sequence++, type: "checkpoint_saved", checkpointId: checkpoint.id, reason,
       durationMs: Math.round((performance.now() - startedAt) * 100) / 100, messages: checkpoint.transcript.length });
-    this.deps.database.saveCheckpoint(checkpoint, compaction, events);
+    if (options.commit) options.commit(checkpoint, events);
+    else this.deps.database.saveCheckpoint(checkpoint, compaction, events);
     // Listeners can synchronously submit another message. Publish only after both the storage
     // transaction and in-memory cursor/queue have advanced to the same committed state.
     state.sequence = sequence;
@@ -2191,10 +2688,15 @@ export class HarnessEngine extends EventEmitter {
   }
 
   private checkBudget(spec: RunSpec, state: ActiveRun): void {
-    if (state.toolCalls > spec.budget.maxToolCalls)
+    const held = state.taskScheduler ? this.deps.database.listConversationTasks(spec.id).flatMap(task => task.attempts).filter(attempt => attempt.reservationState === "held" && attempt.reservation) : [];
+    const reservedToolCalls = held.reduce((sum, item) => sum + Math.max(0, item.reservation!.maxToolCalls - item.accountedUsage.toolCalls), 0);
+    const reservedUsd = held.reduce((sum, item) => sum + Math.max(0, item.reservation!.maxUsd - item.accountedUsage.estimatedUsd), 0);
+    const reservedTurns = held.reduce((sum, item) => sum + Math.max(0, item.reservation!.maxTurns - item.accountedUsage.turns), 0);
+    if (state.toolCalls + reservedToolCalls > spec.budget.maxToolCalls)
       throw new BudgetExceededError("tool_call_limit", "Tool-call budget exceeded");
-    if (state.spentUsd > spec.budget.maxUsd)
+    if (state.spentUsd + reservedUsd > spec.budget.maxUsd)
       throw new BudgetExceededError("cost_limit", "Cost budget exceeded");
+    if (state.taskScheduler && state.turns + reservedTurns > spec.budget.maxTurns) throw new BudgetExceededError("model_turn_limit", "Model-turn budget is reserved by running child tasks");
     if (activeElapsedMs(state) > spec.budget.maxDurationMs)
       throw new BudgetExceededError("duration_limit", "Run duration budget exceeded");
     if (state.controller.signal.aborted)

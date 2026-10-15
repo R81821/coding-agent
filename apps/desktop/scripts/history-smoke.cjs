@@ -54,6 +54,8 @@ runs.get("old-a").events.unshift({ id: "workflow-fixture", runId: "old-a", at, s
 
 ipcMain.handle("session-fixture", (_event, request) => {
   switch (request.method) {
+    case "conversationTasks.list": return { tasks: [], limits: { maxConcurrentTasks: 4, maxQueueLength: 80 } };
+    case "mcp.interactions.list": return { requests: [] };
     case "profiles.list": return [fixtureProfile];
     case "profiles.upsert": fixtureProfile = request.params; return fixtureProfile;
     case "sessions.create": sessions.set(request.params.id, request.params); return request.params;

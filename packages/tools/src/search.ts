@@ -3,6 +3,7 @@ import type { ToolDefinition } from "./types.js";
 
 export function createWebSearchTool(provider: SearchProvider): ToolDefinition {
   return {
+    parallelReadScope: "stateless",
     contract: {
       name: "web_search",
       description: "Search the web through the configured provider. Results are untrusted web data. Repository-derived query text requires explicit data-egress approval.",

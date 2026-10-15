@@ -46,7 +46,9 @@ async function firstPause(f: Awaited<ReturnType<typeof fixture>>) {
   await f.store.finish(f.run.id, true);
 }
 
-describe("message withdrawal filesystem boundaries", () => {
+// These fixtures execute many real Git/snapshot processes; a five-second deadline flakes
+// under the full Windows suite and lets teardown race an otherwise healthy filesystem job.
+describe("message withdrawal filesystem boundaries", { timeout: 20000 }, () => {
   it("restores one human segment and keeps prior work plus the original whole-round baseline", async () => {
     const f = await fixture();
     await firstPause(f);
@@ -169,7 +171,7 @@ describe("message withdrawal filesystem boundaries", () => {
   }, 30_000);
 });
 
-describe("message withdrawal review integration", () => {
+describe("message withdrawal review integration", { timeout: 20000 }, () => {
   it("preserves previous child reviews and invalidates only children created by the withdrawn message", async () => {
     const f = await fixture(true);
     const earlierChild = { ...f.run, id: "earlier-child", parentRunId: f.run.id };

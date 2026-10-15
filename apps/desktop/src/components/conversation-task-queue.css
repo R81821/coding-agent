@@ -1,0 +1,22 @@
+.conversation-task-queue { flex: 0 1 auto; min-height: 0; max-height: 40%; margin: 0 var(--chat-gutter) 8px; border: 1px solid var(--line); border-radius: 9px; overflow: auto; font-size: 12px; color: var(--muted); }
+.conversation-task-queue > summary { position: sticky; top: 0; z-index: 1; display: flex; align-items: center; flex-wrap: wrap; gap: 7px 18px; padding: 10px 12px; background: var(--panel); cursor: pointer; }
+.conversation-task-queue > summary strong { color: var(--color-text); }
+.conversation-task-queue > summary span { margin-left: auto; }
+.conversation-task-queue-body { padding: 0 12px 10px; }
+.conversation-task-queue-body > ol { list-style: none; padding: 0; margin: 0; }
+.conversation-task-limits { margin: 0 0 8px; }
+.conversation-task { border-top: 1px solid var(--line); padding: 10px 0; overflow-wrap: anywhere; }
+.conversation-task-heading { display: flex; align-items: baseline; flex-wrap: wrap; gap: 6px 10px; }
+.conversation-task-heading strong { color: var(--color-text); }
+.conversation-task-mode, .conversation-task-identity { font-size: 11px; opacity: .8; }
+.conversation-task p { margin: 5px 0; white-space: pre-wrap; }
+.conversation-task-prompt { color: var(--color-text); }
+.conversation-task-state { color: #d8b474; }
+.conversation-task-running .conversation-task-state { color: #8faaff; }
+.conversation-task-completed .conversation-task-state { color: #72c89a; }
+.conversation-task-error, .conversation-task-failed .conversation-task-state, .conversation-task-interrupted .conversation-task-state { color: #eb8990; }
+.conversation-task-actions, .conversation-task-retry > div { display: flex; justify-content: flex-end; gap: 8px; }
+.conversation-task-retry { display: grid; gap: 6px; margin-top: 8px; }
+.conversation-task-retry textarea { min-height: 64px; resize: vertical; max-height: 150px; border: 1px solid var(--line); border-radius: 6px; padding: 8px; font: inherit; background: var(--panel); color: var(--color-text); }
+.workbench .conversation-stage { display: flex; flex-direction: column; }
+.workbench .conversation-stage > .conversation { flex: 1 1 0; height: auto; }

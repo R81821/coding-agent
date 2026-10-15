@@ -29,7 +29,7 @@ function fixture(options: { checkpointThrows?: boolean } = {}) {
   // Publication touches only these persistence methods; no provider, tools or process executes.
   const engine = new HarnessEngine({ database, providers: [] } as unknown as EngineDependencies);
   engine.on("event", (value: AgentEvent) => emitted.push(structuredClone(value)));
-  const state = { spec, workflow, controller: new AbortController(), sequence: 0, status: "verifying", startedAt: Date.now(), inputTokens: 0, outputTokens: 0, spentUsd: 0, costKnown: true, turns: 1, toolCalls: 1, transcript: [], pendingNonIdempotent: new Map(), repairAttemptsUsed: 0 };
+  const state = { spec, workflow, controller: new AbortController(), sequence: 0, status: "verifying", startedAt: Date.now(), inputTokens: 0, outputTokens: 0, spentUsd: 0, costKnown: true, turns: 1, toolCalls: 1, transcript: [], pendingNonIdempotent: new Map(), repairAttemptsUsed: 0, pauseRequested: false, steering: [], steeringInFlight: new Set<string>(), steeringVersion: 0 };
   const receipt: VerificationRun = { id: "publication-verify", runId: spec.id, attempt: 0, stage: "local", epoch: workflow.state.epoch, revision: workflow.state.revision, passed: true, outcome: "passed", startedAt: nowIso(), finishedAt: nowIso(), results: [{ itemId: "unrelated-check", command: "pnpm test -- tests/unrelated.test.ts", cwd: ".", exitCode: 0, passed: true, required: true, output: "Unrelated tests passed", durationMs: 10, timedOut: false }] };
   const boundary = engine as unknown as { publishVerification(spec: RunSpec, state: unknown, receipt: VerificationRun): void };
   return { workflow, receipt, persisted, storedEvents, emitted, checkpoints, publish: () => boundary.publishVerification(spec, state, receipt) };

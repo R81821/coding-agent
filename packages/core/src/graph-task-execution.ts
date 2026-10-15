@@ -24,10 +24,11 @@ export interface GraphTaskExecutionOptions {
 function normalizedWritePaths(task: GraphExecutionTask): string[] | undefined {
   if (task.mode === "read" || !task.writePaths?.length) return undefined;
   return task.writePaths.map(path => {
-    const normalized = path.replaceAll("\\", "/").replace(/^\.\//, "").replace(/\/+$/, "").toLowerCase();
-    if (!normalized || normalized.startsWith("/") || /^[a-z]:/.test(normalized) || normalized.split("/").includes("..")) {
+    const slashes = path.replaceAll("\\", "/").toLowerCase();
+    if (!slashes || slashes.startsWith("/") || /^[a-z]:/.test(slashes) || slashes.split("/").includes("..")) {
       throw new Error(`Task ${task.id} has an invalid workspace-relative write path`);
     }
+    const normalized = slashes.split("/").filter(part => part && part !== ".").join("/") || ".";
     // A glob cannot prove independence without examining the complete matched file set.
     return /[*?[\]{}]/.test(normalized) ? "." : normalized;
   });
@@ -36,6 +37,12 @@ function normalizedWritePaths(task: GraphExecutionTask): string[] | undefined {
 function overlap(left: string[] | undefined, right: string[] | undefined): boolean {
   if (!left || !right) return true;
   return left.some(a => right.some(b => a === "." || b === "." || a === b || a.startsWith(`${b}/`) || b.startsWith(`${a}/`)));
+}
+
+export function graphTasksCompatible(left: GraphExecutionTask, right: GraphExecutionTask, isolatedWrites = false): boolean {
+  if (left.mode === "read" && right.mode === "read") return true;
+  if (!isolatedWrites) return false;
+  return left.mode === "read" || right.mode === "read" || !overlap(normalizedWritePaths(left), normalizedWritePaths(right));
 }
 
 /** Run only independent tasks together and wait for every started task's cleanup before returning. */
@@ -48,16 +55,14 @@ export async function executeGraphTasks<T>(
   if (!Number.isInteger(maxParallel) || maxParallel < 1 || maxParallel > 8) throw new Error("Task concurrency must be between 1 and 8");
   if (!tasks.length || tasks.length > 8) throw new Error("Task execution requires between 1 and 8 tasks");
   if (new Set(tasks.map(task => task.id)).size !== tasks.length) throw new Error("Task ids must be unique");
-  const scopes = tasks.map(normalizedWritePaths);
+  tasks.forEach(normalizedWritePaths);
   const pending = tasks.map((_, index) => index);
   const active = new Map<number, Promise<void>>();
   const results: GraphTaskOutcome<T>[] = new Array(tasks.length);
   const compatible = (index: number, running: number): boolean => {
     const task = tasks[index]!;
     const other = tasks[running]!;
-    if (task.mode === "read" && other.mode === "read") return true;
-    if (!options.allowParallelWrites) return false;
-    return task.mode === "read" || other.mode === "read" || !overlap(scopes[index], scopes[running]);
+    return graphTasksCompatible(task, other, options.allowParallelWrites);
   };
   while (pending.length || active.size) {
     if (!signal.aborted) {

@@ -36,6 +36,8 @@ async function fixtureRequest(request) {
   requests.push(request);
   const params = request.params;
   switch (request.method) {
+    case "conversationTasks.list": return { tasks: [], limits: { maxConcurrentTasks: 4, maxQueueLength: 80 } };
+    case "mcp.interactions.list": return { requests: [] };
     case "fixture.providerSettings": return providerConfig;
     case "fixture.saveProviderSettings": {
       providerConfig = { ...params };
@@ -76,7 +78,8 @@ fs.writeFileSync(preload, `const {contextBridge,ipcRenderer}=require('electron')
 });`);
 let win;
 const checks = [];
-const evaluate = code => win.webContents.executeJavaScript(code);
+const rendererErrors = [];
+const evaluate = code => win.webContents.executeJavaScript(code).catch(error => { error.message += `\nEvaluating: ${code}`; throw error; });
 async function waitFor(code, label) {
   const deadline = Date.now() + 10000;
   while (Date.now() < deadline) {
@@ -151,6 +154,7 @@ async function main() {
   await app.whenReady();
   win = new BrowserWindow({ show: false, width: 1320, height: 860, webPreferences: { preload, contextIsolation: true, nodeIntegration: false, backgroundThrottling: false, offscreen: true } });
   win.webContents.on("preload-error", (_event, _file, error) => { throw error; });
+  win.webContents.on("console-message", event => { if (event.level === "error") { rendererErrors.push(event.message); console.error("Renderer:", event.message); } });
   await win.loadFile(path.join(root, "apps/desktop/dist/index.html"));
   // Interaction assertions are kept here so they exercise the built renderer and
   // its actual session.reasoning/run.start IPC payloads together.
@@ -293,4 +297,4 @@ main().then(result => {
   assert.ok(!requests.some(request => request.method === "session.model" || request.method === "models.list"));
   fs.writeFileSync(path.join(scratch, "result.json"), JSON.stringify(result, null, 2));
   console.log(JSON.stringify(result)); clearTimeout(timer); app.exit(0);
-}).catch(error => { console.error(error); clearTimeout(timer); app.exit(1); });
+}).catch(async error => { console.error(error); fs.writeFileSync(path.join(scratch, "failure.json"), JSON.stringify({ error: String(error), checks, rendererErrors }, null, 2)); if (win && !win.isDestroyed()) fs.writeFileSync(path.join(scratch, "failure.png"), (await win.webContents.capturePage()).toPNG()); console.error(`Fixture artifacts: ${scratch}`); clearTimeout(timer); app.exit(1); });

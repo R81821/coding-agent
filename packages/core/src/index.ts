@@ -3,6 +3,7 @@ export * from "./approvals.js";
 export * from "./context.js";
 export * from "./engine.js";
 export * from "./pi-agent-bridge.js";
+export * from "./tool-concurrency.js";
 export * from "./runtime.js";
 export * from "./run-review.js";
 export * from "./project-trust.js";

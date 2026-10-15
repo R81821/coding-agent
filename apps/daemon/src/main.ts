@@ -202,6 +202,12 @@ async function dispatch(request: DaemonRequest, target: HarnessRuntime): Promise
     }
     case "run.events":
       return target.database.listEvents(request.params.runId, request.params.afterSequence);
+    case "conversationTasks.list":
+      return target.engine.listConversationTasks(request.params.sessionId, request.params.parentRunId);
+    case "conversationTasks.cancel":
+      return target.engine.cancelConversationTask(request.params.sessionId, request.params.parentRunId, request.params.taskId);
+    case "conversationTasks.retry":
+      return target.engine.retryConversationTask(request.params.sessionId, request.params.parentRunId, request.params.taskId, request.params.reason);
     case "plan.get":
       return target.database.getPlanForRun(request.params.runId);
     case "plan.decide":

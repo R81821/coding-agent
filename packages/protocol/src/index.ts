@@ -3,6 +3,8 @@ import { SummaryOutcomeSchema, ContextAdjustmentSchema, ContextUsageSchema, Cach
 import { SkillReferenceSchema } from "./skills.js";
 import { WorkflowStateSchema } from "./workflow.js";
 import { McpRequestSchemas, McpToolSnapshotSchema } from "./mcp.js";
+import { ConversationTaskQueueReferenceSchema } from "./conversation-tasks.js";
+export * from "./conversation-tasks.js";
 export * from "./workflow.js";
 export * from "./mcp.js";
 
@@ -266,6 +268,7 @@ export const ContextSnapshotSchema = z.object({
 export type ContextSnapshot = z.infer<typeof ContextSnapshotSchema>;
 
 export const RunCheckpointSchema = z.object({
+  conversationTaskQueue: ConversationTaskQueueReferenceSchema.optional(),
   // Version 1 working transcripts cover the preceding conversation, including accepted summaries.
   sessionContextVersion: z.literal(1).optional(),
   elapsedMs: z.number().int().nonnegative().optional(),
@@ -737,6 +740,9 @@ export const DaemonRequestSchema = z.discriminatedUnion("method", [
   z.object({ id: z.string(), method: z.literal("approval.decide"), params: z.object({ approvalId: z.string(), approved: z.boolean(), actor: z.string() }) }),
   z.object({ id: z.string(), method: z.literal("approvals.list") }),
   z.object({ id: z.string(), method: z.literal("tasks.list") }),
+  z.object({ id: z.string(), method: z.literal("conversationTasks.list"), params: z.object({ sessionId: z.string().min(1), parentRunId: z.string().min(1).optional() }) }),
+  z.object({ id: z.string(), method: z.literal("conversationTasks.cancel"), params: z.object({ sessionId: z.string().min(1), parentRunId: z.string().min(1), taskId: z.string().min(1) }) }),
+  z.object({ id: z.string(), method: z.literal("conversationTasks.retry"), params: z.object({ sessionId: z.string().min(1), parentRunId: z.string().min(1), taskId: z.string().min(1), reason: z.string().trim().min(1).max(4000) }) }),
   z.object({ id: z.string(), method: z.literal("tasks.upsert"), params: TaskSpecSchema }),
   z.object({ id: z.string(), method: z.literal("profiles.list") }),
   z.object({ id: z.string(), method: z.literal("profiles.upsert"), params: ProfileSchema }),

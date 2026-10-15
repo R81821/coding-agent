@@ -1,5 +1,5 @@
 import { mkdtemp, realpath, rm } from "node:fs/promises";
-import { join } from "node:path";
+import { isAbsolute, join, relative } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { afterEach, expect, test } from "vitest";
@@ -19,7 +19,13 @@ async function fixture() {
   const vault = await VaultCrypto.open(join(root, "key.json"), "mcp-runtime-fixture-password");
   const database = await HarnessDatabase.open(join(root, "state.sqlite"), vault);
   const mcp = new McpService(new McpStore(database));
-  cleanups.push(async () => { await mcp.close(); database.close(); vault.dispose(); await rm(root, { recursive: true, force: true }); });
+  cleanups.push(async () => {
+    await mcp.close(); database.close(); vault.dispose();
+    const target = relative(await realpath(tmpdir()), root);
+    if (!target || target.startsWith("..") || isAbsolute(target)) throw new Error("Unsafe MCP fixture cleanup target");
+    // Windows may release a stdio server's cwd a moment after its transport closes.
+    await rm(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 100 });
+  });
   const server = await mcp.save({ name: "Project service", transport: { type: "stdio", command: process.execPath, args: [serverFile] }, enabled: true, projectPaths: [root], readOnlyTools: ["echo"] });
   const spec: RunSpec = { id: newId("run"), sessionId: "session", profileId: "default", workspacePath: root, request: "Read project service status", attachments: [], budget: { ...DEFAULT_PROFILE.budget, maxTurns: 6, maxToolCalls: 6 }, grants: [], createdAt: nowIso(), taskMode: "analysis" };
   return { root, vault, database, mcp, server, spec };
