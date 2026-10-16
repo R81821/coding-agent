@@ -82,6 +82,8 @@ const api = {
 export interface DesktopAttachment {
   attachment: import("@harness/protocol").AttachmentRef;
   previewDataUrl: string;
+  /** Local display metadata; never included in the attachment sent to a provider. */
+  fileName?: string;
 }
 
 contextBridge.exposeInMainWorld("harness", api);

@@ -1,0 +1,7 @@
+.workbench .prompt-attachments:has(> .composer-attachments) { min-width: 0; max-height: none; overflow: visible; }
+.composer-attachments { width: 100%; align-items: flex-start; padding-block: 3px 5px; }
+.composer-attachments .composer-attachment-image { width: 144px; --attachment-gap: 6px; }
+.composer-attachments .ui-attachment[data-orientation="vertical"] > .ui-attachment-media { height: 96px; aspect-ratio: auto; }
+.composer-attachment-image > .ui-attachment-content { width: 100%; flex: 0 0 auto; }
+.composer-attachment-image > .ui-attachment-actions { position: absolute; top: 12px; right: 12px; }
+.composer-attachment-image .ui-attachment-action { background: var(--color-surface-strong, var(--panel-2, #292929)); color: var(--color-text); border-color: var(--color-line-strong, var(--line-strong)); box-shadow: 0 1px 4px #0002; }

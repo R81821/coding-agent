@@ -1,0 +1,6 @@
+.conversation-hover-preview { display: grid; min-width: 0; gap: 8px; }
+.conversation-hover-heading { font-size: 12px; font-weight: 600; line-height: 1.6; }
+.conversation-hover-meta { margin: 0; color: var(--color-text-muted, var(--muted)); font-size: 11px; }
+.conversation-hover-code,
+.conversation-hover-paths { margin: 0; padding: 0; font-family: var(--code-font, "Cascadia Code", Consolas, monospace); font-size: 12px; font-weight: var(--code-font-weight, 400); white-space: pre-wrap; overflow-wrap: anywhere; }
+.conversation-hover-paths { display: grid; gap: 6px; list-style: none; }

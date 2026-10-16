@@ -1,7 +1,7 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { existsSync } from "node:fs";
 import { appendFile, mkdir, readFile, rm, writeFile } from "node:fs/promises";
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { connect } from "node:net";
 import { tmpdir } from "node:os";
@@ -262,9 +262,10 @@ ipcMain.handle(
     });
     if (result.canceled) return [];
     return Promise.all(
-      result.filePaths.map(async (path) =>
-        normalizeAndPut(await readFile(path), "file", allowedProviders),
-      ),
+      result.filePaths.map(async (path) => ({
+        ...(await normalizeAndPut(await readFile(path), "file", allowedProviders)),
+        fileName: basename(path),
+      })),
     );
   },
 );
@@ -328,8 +329,8 @@ function createWindow(show: boolean): void {
   void logLifecycle("create-window", { show });
   window = new BrowserWindow({
     show,
-    width: 1200,
-    height: 800,
+    width: 1324,
+    height: 839,
     minWidth: 900,
     minHeight: 620,
     backgroundColor: "#211e27",

@@ -4,6 +4,7 @@ import { dedupeFinalText, replacesFinalText } from "./assistant-messages.js";
 type ToolStartedEvent = Extract<AgentEvent, { type: "tool_started" }>;
 type ToolFinishedEvent = Extract<AgentEvent, { type: "tool_finished" }>;
 type ResultEvent = Extract<AgentEvent, { type: "result" }>;
+type ApprovalRequiredEvent = Extract<AgentEvent, { type: "approval_required" }>;
 type TextPart = { text: string; turn: string | undefined };
 
 export type ToolTimelineItem = {
@@ -12,12 +13,17 @@ export type ToolTimelineItem = {
   finished?: ToolFinishedEvent;
 };
 
+export type ToolGroupEntry =
+  | { kind: "tool"; tool: ToolTimelineItem }
+  | { kind: "approval"; event: ApprovalRequiredEvent };
+
 export type TimelineItem =
-  | { kind: "tool_group"; id: string; tools: ToolTimelineItem[] }
+  | { kind: "tool_group"; id: string; entries: ToolGroupEntry[] }
   | { kind: "event"; event: AgentEvent };
 
 export type ConversationStreamItem =
   | { kind: "text"; id: string; text: string; process: boolean; result?: ResultEvent }
+  | { kind: "reasoning"; id: string; text: string; sequence: number }
   | { kind: "user_message"; id: string; text: string; sequence: number }
   | Extract<TimelineItem, { kind: "tool_group" }>
   | Extract<TimelineItem, { kind: "event" }>;
@@ -37,6 +43,12 @@ export function buildConversationStream(events: AgentEvent[]): ConversationStrea
   let segmentStart = 0;
   let lastUserEventIndex = -1;
   let activeGroup: Extract<TimelineItem, { kind: "tool_group" }> | undefined;
+  let activeReasoning: {
+    item: Extract<ConversationStreamItem, { kind: "reasoning" }>;
+    runId: string;
+    turn: string | undefined;
+    emitted: boolean;
+  } | undefined;
   const pushText = (value: string, process: boolean, parts: TextPart[] = [], result?: ResultEvent): boolean => {
     if (!value.trim() || isHiddenSystemMessage(value)) return false;
     const item: ConversationStreamItem = { kind: "text", id: `text-${textIndex++}`, text: value, process, ...(result ? { result } : {}) };
@@ -88,12 +100,14 @@ export function buildConversationStream(events: AgentEvent[]): ConversationStrea
       userMessages.add(key);
       flushText(true);
       activeGroup = undefined;
+      activeReasoning = undefined;
       currentTurn = undefined;
       stream.push({ kind: "user_message", id: `user-message-${event.runId}-${messageId}`, text: event.text, sequence: event.sequence });
       // A later authoritative report must never replace assistant text across a human reply.
       segmentStart = stream.length;
       lastUserEventIndex = eventIndex;
     } else if (event.type === "text_delta") {
+      if (event.delta.length) activeReasoning = undefined;
       if (pendingTurnStart && event.delta.trim()) {
         if (text && !/\s$/.test(text) && !/^\s/.test(event.delta)) {
           text += " ";
@@ -109,22 +123,48 @@ export function buildConversationStream(events: AgentEvent[]): ConversationStrea
       if (last && last.turn === turn) last.text += event.delta;
       else textParts.push({ text: event.delta, turn });
     } else if (event.type === "assistant_turn_started") {
+      activeReasoning = undefined;
       // Keep progress from adjacent model turns in one live message until an activity boundary.
       if (text.trim()) pendingTurnStart = true;
       currentTurn = `${event.runId}\0${event.sequence}`;
+    } else if (event.type === "reasoning_summary") {
+      if (!event.summary.length) continue;
+      // Providers stream fragments, including standalone spaces and line breaks. Keep
+      // the first fragment's identity stable while nondisplay telemetry arrives between them.
+      if (activeReasoning?.runId === event.runId && activeReasoning.turn === currentTurn) {
+        activeReasoning.item.text += event.summary;
+      } else {
+        activeReasoning = {
+          item: { kind: "reasoning", id: `reasoning-${event.id}`, text: event.summary, sequence: event.sequence },
+          runId: event.runId, turn: currentTurn, emitted: false,
+        };
+      }
+      if (!activeReasoning.emitted && activeReasoning.item.text.trim()) {
+        // Preserve preceding prose and its turn identity for authoritative final replacement.
+        // Whitespace-only fragments remain buffered so they do not create empty activity rows.
+        flushText(true);
+        activeGroup = undefined;
+        stream.push(activeReasoning.item);
+        activeReasoning.emitted = true;
+      }
+    } else if (event.type === "tool_call") {
+      activeReasoning = undefined;
     } else if (event.type === "tool_started") {
+      activeReasoning = undefined;
       if (flushText(true)) activeGroup = undefined;
       const item: ToolTimelineItem = { kind: "tool", started: event };
       tools.set(event.call.id, item);
       if (!activeGroup) {
-        activeGroup = { kind: "tool_group", id: `tool-group-${event.id}`, tools: [] };
+        activeGroup = { kind: "tool_group", id: `tool-group-${event.id}`, entries: [] };
         stream.push(activeGroup);
       }
-      activeGroup.tools.push(item);
+      activeGroup.entries.push({ kind: "tool", tool: item });
     } else if (event.type === "tool_finished") {
+      activeReasoning = undefined;
       const tool = tools.get(event.callId);
       if (tool) tool.finished = event;
     } else if (event.type === "result") {
+      activeReasoning = undefined;
       const paused = event.status === "paused";
       if (!paused && event.sourceAssistantTurnSequence !== undefined) {
         const turn = `${event.runId}\0${event.sourceAssistantTurnSequence}`;
@@ -157,12 +197,20 @@ export function buildConversationStream(events: AgentEvent[]): ConversationStrea
         resetText();
       }
       activeGroup = undefined;
-    } else if (event.type === "approval_required" || event.type === "error" || event.type === "provider_retry" || event.type === "self_correction_started" || event.type === "repair_started" || event.type === "capabilities_resolved") {
+    } else if (event.type === "approval_required") {
+      activeReasoning = undefined;
+      // An approval describes the call it gates. Keeping it inside the active group holds the
+      // raw request with the run it belongs to instead of fragmenting the run in two.
+      if (flushText(true)) activeGroup = undefined;
+      if (activeGroup) activeGroup.entries.push({ kind: "approval", event });
+      else stream.push({ kind: "event", event });
+    } else if (event.type === "error" || event.type === "provider_retry" || event.type === "self_correction_started" || event.type === "repair_started" || event.type === "capabilities_resolved") {
       flushText(true);
       // Self-correction and repair markers describe the same active tool phase. They should
       // remain visible in the stream without fragmenting consecutive tools into one-item groups.
       if (event.type !== "self_correction_started" && event.type !== "repair_started") {
         activeGroup = undefined;
+        activeReasoning = undefined;
         stream.push({ kind: "event", event });
       }
     }

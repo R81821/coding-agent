@@ -38,3 +38,18 @@ it("retains a submitted preview if the current draft has only an attachment refe
   const legacy = { ...run, taskMode: undefined };
   expect(restoreWithdrawnDraft(legacy).taskMode).toBe("auto");
 });
+
+it("restores display filenames by attachment id and prefers a current nonempty filename", () => {
+  const submitted = draft(run.request, ["original"]);
+  submitted.attachments[0]!.fileName = "订单截图.png";
+  const current = draft("", ["original", "new"]);
+  current.attachments[0]!.previewDataUrl = "";
+  current.attachments[1]!.fileName = "补充.jpg";
+  const restored = restoreWithdrawnDraft(run, current, submitted);
+  expect(restored.attachments[0]).toEqual({ attachment: run.attachments[0], previewDataUrl: "data:original", fileName: "订单截图.png" });
+  expect(restored.attachments[1]?.fileName).toBe("补充.jpg");
+  current.attachments[0]!.fileName = " ";
+  expect(restoreWithdrawnDraft(run, current, submitted).attachments[0]?.fileName).toBe("订单截图.png");
+  current.attachments[0]!.fileName = "改名.png";
+  expect(restoreWithdrawnDraft(run, current, submitted).attachments[0]?.fileName).toBe("改名.png");
+});

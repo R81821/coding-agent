@@ -23,19 +23,23 @@ export function toolSummary(name: string, rawInput: unknown, origin?: ToolCallOr
   if (["read_file", "read_range", "write_file"].includes(name)) {
     return { label: name, detail: stringValue(input, "path"), kind: "file" };
   }
-  if (name === "apply_patch") {
+  if (name === "apply_patch" || name === "patch") {
     const patch = stringValue(input, "patch");
     const customFiles = [...patch.matchAll(/^\*\*\* (?:Update|Add|Delete) File: (.+)$/gm)].map(match => match[1]!.trim());
     const files = customFiles.length ? customFiles : parseDiff(patch).map(file => file.path);
     return { label: name, detail: [...new Set(files)].join(", "), kind: "file" };
   }
-  if (name === "terminal" || name === "bash") {
+  if (["terminal", "bash", "probe", "run_verification", "runCommand", "run_command", "exec_command"].includes(name)) {
     return { label: name, detail: stringValue(input, "command"), kind: "command" };
   }
-  if (name === "search_text") {
+  if (name === "search_text" || name === "search_files") {
     const query = stringValue(input, "query");
     const path = stringValue(input, "path");
     return { label: name, detail: [query, path].filter(Boolean).join(" · "), kind: "search" };
+  }
+  if (name === "web_search") {
+    const queries = Array.isArray(input.queries) ? input.queries.filter((query): query is string => typeof query === "string") : [];
+    return { label: "网页搜索", detail: queries.join(" · "), kind: "search" };
   }
   if (name === "git_diff") return { label: name, detail: "代码变更检查", kind: "generic" };
   return { label: name, detail: "", kind: "generic" };
@@ -44,7 +48,7 @@ export function toolSummary(name: string, rawInput: unknown, origin?: ToolCallOr
 export function toolActivity(name: string, rawInput: unknown): ToolActivity {
   const summary = toolSummary(name, rawInput);
   return {
-    verb: summary.kind === "file" && ["apply_patch", "write_file"].includes(name) ? "编辑了文件" : "已运行",
+    verb: summary.kind === "file" && ["apply_patch", "patch", "write_file"].includes(name) ? "编辑了文件" : "已运行",
     detail: summary.detail || summary.label,
   };
 }

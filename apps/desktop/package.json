@@ -12,6 +12,8 @@
     "package": "node scripts/package.mjs"
   },
   "dependencies": {
+    "@base-ui/react": "^1.9.0",
+    "@harness/conversation-ui": "workspace:*",
     "@harness/daemon": "workspace:*",
     "@harness/persistence": "workspace:*",
     "@harness/protocol": "workspace:*",
@@ -22,8 +24,7 @@
     "react-dom": "^19.1.1",
     "react-markdown": "^10.1.0",
     "remark-gfm": "^4.0.1",
-    "sharp": "^0.35.5",
-    "@harness/conversation-ui": "workspace:*"
+    "sharp": "^0.35.5"
   },
   "devDependencies": {
     "@electron/get": "5.1.0",

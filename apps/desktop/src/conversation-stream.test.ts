@@ -9,6 +9,8 @@ const toolFinished = (id: string, sequence: number) =>
   ({ ...base, id, sequence, type: "tool_finished", callId: `call-${id}`, durationMs: 1, output: {} } as AgentEvent);
 const groupsIn = (stream: ConversationStreamItem[]) =>
   stream.filter((item) => item.kind === "tool_group");
+const toolsIn = (group: Extract<ConversationStreamItem, { kind: "tool_group" }>) =>
+  group.entries.flatMap((entry) => entry.kind === "tool" ? [entry.tool] : []);
 
 it("keeps consecutive tool calls in one group across a model turn boundary", () => {
   const stream = buildConversationStream([
@@ -18,7 +20,7 @@ it("keeps consecutive tool calls in one group across a model turn boundary", () 
   ]);
   const groups = groupsIn(stream);
   expect(groups).toHaveLength(1);
-  expect(groups[0]?.tools).toHaveLength(2);
+  expect(toolsIn(groups[0]!)).toHaveLength(2);
 });
 
 it("keeps self-correction markers inside the tool group but splits on a retry", () => {
@@ -28,7 +30,7 @@ it("keeps self-correction markers inside the tool group but splits on a retry", 
     toolStarted("b", 2),
   ]);
   expect(groupsIn(correction)).toHaveLength(1);
-  expect(groupsIn(correction)[0]?.tools).toHaveLength(2);
+  expect(toolsIn(groupsIn(correction)[0]!)).toHaveLength(2);
 
   const retry = buildConversationStream([
     toolStarted("a", 0),
@@ -38,6 +40,24 @@ it("keeps self-correction markers inside the tool group but splits on a retry", 
   expect(groupsIn(retry)).toHaveLength(2);
 });
 
+it("keeps an approval with the run it gates instead of splitting the group", () => {
+  const stream = buildConversationStream([
+    toolStarted("a", 0),
+    toolFinished("a", 1),
+    { ...base, id: "gate", sequence: 2, type: "approval_required", approvalId: "approval", summary: 'terminal (high): {"command":"ls"}', risk: "high" } as AgentEvent,
+    toolStarted("b", 3),
+  ]);
+  const groups = groupsIn(stream);
+  expect(groups).toHaveLength(1);
+  expect(groups[0]?.entries.map(entry => entry.kind)).toEqual(["tool", "approval", "tool"]);
+  expect(stream.filter(item => item.kind === "event")).toEqual([]);
+
+  const standalone = buildConversationStream([
+    { ...base, id: "gate", sequence: 0, type: "approval_required", approvalId: "approval", summary: 'terminal (high): {"command":"ls"}', risk: "high" } as AgentEvent,
+  ]);
+  expect(standalone.map(item => item.kind)).toEqual(["event"]);
+});
+
 it("records finished tool calls and appends the final result once", () => {
   const stream = buildConversationStream([
     toolStarted("a", 0),
@@ -45,7 +65,7 @@ it("records finished tool calls and appends the final result once", () => {
     { ...base, id: "delta", sequence: 2, type: "text_delta", delta: "答案" } as AgentEvent,
     { ...base, id: "result", sequence: 3, type: "result", text: "答案", status: "completed" } as AgentEvent,
   ]);
-  expect(groupsIn(stream)[0]?.tools[0]?.finished?.durationMs).toBe(1);
+  expect(toolsIn(groupsIn(stream)[0]!)[0]?.finished?.durationMs).toBe(1);
   const texts = stream.filter((item) => item.kind === "text");
   expect(texts).toHaveLength(1);
   expect(texts[0]?.text).toBe("答案");
@@ -59,7 +79,7 @@ it("ignores an orphan tool result without breaking later conversation events", (
     toolFinished("present", 2),
     { ...base, id: "result", sequence: 3, type: "result", text: "完成", status: "completed" } as AgentEvent,
   ]);
-  expect(groupsIn(stream)[0]?.tools[0]?.finished?.callId).toBe("call-present");
+  expect(toolsIn(groupsIn(stream)[0]!)[0]?.finished?.callId).toBe("call-present");
   expect(stream.at(-1)).toMatchObject({ kind: "text", text: "完成", process: false });
 });
 
@@ -340,7 +360,7 @@ it("renders a legacy delivery as a human reply and breaks tools and assistant te
   ]);
   expect(stream.map(item => item.kind)).toEqual(["text", "tool_group", "user_message", "tool_group", "text"]);
   expect(stream[2]).toMatchObject({ text: "补充说明", id: "user-message-run-delivered-3", sequence: 3 });
-  expect(groupsIn(stream).map(group => group.tools.length)).toEqual([1, 1]);
+  expect(groupsIn(stream).map(group => toolsIn(group).length)).toEqual([1, 1]);
 });
 
 it("does not replace an authoritative source report across a human reply", () => {
@@ -374,5 +394,132 @@ it("keeps resumed progress provisional after a reply to an older final answer", 
     { kind: "text", text: "先前回答", process: false },
     { kind: "user_message", text: "重新检查" },
     { kind: "text", text: "正在检查", process: true },
+  ]);
+});
+
+const reasoning = (sequence: number, summary: string): AgentEvent =>
+  ({ ...base, id: `reasoning-${sequence}`, sequence, type: "reasoning_summary", summary });
+const reasoningItems = (events: AgentEvent[]) => buildConversationStream(events).filter(item => item.kind === "reasoning");
+
+it("streams reasoning fragments into one row with a stable first-fragment identity", () => {
+  const fragments = ["I", " should", " ", "check", " the", " lockfile", "."];
+  const events = [turnStarted(0), ...fragments.map((fragment, index) => reasoning(index + 1, fragment))];
+  for (let length = 2; length <= events.length; length++) {
+    expect(reasoningItems(events.slice(0, length))).toEqual([{
+      kind: "reasoning", id: "reasoning-reasoning-1", sequence: 1,
+      text: fragments.slice(0, length - 1).join(""),
+    }]);
+  }
+});
+
+it("preserves standalone spaces, line breaks, and leading whitespace in reasoning fragments", () => {
+  const events = [
+    turnStarted(0), reasoning(1, " \n"), reasoning(2, "Check"), reasoning(3, " "),
+    reasoning(4, "dependencies"), reasoning(5, "\n\n"), reasoning(6, "Then retry."), reasoning(7, " "),
+  ];
+  expect(reasoningItems(events.slice(0, 2))).toEqual([]);
+  expect(reasoningItems(events)).toEqual([{
+    kind: "reasoning", id: "reasoning-reasoning-1", sequence: 1, text: " \nCheck dependencies\n\nThen retry. ",
+  }]);
+});
+
+it("continues one reasoning row through nondisplay usage, request, and checkpoint telemetry", () => {
+  const events: AgentEvent[] = [
+    turnStarted(0), reasoning(1, "Check"),
+    { ...base, id: "request", sequence: 2, type: "model_request_finished", purpose: "main", durationMs: 20, succeeded: true },
+    reasoning(3, " "),
+    { ...base, id: "usage", sequence: 4, type: "usage", usage: { inputTokens: 2, outputTokens: 1, cachedInputTokens: 0, estimatedUsd: 0 } } as AgentEvent,
+    reasoning(5, "the"),
+    { ...base, id: "checkpoint", sequence: 6, type: "checkpoint_saved", checkpointId: "checkpoint", reason: "tool_batch" },
+    reasoning(7, " "), reasoning(8, "configuration."),
+  ];
+  expect(buildConversationStream(events)).toEqual([{
+    kind: "reasoning", id: "reasoning-reasoning-1", sequence: 1, text: "Check the configuration.",
+  }]);
+});
+
+it("keeps reasoning fragments separate across assistant turns, tool phases, prose, and human replies", () => {
+  const events = [
+    turnStarted(0), reasoning(1, "Before tool"), reasoning(2, "."),
+    toolStarted("tool", 3), reasoning(4, "While tool runs"), toolFinished("tool", 5), reasoning(6, "After tool"),
+    textDelta(7, "Process prose."), reasoning(8, "After prose"),
+    turnStarted(9), reasoning(10, "New assistant turn"),
+    submitted(11, "human", "调整方向"), reasoning(12, "After reply"), reasoning(13, "."),
+  ];
+  const stream = buildConversationStream(events);
+  expect(stream.map(item => item.kind)).toEqual([
+    "reasoning", "tool_group", "reasoning", "reasoning", "text", "reasoning", "reasoning", "user_message", "reasoning",
+  ]);
+  expect(reasoningItems(events).map(item => item.text)).toEqual([
+    "Before tool.", "While tool runs", "After tool", "After prose", "New assistant turn", "After reply.",
+  ]);
+  expect(stream.find(item => item.kind === "text")).toMatchObject({ text: "Process prose.", process: true });
+});
+
+it("does not merge reasoning across run identities or visible retry boundaries", () => {
+  const events: AgentEvent[] = [
+    reasoning(0, "First run"), { ...reasoning(1, "Other run"), runId: "other" }, reasoning(2, "First run again"),
+    { ...base, id: "retry", sequence: 3, type: "provider_retry", attempt: 1, maxAttempts: 2, delayMs: 10, category: "transient", recovery: "retry_request", reason: "超时" },
+    reasoning(4, "After retry"),
+  ];
+  expect(reasoningItems(events).map(item => item.text)).toEqual(["First run", "Other run", "First run again", "After retry"]);
+  expect(buildConversationStream(events).map(item => item.kind)).toEqual(["reasoning", "reasoning", "reasoning", "event", "reasoning"]);
+});
+
+it("keeps reasoning intact while replacing the streamed source report with one authoritative final answer", () => {
+  const stream = buildConversationStream([
+    turnStarted(0), reasoning(1, "Inspect"), reasoning(2, " "), reasoning(3, "dependencies."),
+    textDelta(4, "候选答案。"), reasoning(5, "Review"), reasoning(6, " "), reasoning(7, "wording."),
+    resultEvent(8, "复核后的答案。", 0),
+  ]);
+  expect(stream).toMatchObject([
+    { kind: "reasoning", id: "reasoning-reasoning-1", text: "Inspect dependencies." },
+    { kind: "reasoning", id: "reasoning-reasoning-5", text: "Review wording." },
+    { kind: "text", text: "复核后的答案。", process: false },
+  ]);
+});
+
+it("preserves reasoning between the prose and tool calls that surround it", () => {
+  const stream = buildConversationStream([
+    turnStarted(0), textDelta(1, "先说明。"), reasoning(2, "需要检查依赖。"), toolStarted("before", 3),
+    toolFinished("before", 4), reasoning(5, "依赖无误，继续检查日志。"), toolStarted("after", 6),
+    turnStarted(7), textDelta(8, "最终答案。"), resultEvent(9, "最终答案。", 7),
+  ]);
+  expect(stream.map(item => item.kind)).toEqual(["text", "reasoning", "tool_group", "reasoning", "tool_group", "text"]);
+  expect(stream[1]).toMatchObject({ id: "reasoning-reasoning-2", text: "需要检查依赖。", sequence: 2 });
+  expect(stream[3]).toMatchObject({ text: "依赖无误，继续检查日志。", sequence: 5 });
+  expect(stream.at(-1)).toMatchObject({ text: "最终答案。", process: false });
+});
+
+it("ignores empty reasoning without breaking adjacent prose or tool groups", () => {
+  const stream = buildConversationStream([
+    toolStarted("a", 0), reasoning(1, " \n"), toolStarted("b", 2),
+    textDelta(3, "第一句。"), reasoning(4, ""), textDelta(5, "第二句。"),
+  ]);
+  expect(groupsIn(stream)).toHaveLength(1);
+  expect(toolsIn(groupsIn(stream)[0]!)).toHaveLength(2);
+  expect(stream.filter(item => item.kind === "reasoning")).toEqual([]);
+  expect(stream.at(-1)).toMatchObject({ text: "第一句。第二句。" });
+});
+
+it("retains ordered reasoning when an authoritative result replaces prose already flushed by it", () => {
+  const stream = buildConversationStream([
+    turnStarted(0), textDelta(1, "候选答案。"), reasoning(2, "复核措辞。"), resultEvent(3, "经过复核的答案。", 0),
+  ]);
+  expect(stream).toMatchObject([
+    { kind: "reasoning", text: "复核措辞。" },
+    { kind: "text", text: "经过复核的答案。", process: false },
+  ]);
+});
+
+it("preserves reasoning on each side of a human reply without replacing earlier prose", () => {
+  const stream = buildConversationStream([
+    turnStarted(0), textDelta(1, "原说明。"), reasoning(2, "原来的检查。"), submitted(3, "reply", "换个方向"),
+    turnStarted(4), reasoning(5, "新的检查。"), textDelta(6, "新答案。"), resultEvent(7, "新答案。", 4),
+  ]);
+  expect(stream).toMatchObject([
+    { kind: "text", text: "原说明。" }, { kind: "reasoning", text: "原来的检查。" },
+    { kind: "user_message", text: "换个方向" }, { kind: "reasoning", text: "新的检查。" },
+    { kind: "text", text: "新答案。", process: false },
   ]);
 });

@@ -155,3 +155,86 @@ describe("wire reasoning effort", () => {
     expect(bodies[1]?.reasoning).toEqual({ effort: "max" });
   });
 });
+
+describe("public Responses reasoning summaries", () => {
+  it.each([OpenAIProvider, OpenAICompatibleProvider])("requests summaries from official OpenAI without changing selected or default effort (%s)", async Provider => {
+    const { provider, model, bodies } = fixture(Provider, "gpt-5.4", { baseUrl: "https://api.openai.com/v1", apiProtocol: "responses" });
+    await drain(provider, request(model, "high"));
+    await drain(provider, request(model));
+    expect(bodies.map(body => body.reasoning)).toEqual([{ effort: "high", summary: "auto" }, { summary: "auto" }]);
+  });
+
+  it.each(["gpt-4.1", "private-model"])("does not request summaries for a model without known reasoning support (%s)", async modelId => {
+    const { provider, model, bodies } = fixture(OpenAIProvider, modelId, { baseUrl: "https://api.openai.com/v1" });
+    await drain(provider, request(model));
+    expect(bodies[0]).not.toHaveProperty("reasoning");
+  });
+
+  it.each(["o1", "o1-2024-12-17", "o3-mini", "o3-mini-2025-01-31"])("keeps legacy reasoning models on their effort-only request contract (%s)", async modelId => {
+    const legacy = descriptor({ providerId: "fixture", modelId, displayName: "legacy" });
+    legacy.capabilities.reasoningEfforts = ["low", "medium", "high"];
+    const { provider, model, bodies } = fixture(OpenAIProvider, modelId, { baseUrl: "https://api.openai.com/v1", models: [legacy] });
+    await drain(provider, request(model, "high"));
+    expect(bodies[0]?.reasoning).toEqual({ effort: "high" });
+  });
+
+  it("respects explicitly disabled reasoning capabilities", async () => {
+    const model = descriptor({ providerId: "fixture", modelId: "gpt-5.4", displayName: "model" });
+    model.capabilities.reasoningEfforts = [];
+    const { provider, bodies } = fixture(OpenAIProvider, model.modelId, { baseUrl: "https://api.openai.com/v1", models: [model] });
+    await drain(provider, request(model));
+    expect(bodies[0]).not.toHaveProperty("reasoning");
+  });
+
+  it("omits summaries when reasoning is disabled or the request is non-thinking compaction", async () => {
+    const { provider, model, bodies } = fixture(OpenAIProvider, "gpt-5.4", { baseUrl: "https://api.openai.com/v1" });
+    await drain(provider, request(model, "none"));
+    await drain(provider, { ...request(model, "high"), disableThinking: true, purpose: "compaction" });
+    expect(bodies[0]?.reasoning).toEqual({ effort: "none" });
+    expect(bodies[1]).not.toHaveProperty("reasoning");
+  });
+
+  it("keeps unknown Responses endpoints on their existing effort-only contract", async () => {
+    const { provider, model, bodies } = fixture(OpenAIProvider, "gpt-5.4", { baseUrl: "https://api.openai.com.proxy.test/v1" });
+    await drain(provider, request(model, "high"));
+    expect(bodies[0]?.reasoning).toEqual({ effort: "high" });
+  });
+
+  it("streams public summary fragments separately from private reasoning and separates summary parts", async () => {
+    const events = [
+      { type: "response.reasoning_text.delta", delta: "private reasoning" },
+      { type: "response.reasoning_summary_text.delta", item_id: "reasoning-1", summary_index: 0, delta: "检查" },
+      { type: "response.reasoning_summary_text.delta", item_id: "reasoning-1", summary_index: 0, delta: "锁文件。" },
+      { type: "response.reasoning_summary_text.delta", item_id: "reasoning-1", summary_index: 1, delta: "比较依赖版本。" },
+      { type: "response.reasoning_summary_text.delta", item_id: "reasoning-2", summary_index: 0, delta: "确认修复方案。" },
+      { type: "response.output_text.delta", delta: "answer" },
+      { type: "response.completed", response: { id: "fixture-response" } }
+    ];
+    const { provider, model } = fixture(OpenAIProvider, "gpt-5.4", { baseUrl: "https://api.openai.com/v1",
+      fetchImpl: async () => new Response(events.map(event => `data: ${JSON.stringify(event)}\n\n`).join("")) });
+    const output = [];
+    for await (const event of provider.stream(request(model), new AbortController().signal)) output.push(event);
+    expect(output).toEqual([
+      { type: "reasoning_delta", delta: "private reasoning" },
+      { type: "reasoning_summary", summary: "检查" },
+      { type: "reasoning_summary", summary: "锁文件。" },
+      { type: "reasoning_summary", summary: "\n\n比较依赖版本。" },
+      { type: "reasoning_summary", summary: "\n\n确认修复方案。" },
+      { type: "text_delta", delta: "answer" }
+    ]);
+  });
+
+  it("reuses a completed official continuation only while its summary request stays compatible", async () => {
+    const { provider, model, bodies } = fixture(OpenAIProvider, "gpt-5.4", { baseUrl: "https://api.openai.com/v1" });
+    const first = { ...request(model), store: true };
+    await drain(provider, first);
+    const second: ModelRequest = { ...first, messages: [...first.messages,
+      { role: "user", content: [{ type: "text", text: "continue", trust: "user_request" }] }] };
+    await drain(provider, second);
+    expect(bodies[1]?.previous_response_id).toBe("fixture-response");
+    await drain(provider, { ...second, disableThinking: true, purpose: "compaction", messages: [...second.messages,
+      { role: "user", content: [{ type: "text", text: "summarize", trust: "user_request" }] }] });
+    expect(bodies[2]).not.toHaveProperty("previous_response_id");
+    expect(bodies[2]).not.toHaveProperty("reasoning");
+  });
+});

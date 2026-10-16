@@ -33,7 +33,7 @@ import type {
   SessionSummary,
   TaskSpec,
 } from "@harness/protocol";
-import { SessionViewCache, isDeferredOutput, refreshSessionView, mergeViewEvents, newId, nowIso } from "@harness/protocol";
+import { SessionViewCache, refreshSessionView, mergeViewEvents, newId, nowIso } from "@harness/protocol";
 import type { DesktopAttachment } from "./preload.js";
 import { restoreWithdrawnDraft, type ComposerDraft } from "./withdrawal-draft.js";
 import { BuiBadge } from "./ui/badge.js";
@@ -43,9 +43,16 @@ import { BuiPromptBar } from "./ui/prompt-bar.js";
 import { BuiSidebarNav } from "./ui/sidebar-nav.js";
 import { MemoryManager } from "./memory-manager.js";
 import { MarkdownMessage } from "./markdown-message.js";
-import { ConversationProcessSummary, conversationDurationMs, terminalConversationStatus } from "./components/ConversationProcess.js";
-import { shouldExpandToolGroup, shouldPreviewProcessText, shouldShowHistoryLoading, summarizeActivityMessage } from "./conversation-layout.js";
-import { buildConversationStream, type ConversationStreamItem, type ToolTimelineItem } from "./conversation-stream.js";
+import { conversationDurationMs, formatConversationDuration, terminalConversationStatus } from "./components/ConversationProcess.js";
+import { shouldShowHistoryLoading, summarizeActivityMessage } from "./conversation-layout.js";
+import { buildConversationStream, type ConversationStreamItem } from "./conversation-stream.js";
+import { ApprovalTraceRow, ProcessTraceRow, ReasoningTraceRow, SourcesTraceRow, ThinkingTraceRow } from "./components/ConversationTrace.js";
+import { ToolTraceList } from "./components/ReadToolGroup.js";
+import { Trace } from "./ui/trace.js";
+import { Message, MessageContent } from "./ui/message.js";
+import { Bubble, BubbleContent } from "./ui/bubble.js";
+import { useConversationReplay } from "./use-conversation-replay.js";
+import { sourceEventsForSegment } from "./conversation-trace.js";
 import { WorkflowProgress } from "./components/WorkflowProgress.js";
 import { ConversationTaskQueue } from "./components/ConversationTaskQueue.js";
 import { SessionCacheStats } from "./components/SessionCacheStats.js";
@@ -106,12 +113,11 @@ import "./themes.css";
 import "./code-changes.css";
 import "./components/settings/settings.css";
 import "./appearance.css";
+import "./ui/conversation-trace.css";
 const CodeChanges = lazy(() => import("./components/CodeChanges.js").then(module => ({ default: module.CodeChanges })));
 import { InlineReview, type RunReview } from "./components/InlineReview.js";
-import { ToolContext } from "./components/ToolContext.js";
 import { CapabilitiesRow } from "./components/CapabilitiesRow.js";
 import { defaultConversationLayout } from "./conversation-layout.js";
-import { toolActivity, toolSummary } from "./tool-summary.js";
 import { useConfirmation } from "./components/DecisionDialog.js";
 import { ApprovalDialog } from "./components/ApprovalDialog.js";
 import { ApprovalContent } from "./components/ApprovalContent.js";
@@ -121,6 +127,7 @@ import { BrowserPanel } from "./components/BrowserPanel.js";
 import { ProfileGenerationEditor } from "./components/ProfileGenerationEditor.js";
 import { ProfileVerificationEditor } from "./components/ProfileVerificationEditor.js";
 import { ModelReasoningPicker } from "./components/ModelReasoningPicker.js";
+import { ComposerAttachments } from "./components/ComposerAttachments.js";
 import { Unlock } from "./components/Unlock.js";
 
 type Tab =
@@ -581,7 +588,7 @@ function App() {
       source,
       profile.allowedProviders,
     );
-    if (token === viewVersion.current) setAttachments((current) => [...current, result]);
+    if (token === viewVersion.current) setAttachments((current) => [...current, { ...result, ...(file.name ? { fileName: file.name } : {}) }]);
   }
 
   async function send() {
@@ -1573,39 +1580,8 @@ function ChatView(props: {
           {...(props.attachments.length > 0
             ? {
                 attachments: (
-                  <div className="mb-2 flex flex-wrap gap-2">
-                    {props.attachments.map((item, index) => (
-                      <div
-                        className="glass-strong flex items-center gap-2 p-2"
-                        key={item.attachment.id}
-                      >
-                        {item.previewDataUrl ? <img
-                          src={item.previewDataUrl}
-                          alt="待发送图片"
-                          className="h-10 w-14 rounded-lg object-cover"
-                        /> : <ImageIcon size={24} aria-label="已恢复的图片附件" />}
-                        <span className="text-xs text-text-muted">
-                          {item.attachment.mimeType}
-                          <small className="block text-[10px]">
-                            不可信附件 · 发送前可见
-                          </small>
-                        </span>
-                        <BuiButton
-                          variant="ghost"
-                          size="sm"
-                          aria-label="移除附件"
-                          disabled={props.withdrawing}
-                          onClick={() =>
-                            props.setAttachments((all) =>
-                              all.filter((_, itemIndex) => itemIndex !== index),
-                            )
-                          }
-                        >
-                          <X size={12} />
-                        </BuiButton>
-                      </div>
-                    ))}
-                  </div>
+                  <ComposerAttachments attachments={props.attachments} disabled={props.withdrawing}
+                    onRemove={index => props.setAttachments(all => all.filter((_, itemIndex) => itemIndex !== index))} />
                 ),
               }
             : {})}
@@ -1750,17 +1726,20 @@ function ConversationTurnView({ turn, busy, continuationDisabled, onContinue, on
     const updated = await window.harness.request<RunReview>({ method: "review.undo", params: { runId: turn.runId, path } });
     setRunReview(updated);
   }
-  const stream = useMemo(() => buildConversationStream(turn.events), [turn.events]);
+  const replay = useConversationReplay(turn.events, !busy && terminalStatus !== undefined && (!turn.view || turn.view.eventsComplete));
+  const displayEvents = replay.events;
+  const stream = useMemo(() => buildConversationStream(displayEvents), [displayEvents]);
   const segments = useMemo(() => {
     const groups: Array<{ id: string; user?: Extract<ConversationStreamItem, { kind: "user_message" }>; items: ConversationStreamItem[] }> = [{ id: "initial", items: [] }];
     for (const item of stream) {
       if (item.kind === "user_message") groups.push({ id: item.id, user: item, items: [] });
       else groups.at(-1)!.items.push(item);
     }
-    return groups.map((group, index) => ({ ...group, events: turn.events.filter(event =>
+    return groups.map((group, index) => ({ ...group, events: displayEvents.filter(event =>
       event.sequence >= (group.user?.sequence ?? -1) && event.sequence < (groups[index + 1]?.user?.sequence ?? Infinity)) }));
-  }, [stream, turn.events]);
-  const completed = !busy && terminalStatus !== undefined;
+  }, [stream, displayEvents]);
+  const displayTerminalStatus = terminalConversationStatus(displayEvents);
+  const completed = !busy && displayTerminalStatus !== undefined;
   const latestHuman = stream.findLast(item => item.kind === "user_message");
   const withdrawalButton = (messageId?: string) => <div className="conversation-user-actions">
     <button type="button" className="conversation-withdraw" disabled={withdrawDisabled || withdrawing} aria-label={messageId ? "撤回最新消息" : "撤回最新一轮"} aria-busy={withdrawing}
@@ -1768,27 +1747,29 @@ function ConversationTurnView({ turn, busy, continuationDisabled, onContinue, on
       {withdrawing ? <LoaderCircle size={16} className="animate-spin" aria-hidden="true" /> : <Undo2 size={16} aria-hidden="true" />}
     </button>
   </div>;
-  const renderStreamItem = (item: ConversationStreamItem) => item.kind === "text"
+  const renderStreamItem = (item: ConversationStreamItem, active = false): React.ReactNode => item.kind === "text"
     ? item.process
-      ? <ProcessNarration key={item.id} text={item.text} live={busy && stream.at(-1) === item} />
-      : <article className="assistant-message" key={item.id}><FinalReportStatus {...(item.result ? { result: item.result } : {})} /><MarkdownMessage text={item.text} /></article>
+      ? <ProcessTraceRow key={item.id} id={item.id} text={item.text} live={active && stream.at(-1) === item} />
+      : <Message key={item.id}><MessageContent><article className="assistant-message">{item.result?.status !== "completed" && <FinalReportStatus {...(item.result ? { result: item.result } : {})} />}<MarkdownMessage text={item.text} /></article></MessageContent></Message>
     : item.kind === "tool_group"
-      ? <ToolEventGroup key={item.id} tools={item.tools} />
-      : item.kind === "user_message"
-        ? <div className="conversation-user-turn" key={item.id} data-message-id={item.id}><article className="user-message" aria-label="你的消息">{item.text}</article>
-            {onWithdraw && item === latestHuman && (() => {
+      ? <ToolTraceList key={item.id} entries={item.entries} active={(busy || replay.replaying) && displayTerminalStatus === undefined} />
+      : item.kind === "reasoning"
+        ? <ReasoningTraceRow key={item.id} id={item.id} text={item.text} running={active && stream.at(-1) === item} />
+        : item.kind === "user_message"
+        ? <Message align="end" className="conversation-user-turn" key={item.id} data-message-id={item.id}><MessageContent><Bubble align="end" variant="muted" className="user-message" aria-label="你的消息"><BubbleContent>{item.text}</BubbleContent></Bubble></MessageContent>
+            {onWithdraw && !replay.replaying && item === latestHuman && (() => {
               const submitted = turn.events.find(event => event.type === "steering_submitted" && event.sequence === item.sequence);
               return submitted?.type === "steering_submitted" && submitted.withdrawable ? withdrawalButton(submitted.messageId) : null;
             })()}
-          </div>
+          </Message>
         : <EventRow key={item.event.id} event={item.event} />;
   return (
-    <section className="conversation-turn" data-run-id={turn.runId}>
+    <section className="conversation-turn" data-run-id={turn.runId} data-replay-state={replay.replaying ? "playing" : "idle"}>
       {turn.view && !turn.view.eventsComplete && <p role="status">正在同步执行记录…</p>}
-      <div className="conversation-user-turn">
-        <article className="user-message" aria-label="你的任务">{turn.continuation ? `继续任务${turn.continuation.note ? "：" + turn.continuation.note : ""}` : turn.request}</article>
-        {onWithdraw && !latestHuman && withdrawalButton()}
-      </div>
+      <Message align="end" className="conversation-user-turn">
+        <MessageContent><Bubble align="end" variant="muted" className="user-message" aria-label="你的任务"><BubbleContent>{turn.continuation ? `继续任务${turn.continuation.note ? "：" + turn.continuation.note : ""}` : turn.request}</BubbleContent></Bubble></MessageContent>
+        {onWithdraw && !replay.replaying && !latestHuman && withdrawalButton()}
+      </Message>
       {segments.map((segment, index) => {
         const last = index === segments.length - 1;
         const finalIndex = segment.items.findLastIndex(item => item.kind === "text" && !item.process);
@@ -1797,47 +1778,60 @@ function ConversationTurnView({ turn, busy, continuationDisabled, onContinue, on
         const result = segment.events.findLast(event => event.type === "result");
         const visibleStop = result?.stop && !/^运行已暂停[。．]?/.test(result.stop.message) ? result.stop : undefined;
         const route = segment.events.find(event => event.type === "route");
-        const segmentCompleted = !last || completed;
+        const active = last && (busy || replay.replaying) && terminalConversationStatus(segment.events) === undefined;
+        const processBlocks: React.ReactNode[] = [];
+        let traceRows: React.ReactNode[] = [];
+        let traceIndex = 0;
+        const flushTrace = () => {
+          if (!traceRows.length) return;
+          processBlocks.push(<Trace key={`trace:${segment.id}:${traceIndex++}`} className="conversation-trace" aria-label="执行过程">{traceRows}</Trace>);
+          traceRows = [];
+        };
+        const hasReasoning = processItems.some(item => item.kind === "reasoning");
+        const pendingTools = processItems.some(item => item.kind === "tool_group" && item.entries.some(entry => entry.kind === "tool" && !entry.tool.finished));
+        const latestContentEvent = segment.events.findLast(event => ["assistant_turn_started", "text_delta", "tool_started", "tool_finished", "result"].includes(event.type));
+        const modelStarted = segment.events.some(event => event.type === "assistant_turn_started");
+        if (!hasReasoning && (active || modelStarted) && (!turn.view || turn.view.eventsComplete || active)) {
+          traceRows.push(<ThinkingTraceRow key={`thinking:${segment.id}`} id={segment.id} running={active && !pendingTools && latestContentEvent?.type !== "text_delta"} active={active} paused={result?.status === "paused"} />);
+        }
+        for (const item of processItems) {
+          if (item.kind === "text") {
+            flushTrace();
+            processBlocks.push(renderStreamItem(item, active));
+          } else {
+            traceRows.push(renderStreamItem(item, active));
+          }
+        }
+        const sourceEvents = sourceEventsForSegment(displayEvents, segment.events);
+        if (sourceEvents.some(event => event.type === "tool_finished")) traceRows.push(<SourcesTraceRow key={`sources:${segment.id}`} stateKey={segment.id} events={sourceEvents} />);
+        flushTrace();
         return <React.Fragment key={segment.id}>
           {segment.user && renderStreamItem(segment.user)}
-          {(processItems.length > 0 || route || visibleStop) && <ConversationProcessSummary stateKey={segment.id === "initial" ? "process" : `process:${segment.id}`} completed={segmentCompleted}
-            preview={Boolean(turn.view && !turn.view.eventsComplete)} durationMs={conversationDurationMs(segment.events)} activeLabel={result?.status === "paused" ? "已暂停" : "运行中"}>
-            {() => <div className="conversation-stream">
-              {route?.type === "route" && <div className="activity-row conversation-route"><Terminal size={14} aria-hidden="true" /><span>{route.providerId} / {route.modelId}</span><small>{route.reason}</small></div>}
-              {processItems.map(renderStreamItem)}
-              {visibleStop && <RunStopCard stop={visibleStop} />}
-              {last && <WorkflowProgress events={turn.events} />}
-            </div>}
-          </ConversationProcessSummary>}
-          {finalItems.length > 0 && <div className="conversation-stream conversation-final-stream">{finalItems.map(renderStreamItem)}</div>}
+          {processBlocks.length > 0 && <div className="conversation-process-stream">{processBlocks}</div>}
+          {visibleStop && <RunStopCard stop={visibleStop} />}
+          {last && <WorkflowProgress events={displayEvents} />}
+          {finalItems.length > 0 && <div className="conversation-stream conversation-final-stream">{finalItems.map(item => renderStreamItem(item))}</div>}
           {last && completed && finalItems.length === 0 && <div className="conversation-stream conversation-final-stream">
             <article className="assistant-message"><MarkdownMessage text={terminalStatus === "failed" ? "运行失败，未生成最终回答。" : terminalStatus === "cancelled" ? "运行已取消。" : terminalStatus === "review" ? "本轮已结束，仍有待复核事项。" : "运行已完成，未生成最终回答。"} /></article>
           </div>}
+          {route?.type === "route" && <span className="sr-only">{route.providerId} / {route.modelId}</span>}
         </React.Fragment>;
       })}
       {turn.continuation && turn.chainUsage && <p className="text-xs text-text-muted">本轮：{turn.usage?.turns ?? 0} 轮 / {turn.usage?.tools ?? 0} 次工具调用 · 续办链累计：{turn.chainUsage.turns} 轮 / {turn.chainUsage.tools} 次工具调用 · 输入 {turn.chainUsage.inputTokens} / 输出 {turn.chainUsage.outputTokens} tokens · {turn.chainUsage.costKnown ? `$${turn.chainUsage.usd.toFixed(4)}` : "费用统计不完整"}</p>}
-      {continuable && <div className="flex items-center gap-2 my-3">
+      {continuable && !replay.replaying && <div className="flex items-center gap-2 my-3">
         <input aria-label="续办补充说明" placeholder="补充说明（可选）" maxLength={4000} value={continuationNote} disabled={continuationDisabled} onChange={event => setContinuationNote(event.target.value)} className="rounded border border-line bg-transparent px-3 py-2 text-sm" />
         <BuiButton disabled={continuationDisabled} onClick={() => void onContinue(turn.runId, continuationNote)}>继续任务</BuiButton>
         <small>保留原计划，使用新一轮额度</small>
       </div>}
-      {defaultConversationLayout.inlineReview && <InlineReview runId={turn.runId} review={runReview} onUndo={undoReviewFile} />}
-      {busy && <BuiLoadingState label="Agent 正在思考与执行…" />}
+      {!busy && terminalStatus && (!turn.view || turn.view.eventsComplete) && (replay.replaying || stream.length > 0) && <div className="conversation-trace-footer">
+        <BuiButton size="sm" className="conversation-replay" aria-label={replay.replaying ? "停止回放" : "回放过程"} aria-pressed={replay.replaying} onClick={replay.replaying ? replay.stop : replay.start}>
+          <RotateCcw size={14} aria-hidden="true" />{replay.replaying ? "停止回放" : "回放"}
+        </BuiButton>
+        <span className="conversation-trace-meta">{formatConversationDuration(conversationDurationMs(turn.events))}</span>
+      </div>}
+      {defaultConversationLayout.inlineReview && !replay.replaying && <InlineReview runId={turn.runId} review={runReview} onUndo={undoReviewFile} />}
     </section>
   );
-}
-
-function ProcessNarration({ text, live }: { text: string; live: boolean }) {
-  const preview = shouldPreviewProcessText(text, live);
-  const [expanded, setExpanded] = useState(false);
-  return <article className="assistant-message assistant-process">
-    <div className={`process-narration-body${preview && !expanded ? " is-preview" : ""}`}>
-      <MarkdownMessage text={text} compact />
-    </div>
-    {preview && <button type="button" className="process-narration-toggle" aria-expanded={expanded} onClick={() => setExpanded(value => !value)}>
-      {expanded ? "收起过程文字" : "展开完整过程文字"}
-    </button>}
-  </article>;
 }
 
 function EventRow({ event }: { event: AgentEvent }) {
@@ -1874,12 +1868,7 @@ function EventRow({ event }: { event: AgentEvent }) {
       </div>
     );
   if (event.type === "approval_required")
-    return (
-      <div className="activity-row activity-row-warning">
-        <TriangleAlert size={15} aria-hidden="true" />
-        <ActivityMessage message={event.summary} />
-      </div>
-    );
+    return <ApprovalTraceRow event={event} />;
   if (event.type === "error") {
     return (
       <div className="activity-row activity-row-error">
@@ -1900,120 +1889,6 @@ function ActivityMessage({ message }: { message: string }) {
         <summary><strong className="activity-message-text">{summary}</strong></summary>
         <pre>{message}</pre>
       </details>;
-}
-
-type ToolStartedEvent = Extract<AgentEvent, { type: "tool_started" }>;
-type ToolFinishedEvent = Extract<AgentEvent, { type: "tool_finished" }>;
-
-function ToolEventGroup({ tools }: { tools: ToolTimelineItem[] }) {
-  const completed = tools.filter((tool) => tool.finished).length;
-  const key = `toolGroup:${tools[0]?.started.id}`;
-  const [groupOpen, setGroupOpen] = useRowState(`${key}:open`, () => shouldExpandToolGroup(completed, tools.length));
-  const [progress, setProgress] = useRowState(`${key}:progress`, `${completed}/${tools.length}`);
-  useEffect(() => {
-    if (progress === `${completed}/${tools.length}`) return;
-    setProgress(`${completed}/${tools.length}`);
-    setGroupOpen(shouldExpandToolGroup(completed, tools.length));
-  }, [completed, tools.length, progress, setProgress, setGroupOpen]);
-  const totalDuration = tools.reduce(
-    (total, tool) => total + (tool.finished?.durationMs ?? 0),
-    0,
-  );
-  const allCompleted = completed === tools.length;
-  const failures = tools.filter((tool) => tool.finished?.isError === true || (tool.finished?.output && typeof tool.finished.output === "object" && "error" in tool.finished.output)).length;
-  return (
-    <details className="tool-group-card" open={groupOpen} onToggle={event => setGroupOpen(event.currentTarget.open)}>
-      <summary className="activity-row tool-group-summary">
-        <Terminal size={15} aria-hidden="true" />
-        <strong>{allCompleted ? "已运行" : "运行中"}（{tools.length} 个工具）</strong>
-        <small>
-          {allCompleted
-            ? `${formatDuration(totalDuration)}${failures ? ` · ${failures} 项失败` : ""}`
-            : `${completed}/${tools.length} 已完成`}
-        </small>
-      </summary>
-      {groupOpen && <div className="tool-group-body">
-        {tools.map((tool) => (
-          <ToolEventRow
-            key={tool.started.id}
-            started={tool.started}
-            {...(tool.finished ? { finished: tool.finished } : {})}
-          />
-        ))}
-      </div>}
-    </details>
-  );
-}
-
-function ToolEventRow({
-  started,
-  finished,
-}: {
-  started: ToolStartedEvent;
-  finished?: ToolFinishedEvent;
-}) {
-  const [open, setOpen] = useRowState(`tool:${started.id}:open`, false);
-  const summary = toolSummary(started.call.name, started.call.input, started.origin);
-  const activity = toolActivity(started.call.name, started.call.input);
-  const displayDetail = started.call.name === "git_diff" && finished
-    ? `${summary.detail} · ${countDiffFiles(finished.output)} 个文件`
-    : summary.detail;
-  const failed = finished?.isError === true || (
-    finished !== undefined &&
-    typeof finished.output === "object" &&
-    finished.output !== null &&
-    "error" in (finished.output as Record<string, unknown>));
-  return (
-    <details className="tool-call-card" open={open} onToggle={event => setOpen(event.currentTarget.open)}>
-      <summary className="tool-call-summary" title={`${started.call.name}: ${displayDetail || activity.detail}`}>
-        {activity.verb === "编辑了文件" ? <Pencil size={14} aria-hidden="true" /> : <Terminal size={14} aria-hidden="true" />}
-        <span className="tool-call-detail min-w-0 flex-1 truncate">
-          <span>{activity.verb}</span>{displayDetail === "" ? null : <><span> </span><strong>{displayDetail}</strong></>}
-        </span>
-        <small className={failed ? "tool-call-failed" : ""}>
-          {failed ? "失败 · " : ""}{finished ? `${finished.durationMs} ms` : "运行中"}
-        </small>
-      </summary>
-      {open && <div className="tool-call-body mt-2 flex flex-col gap-1.5">
-        <label className="text-[10px] tracking-widest text-text-muted">INPUT</label>
-        <ToolContext value={started.call.input} />
-        {finished && (
-          <>
-            <label className="text-[10px] tracking-widest text-text-muted">
-              OUTPUT · 不可信工具数据
-            </label>
-            <DeferredToolOutput event={finished} />
-          </>
-        )}
-      </div>}
-    </details>
-  );
-}
-
-function DeferredToolOutput({ event }: { event: ToolFinishedEvent }) {
-  if (isDeferredOutput(event.output)) return <p role="status">正在同步工具输出…</p>;
-  return <ToolContext value={event.output} />;
-}
-
-function countDiffFiles(output: unknown): number {
-  if (!output || typeof output !== "object") return 0;
-  const record = output as Record<string, unknown>;
-  const names = new Set<string>();
-  for (const key of ["diff", "stagedDiff"]) {
-    const diff = typeof record[key] === "string" ? record[key] as string : "";
-    for (const match of diff.matchAll(/^diff --git a\/(.+?) b\/.+$/gm)) names.add(match[1]!);
-  }
-  if (Array.isArray(record.newFiles)) for (const file of record.newFiles) {
-    const path = file && typeof file === "object" ? (file as Record<string, unknown>).path : undefined;
-    if (typeof path === "string") names.add(path);
-  }
-  return names.size;
-}
-
-function formatDuration(durationMs: number): string {
-  return durationMs < 1_000
-    ? `${durationMs} ms`
-    : `${(durationMs / 1_000).toFixed(1)} s`;
 }
 
 function ApprovalPromptDialog({

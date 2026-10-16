@@ -28,6 +28,11 @@ describe("toolSummary", () => {
     expect(toolSummary("search_text", { query: "ConversationTurnView", path: "apps/desktop/src" })).toMatchObject({ label: "search_text", detail: "ConversationTurnView · apps/desktop/src", kind: "search" });
   });
 
+  it.each(["probe", "run_verification", "bash", "runCommand", "run_command", "exec_command"])("recognizes %s as a local command without exposing stdin", name => {
+    expect(toolSummary(name, { command: "python -", stdin: "script contents" }))
+      .toEqual({ label: name, detail: "python -", kind: "command" });
+  });
+
   it("falls back safely for unknown or incomplete input", () => {
     expect(toolSummary("mystery", {})).toEqual({ label: "mystery", detail: "", kind: "generic" });
   });
@@ -36,6 +41,12 @@ describe("toolSummary", () => {
     expect(toolActivity("terminal", { command: "pnpm test" })).toEqual({ verb: "已运行", detail: "pnpm test" });
     expect(toolActivity("apply_patch", { patch: "*** Update File: src/app.ts" })).toEqual({ verb: "编辑了文件", detail: "src/app.ts" });
     expect(toolActivity("write_file", { path: "src/app.ts" })).toEqual({ verb: "编辑了文件", detail: "src/app.ts" });
+  });
+
+  it("recognizes lightweight patch and search tools in trace rows", () => {
+    expect(toolActivity("patch", { patch: "*** Update File: src/app.ts" })).toEqual({ verb: "编辑了文件", detail: "src/app.ts" });
+    expect(toolSummary("search_files", { query: "Trace", glob: "**/*.tsx" }).kind).toBe("search");
+    expect(toolSummary("web_search", { queries: ["pnpm lockfile", "CI"] })).toEqual({ label: "网页搜索", detail: "pnpm lockfile · CI", kind: "search" });
   });
 
   it("an MCP tool shows its service and original name instead of the namespaced name", () => {
@@ -54,5 +65,7 @@ describe("toolSummary", () => {
   it("origin takes precedence over local tool branches", () => {
     const origin = { serverId: "mcp_1", serverName: "远端", toolName: "terminal", revision: 1 };
     expect(toolSummary("terminal", { command: "x" }, origin).detail).toBe("远端 · terminal");
+    expect(toolSummary("probe", { command: "x" }, { ...origin, toolName: "probe" }))
+      .toEqual({ label: "probe", detail: "远端 · probe", kind: "generic" });
   });
 });

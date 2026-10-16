@@ -1,0 +1,165 @@
+/*
+ * Styles for the adapted shadcn/ui Base UI Attachment.
+ * https://ui.shadcn.com/docs/components/base/attachment
+ * Copyright (c) 2023 shadcn. MIT License; see SHADCN-LICENSE.txt.
+ */
+
+.ui-attachment {
+  --attachment-media-size: 48px;
+  --attachment-gap: 10px;
+  --attachment-padding: 10px;
+  --attachment-focus: var(--color-accent-text, var(--accent, #b397d8));
+  position: relative;
+  isolation: isolate;
+  box-sizing: border-box;
+  display: flex;
+  width: 248px;
+  min-width: 0;
+  max-width: 100%;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: var(--attachment-gap);
+  padding: var(--attachment-padding);
+  border: 1px solid var(--color-line, var(--line, #3a3a3a));
+  border-radius: 11px;
+  background: var(--color-surface, var(--panel, #202020));
+  color: var(--color-text, #f5f5f5);
+  font-family: var(--ui-font, system-ui, sans-serif);
+  font-size: 13px;
+  line-height: 1.4;
+  transition: background .15s ease, border-color .15s ease;
+}
+
+.ui-attachment[data-size="sm"] {
+  --attachment-media-size: 40px;
+  --attachment-gap: 8px;
+  --attachment-padding: 8px;
+  width: 220px;
+  border-radius: 9px;
+  font-size: 12px;
+}
+
+.ui-attachment[data-size="xs"] {
+  --attachment-media-size: 28px;
+  --attachment-gap: 7px;
+  --attachment-padding: 6px;
+  width: 188px;
+  border-radius: 8px;
+  font-size: 11px;
+}
+
+.ui-attachment:has(> .ui-attachment-trigger:hover:not(:disabled):not([aria-disabled="true"])) {
+  background: var(--color-surface-strong, var(--panel-2, #292929));
+  border-color: var(--color-line-strong, var(--line-strong, #484848));
+}
+
+.ui-attachment[data-state="idle"] { border-style: dashed; }
+.ui-attachment[data-state="error"] { border-color: color-mix(in srgb, var(--color-danger, #ff525d) 40%, transparent); }
+
+.ui-attachment-media {
+  position: relative;
+  display: flex;
+  width: var(--attachment-media-size);
+  height: var(--attachment-media-size);
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  border-radius: 6px;
+  background: var(--color-surface-strong, var(--panel-2, #292929));
+  color: var(--color-text-muted, var(--muted, #a3a3a3));
+}
+
+.ui-attachment-media svg { width: 21px; height: 21px; pointer-events: none; }
+.ui-attachment[data-size="xs"] .ui-attachment-media svg { width: 17px; height: 17px; }
+.ui-attachment-media[data-variant="image"] > img { display: block; width: 100%; height: 100%; object-fit: cover; }
+.ui-attachment[data-state="error"] .ui-attachment-media { background: color-mix(in srgb, var(--color-danger, #ff525d) 10%, transparent); color: var(--color-danger, #ff525d); }
+
+.ui-attachment-content { min-width: 0; max-width: 100%; flex: 1 1 auto; }
+.ui-attachment-title,
+.ui-attachment-description { display: block; min-width: 0; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ui-attachment-title { font-weight: 500; }
+.ui-attachment-description { margin-top: 3px; color: var(--color-text-muted, var(--muted, #a3a3a3)); font-size: .85em; }
+.ui-attachment[data-state="error"] .ui-attachment-description { color: var(--color-danger, #ff525d); }
+.ui-attachment:is([data-state="uploading"], [data-state="processing"]) .ui-attachment-title { animation: ui-attachment-shimmer 1.6s ease-in-out infinite; }
+
+.ui-attachment-actions { position: relative; z-index: 20; display: flex; flex: 0 0 auto; align-items: center; gap: 3px; }
+.ui-attachment-action {
+  box-sizing: border-box;
+  display: inline-flex;
+  width: 24px;
+  height: 24px;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--color-text-muted, var(--muted, #a3a3a3));
+  font: inherit;
+  text-decoration: none;
+  cursor: pointer;
+  transition: background .15s ease, color .15s ease;
+}
+
+.ui-attachment-action[data-size="icon-sm"] { width: 28px; height: 28px; }
+.ui-attachment-action[data-size="icon"] { width: 32px; height: 32px; }
+.ui-attachment-action[data-size="icon-lg"] { width: 36px; height: 36px; }
+.ui-attachment-action:is([data-size="default"], [data-size="sm"], [data-size="xs"], [data-size="lg"]) { width: auto; height: 30px; padding-inline: 8px; }
+.ui-attachment-action[data-size="xs"] { height: 24px; padding-inline: 5px; }
+.ui-attachment-action[data-size="lg"] { height: 36px; padding-inline: 12px; }
+.ui-attachment-action svg { width: 14px; height: 14px; pointer-events: none; }
+.ui-attachment-action:hover:not(:disabled):not([aria-disabled="true"]) { background: var(--color-surface-strong, var(--panel-2, #292929)); color: var(--color-text, #f5f5f5); }
+.ui-attachment-action[data-variant="outline"] { border-color: var(--color-line, var(--line, #3a3a3a)); }
+.ui-attachment-action:is([data-variant="default"], [data-variant="secondary"]) { background: var(--color-surface-strong, var(--panel-2, #292929)); color: var(--color-text, #f5f5f5); }
+.ui-attachment-action[data-variant="destructive"] { background: color-mix(in srgb, var(--color-danger, #ff525d) 12%, transparent); color: var(--color-danger, #ff525d); }
+.ui-attachment-action[data-variant="link"] { text-decoration: underline; text-underline-offset: 3px; }
+.ui-attachment-action:is(:disabled, [aria-disabled="true"]) { opacity: .45; cursor: default; }
+
+.ui-attachment-trigger {
+  position: absolute;
+  z-index: 10;
+  inset: 0;
+  display: block;
+  padding: 0;
+  border: 0;
+  border-radius: inherit;
+  background: transparent;
+  outline: none;
+  cursor: pointer;
+}
+
+.ui-attachment-trigger:is(:disabled, [aria-disabled="true"]) { cursor: default; }
+.ui-attachment-action:focus-visible { outline: 2px solid var(--attachment-focus); outline-offset: 2px; }
+.ui-attachment-trigger:focus-visible { outline: 2px solid var(--attachment-focus); outline-offset: -2px; }
+
+.ui-attachment[data-orientation="vertical"] { align-items: stretch; flex-direction: column; }
+.ui-attachment[data-orientation="vertical"] > .ui-attachment-media { width: 100%; height: auto; aspect-ratio: 1; }
+.ui-attachment[data-orientation="vertical"] > .ui-attachment-actions { align-self: flex-end; }
+
+.ui-attachment-group {
+  display: flex;
+  min-width: 0;
+  max-width: 100%;
+  gap: 8px;
+  padding: 3px 2px;
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  scroll-snap-type: x mandatory;
+  scrollbar-width: none;
+}
+
+.ui-attachment-group::-webkit-scrollbar { display: none; }
+.ui-attachment-group > [data-slot="attachment"] { flex: 0 0 auto; scroll-snap-align: start; }
+
+@keyframes ui-attachment-shimmer { 0%, 100% { opacity: 1; } 50% { opacity: .45; } }
+
+:root[data-reduced-motion="true"] :is(.ui-attachment, .ui-attachment-action) { transition: none; }
+:root[data-reduced-motion="true"] .ui-attachment-title { animation: none; }
+
+@media (prefers-reduced-motion: reduce) {
+  .ui-attachment, .ui-attachment-action { transition: none; }
+  .ui-attachment-title { animation: none; }
+}

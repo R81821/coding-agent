@@ -1,0 +1,137 @@
+/*
+ * Styles for the adapted shadcn/ui Base UI Marker.
+ * https://ui.shadcn.com/docs/components/base/marker
+ * Copyright (c) 2023 shadcn. MIT License; see SHADCN-LICENSE.txt.
+ */
+
+.ui-marker {
+  --marker-foreground: var(--color-text, #f5f5f5);
+  --marker-muted: var(--color-text-muted, var(--muted, #a3a3a3));
+  --marker-border: var(--color-line, var(--line, #292929));
+  --marker-focus: var(--color-accent-text, var(--accent, #b397d8));
+  position: relative;
+  display: flex;
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  min-height: 32px;
+  align-items: center;
+  gap: 8px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--marker-muted);
+  font-family: var(--ui-font, inherit);
+  font-size: var(--ui-font-size, 14px);
+  font-weight: 400;
+  line-height: 1.5;
+  text-align: left;
+}
+
+.ui-marker[data-variant="border"] {
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--marker-border);
+}
+
+.ui-marker[data-variant="separator"]::before,
+.ui-marker[data-variant="separator"]::after {
+  height: 1px;
+  min-width: 16px;
+  flex: 1 0 16px;
+  background: var(--marker-border);
+  content: "";
+}
+
+.ui-marker:is(button, a) {
+  border-radius: 5px;
+  text-decoration: none;
+  cursor: pointer;
+  transition: color .15s ease;
+}
+
+.ui-marker:is(button, a):hover:not(:disabled):not([aria-disabled="true"]) { color: var(--marker-foreground); }
+.ui-marker:is(:disabled, [aria-disabled="true"]) { opacity: .6; cursor: default; }
+.ui-marker:focus-visible { outline: 2px solid var(--marker-focus); outline-offset: 3px; }
+
+.ui-marker-icon {
+  display: inline-flex;
+  width: 20px;
+  height: 20px;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  color: inherit;
+}
+
+.ui-marker-icon svg { width: 18px; height: 18px; pointer-events: none; stroke-width: 1.7; }
+.ui-marker-content { min-width: 0; overflow-wrap: anywhere; }
+
+.conversation-read-marker,
+.conversation-operation-marker { width: fit-content; }
+
+.conversation-read-marker .ui-marker-content {
+  display: flex;
+  min-width: 0;
+  flex: 0 1 auto;
+  align-items: baseline;
+  gap: 9px;
+  overflow: hidden;
+}
+
+.conversation-read-marker-count { flex: 0 0 auto; white-space: nowrap; }
+.conversation-read-marker-status { flex: 0 0 auto; max-width: 42%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: .86em; opacity: .85; }
+.conversation-read-marker-preview { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; opacity: .7; font-size: .88em; }
+.conversation-read-marker-chevron { width: 18px; height: 18px; margin-left: 0; flex: 0 0 auto; transition: transform .16s ease; }
+.conversation-read-marker-chevron svg { width: 16px; height: 16px; }
+.conversation-read-marker[aria-expanded="true"] > .conversation-read-marker-chevron { transform: rotate(90deg); }
+.conversation-read-marker[data-read-tool-group-state="error"],
+[data-read-tool-group-state="error"] .conversation-read-marker {
+  --marker-muted: var(--color-danger, #ff525d);
+  --marker-foreground: var(--color-danger, #ff525d);
+}
+
+.conversation-read-group { min-width: 0; max-width: 100%; }
+.conversation-read-group-list { min-width: 0; max-width: 100%; max-height: min(360px, 55vh); margin: 4px 0 10px 10px; padding: 4px 0 4px 16px; border-inline-start: 1px solid var(--color-line, var(--line)); overflow: auto; overscroll-behavior: contain; }
+
+.conversation-operation-marker .ui-marker-content {
+  display: flex;
+  min-width: 0;
+  flex: 0 1 auto;
+  align-items: baseline;
+  gap: 9px;
+  overflow: hidden;
+}
+
+.conversation-operation-marker-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.conversation-operation-marker-chevron { width: 18px; height: 18px; margin-left: 0; flex: 0 0 auto; transition: transform .16s ease; }
+.conversation-operation-marker-chevron svg { width: 16px; height: 16px; }
+.conversation-operation-marker[aria-expanded="true"] > .conversation-operation-marker-chevron { transform: rotate(90deg); }
+.conversation-operation-marker[data-operation-group-state="error"],
+[data-operation-group-state="error"] .conversation-operation-marker {
+  --marker-muted: var(--color-danger, #ff525d);
+  --marker-foreground: var(--color-danger, #ff525d);
+}
+
+.conversation-operation-group { min-width: 0; max-width: 100%; }
+.conversation-operation-group-list { min-width: 0; max-width: 100%; max-height: min(360px, 55vh); margin: 4px 0 10px 10px; padding: 4px 0 4px 16px; border-inline-start: 1px solid var(--color-line, var(--line)); overflow: auto; overscroll-behavior: contain; }
+.conversation-operation-marker[data-operation-group-state="running"] .lucide-loader-circle,
+[data-operation-group-state="running"] .conversation-operation-marker .lucide-loader-circle { animation: conversation-read-marker-spin 1s linear infinite; }
+.conversation-read-marker[data-read-tool-group-state="running"] .lucide-loader-circle,
+[data-read-tool-group-state="running"] .conversation-read-marker .lucide-loader-circle { animation: conversation-read-marker-spin 1s linear infinite; }
+@keyframes conversation-read-marker-spin { to { transform: rotate(360deg); } }
+
+@media (max-width: 600px) {
+  .conversation-read-marker .ui-marker-content { flex-wrap: wrap; gap: 0 8px; padding-block: 4px; }
+  .conversation-read-marker-count { flex-shrink: 1; white-space: normal; }
+  .conversation-read-marker-status { max-width: 100%; }
+  .conversation-read-marker-preview { flex-basis: 100%; }
+  .conversation-operation-marker-label { white-space: normal; }
+}
+
+:root[data-reduced-motion="true"] :is(.ui-marker, .conversation-read-marker-chevron, .conversation-operation-marker-chevron) { transition: none; }
+:root[data-reduced-motion="true"] :is(.conversation-read-marker, .conversation-operation-marker) .lucide-loader-circle { animation: none; }
+
+@media (prefers-reduced-motion: reduce) {
+  .ui-marker, .conversation-read-marker-chevron, .conversation-operation-marker-chevron { transition: none; }
+  :is(.conversation-read-marker, .conversation-operation-marker) .lucide-loader-circle { animation: none; }
+}

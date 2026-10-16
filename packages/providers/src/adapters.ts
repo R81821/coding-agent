@@ -112,6 +112,12 @@ export class OpenAIProvider extends HttpProvider {
     request = { ...request, tools: stableTools(request.tools) };
     const deepSeek = isOfficialDeepSeek(this.baseUrl);
     const reasoningEffort = deepSeek && request.disableThinking ? "none" : this.reasoningEffort(request);
+    const reasoningModel = this.models.find(model => model.modelId === request.model.modelId) ?? request.model;
+    // Public summaries are opt-in on OpenAI Responses. Compatible endpoints may
+    // reject this field, and private reasoning deltas remain model-history only.
+    const reasoningSummary = isOfficialOpenAI(this.baseUrl) && !request.disableThinking && reasoningEffort !== "none" &&
+      !/^(?:o1(?:-|$)|o3-mini(?:-|$))/i.test(reasoningModel.modelId) &&
+      Boolean(reasoningModel.capabilities.reasoningEfforts?.some(effort => effort !== "none"));
     if (deepSeek) request = { ...request, store: false };
     const input = [];
     for (const message of normalizeToolMessageSequence(request.messages)) {
@@ -133,7 +139,7 @@ export class OpenAIProvider extends HttpProvider {
       .flatMap(message => message.content.flatMap(part => part.type === "text" ? [part.text] : [])).join("\n\n");
     const fullInput = input.filter(item => !("role" in item) || item.role !== "system");
     const digest = (item: unknown) => createHash("sha256").update(canonicalJson(item)).digest("hex");
-    const scope = digest({ model: request.model.modelId, reasoningEffort, tools: request.tools, instructions, key: request.promptCacheKey });
+    const scope = digest({ model: request.model.modelId, reasoningEffort, reasoningSummary, tools: request.tools, instructions, key: request.promptCacheKey });
     const fingerprints = fullInput.map(digest);
     const previous = request.store ? this.continuations.get(request.runId) : undefined;
     const reusable = previous?.scope === scope && previous.prefix.length < fingerprints.length && previous.prefix.every((item, i) => fingerprints[i] === item);
@@ -144,7 +150,10 @@ export class OpenAIProvider extends HttpProvider {
       ...(reusable ? { previous_response_id: previous.responseId } : {}),
       ...(request.promptCacheKey ? { prompt_cache_key: request.promptCacheKey } : {}), stream: true, store: request.store,
       max_output_tokens: request.maxOutputTokens, parallel_tool_calls: request.parallelToolCalls,
-      ...(reasoningEffort !== undefined ? { reasoning: { effort: reasoningEffort } } : {}),
+      ...(reasoningEffort !== undefined || reasoningSummary ? { reasoning: {
+        ...(reasoningEffort !== undefined ? { effort: reasoningEffort } : {}),
+        ...(reasoningSummary ? { summary: "auto" } : {})
+      } } : {}),
       tools: request.tools.map(tool => ({ type: "function", name: tool.name, description: tool.description, parameters: tool.inputSchema, strict: tool.strict ?? true })) };
     const send = (value: unknown) => this.request(this.baseUrl + "/responses", { method: "POST", headers: authHeaders(this.apiKey), signal, body: canonicalJson(value) });
     if (request.cacheDiagnostics) yield { type: "cache_diagnostic", diagnostic: this.cacheDiagnostics.observe(request, "responses", body, fullInput) };
@@ -161,12 +170,21 @@ export class OpenAIProvider extends HttpProvider {
     let text = "";
     const calls: Record<string, unknown>[] = [];
     let completedId: string | undefined;
+    let summaryPart: string | undefined;
     try {
       for await (const raw of parseSse(response, signal)) {
         const event = raw as Record<string, any>;
         if (event.type === "response.output_text.delta") { const delta = String(event.delta ?? ""); text += delta; yield { type: "text_delta", delta }; }
         if (event.type === "response.reasoning_text.delta") yield { type: "reasoning_delta", delta: String(event.delta ?? "") };
-        if (event.type === "response.reasoning_summary_text.delta") yield { type: "reasoning_summary", summary: String(event.delta ?? "") };
+        if (event.type === "response.reasoning_summary_text.delta") {
+          const delta = String(event.delta ?? "");
+          if (delta) {
+            const part = canonicalJson([event.item_id ?? event.output_index, event.summary_index]);
+            const separator = summaryPart !== undefined && summaryPart !== part ? "\n\n" : "";
+            summaryPart = part;
+            yield { type: "reasoning_summary", summary: separator + delta };
+          }
+        }
         if (event.type === "response.output_item.done" && event.item?.type === "function_call") {
           const call = { id: String(event.item.call_id), name: String(event.item.name), input: safeJsonObject(event.item.arguments) };
           calls.push({ type: "function_call", call_id: call.id, name: call.name, arguments: canonicalJson(call.input) });
@@ -464,5 +482,10 @@ function findToolName(messages: ModelMessage[], toolCallId: string): string {
 
 function isOfficialDeepSeek(baseUrl: string): boolean {
   try { const url = new URL(baseUrl); return url.protocol === "https:" && url.hostname === "api.deepseek.com" && !url.port && ["", "/", "/v1", "/v1/"].includes(url.pathname); }
+  catch { return false; }
+}
+
+function isOfficialOpenAI(baseUrl: string): boolean {
+  try { const url = new URL(baseUrl); return url.protocol === "https:" && url.hostname === "api.openai.com" && !url.port && ["/v1", "/v1/"].includes(url.pathname); }
   catch { return false; }
 }
