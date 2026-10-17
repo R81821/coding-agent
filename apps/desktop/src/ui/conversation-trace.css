@@ -229,7 +229,7 @@
 .conversation-process-stream { display: flex; min-width: 0; flex-direction: column; gap: 14px; margin: 0 0 22px; }
 .conversation-process-stream > .conversation-trace { margin-bottom: 0; }
 .conversation-process-message { min-width: 0; max-width: 100%; padding: 2px 0; color: var(--color-text); overflow-wrap: anywhere; }
-.conversation-process-message .markdown-message.md-compact { color: var(--color-text); font-family: var(--content-font, inherit); font-size: var(--ui-font-size, 14px); font-weight: var(--content-font-weight, inherit); line-height: 1.8; }
+.conversation-process-message .markdown-message.md-compact { color: var(--color-text); font-family: var(--content-font, inherit); font-size: var(--ui-font-size, 14px); font-weight: var(--content-font-weight, inherit); line-height: 1.7; }
 .conversation-process-message .md-content > :first-child { margin-top: 0; }
 .conversation-process-message .md-content > :last-child { margin-bottom: 0; }
 .conversation-thinking-placeholder { margin: 0; }

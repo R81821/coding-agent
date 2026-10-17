@@ -8,6 +8,8 @@ import type { VaultCrypto } from "./crypto.js";
 export interface PutAttachmentInput {
   bytes: Buffer;
   mimeType: string;
+  fileName?: string;
+  textTokenEstimate?: number;
   source: AttachmentRef["source"];
   allowedProviders?: string[];
   width?: number;
@@ -33,6 +35,8 @@ export class EncryptedBlobStore {
       id: newId("attachment"),
       sha256,
       mimeType: input.mimeType,
+      ...(input.fileName ? { fileName: input.fileName } : {}),
+      ...(input.textTokenEstimate !== undefined ? { textTokenEstimate: input.textTokenEstimate } : {}),
       byteLength: input.bytes.byteLength,
       ...(input.width ? { width: input.width } : {}),
       ...(input.height ? { height: input.height } : {}),

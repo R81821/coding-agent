@@ -32,3 +32,5 @@ allowBuilds:
   esbuild: true
   protobufjs: true
   sharp: true
+minimumReleaseAgeExclude:
+  - unpdf@1.9.0

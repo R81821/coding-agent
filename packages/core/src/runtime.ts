@@ -14,6 +14,9 @@ import { ProjectTrustService } from "./project-trust.js";
 import { configureTelemetry } from "./telemetry.js";
 import { HarnessEvalRunner } from "@harness/evals";
 import { loadProfilesWithBudgetMigration } from "./budget-migration.js";
+import { migrateMemoryPolicy } from "./memory-policy.js";
+import { learnFromRun } from "./memory-learning.js";
+import { ProjectMemoryService } from "./project-memory.js";
 import { SkillInstaller } from "@harness/extensions";
 import { SkillJobs } from "./skill-jobs.js";
 import { RunReviewService } from "./run-review.js";
@@ -32,6 +35,7 @@ export interface HarnessRuntime {
   skills: SkillService;
   skillJobs: SkillJobs;
   projectTrust: ProjectTrustService;
+  projectMemory: ProjectMemoryService;
   plugins: PluginService;
   mcp: McpService;
   mcpAuth: McpOAuthManager;
@@ -55,11 +59,13 @@ export async function createRuntime(options: { appDataPath?: string; passphrase:
     attachmentResolver: async (attachment) => ({ mimeType: attachment.mimeType, base64: (await blobs.read(attachment)).toString("base64") })
   });
   const profiles = loadProfilesWithBudgetMigration(database);
+  migrateMemoryPolicy(profiles, database);
   const modelRouter = new ModelRouter(providers);
   const memory = new MemoryService(database);
   const telemetry = configureTelemetry(profiles.values());
   const skills = new SkillService(join(appData, "skills"));
   const projectTrust = new ProjectTrustService(database);
+  const projectMemory = new ProjectMemoryService(memory, projectTrust);
   const tools = createDefaultToolRegistry();
   const search = env.PARALLEL_API_KEY ? new ParallelSearchProvider(env.PARALLEL_API_KEY, env.PARALLEL_BASE_URL) : undefined;
   const skillJobs = new SkillJobs(new SkillInstaller(skills, fetch, env.GITHUB_TOKEN), providers, doc => database.saveSkill(doc.manifest), search);
@@ -229,7 +235,7 @@ export async function createRuntime(options: { appDataPath?: string; passphrase:
     if (!Number.isInteger(value) || value < 1 || value > maximum) throw new Error(`${name} must be an integer between 1 and ${maximum}`);
     return value;
   };
-  const engine: HarnessEngine = new HarnessEngine({ database, providers, tools, memory, skills, projectTrust, review, mcp, blobs,
+  const engine: HarnessEngine = new HarnessEngine({ database, providers, tools, memory, skills, projectTrust, review, mcp, blobs, learnMemory: learnFromRun,
     concurrency: { tasks: configuredLimit("HARNESS_TASK_CONCURRENCY", 4, 8), queueLength: configuredLimit("HARNESS_TASK_QUEUE_LENGTH", 80, 10000), tools: configuredLimit("HARNESS_TOOL_CONCURRENCY", 4, 32), modelRequests: configuredLimit("HARNESS_MODEL_CONCURRENCY", 4, 32) },
     conversationTasks: {
       isolatedWrites: isGitWorkspace,
@@ -294,6 +300,7 @@ export async function createRuntime(options: { appDataPath?: string; passphrase:
     skills,
     skillJobs,
     projectTrust,
+    projectMemory,
     plugins,
     mcp,
     mcpAuth,

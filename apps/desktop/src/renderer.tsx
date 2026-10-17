@@ -33,7 +33,7 @@ import type {
   SessionSummary,
   TaskSpec,
 } from "@harness/protocol";
-import { SessionViewCache, refreshSessionView, mergeViewEvents, newId, nowIso } from "@harness/protocol";
+import { MAX_ATTACHMENT_BYTES, SessionViewCache, refreshSessionView, mergeViewEvents, newId, nowIso } from "@harness/protocol";
 import type { DesktopAttachment } from "./preload.js";
 import { restoreWithdrawnDraft, type ComposerDraft } from "./withdrawal-draft.js";
 import { BuiBadge } from "./ui/badge.js";
@@ -77,6 +77,7 @@ import {
   ClipboardList,
   Clock3,
   FolderOpen,
+  FileUp,
   Hammer,
   Image as ImageIcon,
   LoaderCircle,
@@ -215,6 +216,9 @@ function App() {
   const modelMutation = useRef(false);
   const [modelCatalogVersion, setModelCatalogVersion] = useState(0);
   const [attachments, setAttachments] = useState<DesktopAttachment[]>([]);
+  const needsVision = attachments.some(item => item.attachment.mimeType.startsWith("image/"));
+  const [attachmentUpload, setAttachmentUpload] = useState({ token: -1, count: 0 });
+  const [attachmentError, setAttachmentError] = useState("");
   const [events, setEvents] = useState<AgentEvent[]>([]);
   const [activeRun, setActiveRun] = useState<string>();
   const [pausedRun, setPausedRun] = useState<string>();
@@ -232,6 +236,7 @@ function App() {
   const [projects, setProjects] = useState<ProjectRecord[]>([]);
   const historyRequest = useRef(0);
   const viewVersion = useRef(0);
+  const uploadingAttachments = attachmentUpload.token === viewVersion.current && attachmentUpload.count > 0;
   const sessionCreation = useRef(0);
   const viewCache = useRef(new SessionViewCache());
   const drafts = useRef(new Map<string, ComposerDraft>());
@@ -278,7 +283,7 @@ function App() {
     if (!unlocked || !profiles.some(item => item.id === profileId)) { setCurrentModel(undefined); return; }
     let current = true;
     setCurrentModel(undefined); setModelLoading(true); setModelCatalogError("");
-    void window.harness.request<{ model: ModelDescriptor | null; error?: string }>({ method: "model.current", params: { profileId, needsVision: attachments.length > 0 } })
+    void window.harness.request<{ model: ModelDescriptor | null; error?: string }>({ method: "model.current", params: { profileId, needsVision } })
       .then(result => {
         if (!current) return;
         setCurrentModel(result.model ?? undefined);
@@ -287,7 +292,8 @@ function App() {
       .catch(error => { if (current) setModelCatalogError(error instanceof Error ? error.message : String(error)); })
       .finally(() => { if (current) setModelLoading(false); });
     return () => { current = false; };
-  }, [unlocked, profileId, profiles, modelCatalogVersion, attachments.length]);
+  }, [unlocked, profileId, profiles, modelCatalogVersion, needsVision]);
+  useEffect(() => { setAttachmentError(""); }, [activeSessionId]);
   const [selectTurns] = useState(createSessionTurnSelector);
   const conversationTurns = useMemo(() => {
     const localErrors = events.filter(event => event.sequence === Number.MAX_SAFE_INTEGER);
@@ -423,12 +429,10 @@ function App() {
   useEffect(() => {
     const onPaste = (event: ClipboardEvent) => {
       if (!unlocked) return;
-      const image = [...(event.clipboardData?.files ?? [])].find((file) =>
-        file.type.startsWith("image/"),
-      );
-      if (image) {
+      const files = [...(event.clipboardData?.files ?? [])];
+      if (files.length) {
         event.preventDefault();
-        void addBrowserFile(image, "clipboard");
+        void addBrowserFiles(files, "clipboard");
       }
     };
     window.addEventListener("paste", onPaste);
@@ -560,39 +564,50 @@ function App() {
     setTab("chat");
   }
 
-  async function chooseImages() {
-    if (!profile || pendingWithdrawal.current?.sessionId === activeSessionId) return;
+  async function importAttachments(importer: () => Promise<DesktopAttachment[]>) {
+    if (!profile || switching || pendingWithdrawal.current?.sessionId === activeSessionId) return;
     const token = viewVersion.current;
-    const selected = await window.harness.chooseImages(
-      profile.allowedProviders,
-    );
-    if (token === viewVersion.current) setAttachments((current) => [...current, ...selected]);
+    setAttachmentError("");
+    setAttachmentUpload(current => ({ token, count: current.token === token ? current.count + 1 : 1 }));
+    try {
+      const selected = await importer();
+      if (token === viewVersion.current && pendingWithdrawal.current?.sessionId !== activeSessionId) setAttachments(current => [...current, ...selected]);
+    } catch (error) {
+      if (token === viewVersion.current) setAttachmentError(`无法添加附件：${error instanceof Error ? error.message : String(error)}`);
+    } finally {
+      setAttachmentUpload(current => current.token === token ? { token, count: Math.max(0, current.count - 1) } : current);
+    }
   }
 
-  async function addBrowserFile(
-    file: File,
-    source: "clipboard" | "screenshot",
-  ) {
-    const token = viewVersion.current;
-    if (
-      !profile || pendingWithdrawal.current?.sessionId === activeSessionId ||
-      !["image/png", "image/jpeg", "image/gif", "image/webp"].includes(
-        file.type,
-      )
-    )
-      return;
-    const base64 = await fileBase64(file);
-    const result = await window.harness.putImage(
-      base64,
-      file.type,
-      source,
-      profile.allowedProviders,
-    );
-    if (token === viewVersion.current) setAttachments((current) => [...current, { ...result, ...(file.name ? { fileName: file.name } : {}) }]);
+  async function chooseImages() {
+    if (!profile) return;
+    await importAttachments(() => window.harness.chooseImages(profile.allowedProviders));
+  }
+
+  async function chooseFiles() {
+    if (!profile) return;
+    await importAttachments(() => window.harness.chooseFiles(profile.allowedProviders));
+  }
+
+  async function addBrowserFiles(files: File[], source: "file" | "clipboard") {
+    if (!profile) return;
+    await importAttachments(async () => {
+      const selected: DesktopAttachment[] = [];
+      const oversized = files.find(file => file.size > MAX_ATTACHMENT_BYTES);
+      if (oversized) throw new Error(`${oversized.name || "文件"} 超过 ${Math.floor(MAX_ATTACHMENT_BYTES / 1_000_000)} MB 大小限制`);
+      for (const file of files) {
+        const base64 = await fileBase64(file);
+        const result = ["image/png", "image/jpeg", "image/gif", "image/webp"].includes(file.type)
+          ? await window.harness.putImage(base64, file.type, source, profile.allowedProviders, file.name)
+          : await window.harness.putFile(base64, file.type, file.name, source, profile.allowedProviders);
+        selected.push({ ...result, ...(file.name ? { fileName: result.attachment.fileName ?? file.name } : {}) });
+      }
+      return selected;
+    });
   }
 
   async function send() {
-    if (skillSaving || modelMutation.current || switching || pendingWithdrawal.current?.sessionId === activeSessionId) return;
+    if (skillSaving || modelMutation.current || switching || uploadingAttachments || pendingWithdrawal.current?.sessionId === activeSessionId) return;
     if (activeSessionId && pendingSteering.current.has(activeSessionId)) return;
     if (!prompt.trim()) return;
     // A paused task accepts the new user turn and resumes with it. Keep the same transcript,
@@ -1090,7 +1105,7 @@ function App() {
     modelMutation.current = true;
     setModelSaving(true); setModelError("");
     try {
-      const session = await window.harness.request<SessionRecord>({ method: "session.reasoning", params: { sessionId, profileId, reasoningEffort: effort, needsVision: attachments.length > 0 } });
+      const session = await window.harness.request<SessionRecord>({ method: "session.reasoning", params: { sessionId, profileId, reasoningEffort: effort, needsVision } });
       viewCache.current.delete(sessionId);
       if (token === viewVersion.current) setSessionDetail(current => current?.session.id === sessionId ? { ...current, session } : current);
     } catch (error) {
@@ -1198,10 +1213,8 @@ function App() {
       onDragOver={(event) => event.preventDefault()}
       onDrop={(event) => {
         event.preventDefault();
-        const file = [...event.dataTransfer.files].find((candidate) =>
-          candidate.type.startsWith("image/"),
-        );
-        if (file) void addBrowserFile(file, "clipboard");
+        const files = [...event.dataTransfer.files];
+        if (files.length) void addBrowserFiles(files, "file");
       }}
     >
       <aside className="sidebar" aria-label="工作区侧栏" id="workspace-sidebar">
@@ -1348,6 +1361,8 @@ function App() {
               taskMode={taskMode}
               setTaskMode={setTaskMode}
               attachments={attachments}
+              uploadingAttachments={uploadingAttachments}
+              attachmentError={attachmentError}
               setAttachments={setAttachments}
               events={events}
               turns={conversationTurns}
@@ -1374,6 +1389,7 @@ function App() {
               onContinue={continueFromRow}
               onSend={send}
               onChooseImages={chooseImages}
+              onChooseFiles={chooseFiles}
               onCapture={startCapture}
               onChooseWorkspace={chooseWorkspace}
             />
@@ -1414,14 +1430,8 @@ function App() {
           onCancel={() => setCapture(undefined)}
           onConfirm={async (base64) => {
             if (!profile) return;
-            const result = await window.harness.putImage(
-              base64,
-              "image/png",
-              "screenshot",
-              profile.allowedProviders,
-            );
-            setAttachments((current) => [...current, result]);
             setCapture(undefined);
+            await importAttachments(async () => [await window.harness.putImage(base64, "image/png", "screenshot", profile.allowedProviders)]);
           }}
         />
       )}
@@ -1480,6 +1490,8 @@ function ChatView(props: {
   taskMode: "auto" | "analysis" | "change";
   setTaskMode: (mode: "auto" | "analysis" | "change") => void;
   attachments: DesktopAttachment[];
+  uploadingAttachments: boolean;
+  attachmentError: string;
   setAttachments: React.Dispatch<React.SetStateAction<DesktopAttachment[]>>;
   events: AgentEvent[];
   turns: SessionTurn[];
@@ -1506,6 +1518,7 @@ function ChatView(props: {
   onContinue: (runId: string, note: string) => Promise<void>;
   onSend: () => void;
   onChooseImages: () => void;
+  onChooseFiles: () => void;
   onCapture: () => void;
   onChooseWorkspace: () => void;
 }) {
@@ -1555,6 +1568,8 @@ function ChatView(props: {
           <span><Monitor size={15} />本地</span>
           <span className="composer-profile" title={props.profile?.name}><UserCog size={15} />{props.profile?.name || "未选择 Profile"}</span>
         </div>
+        {props.uploadingAttachments && <div className="composer-upload-status" role="status"><LoaderCircle size={14} />正在添加附件…</div>}
+        {props.attachmentError && <div className="composer-upload-error" role="alert">{props.attachmentError}</div>}
         <BuiPromptBar
           value={props.prompt}
           skillChips={<><div className="skill-chips">{props.selectedSkills.map(key => { const skill = props.skills.find(item => item.key === key); return <button key={key} type="button" disabled={props.skillSaving || props.withdrawing} title={skill?.manifest.enabled ? "移除此技能" : "技能不可用，请重新选择或确认信任"} aria-label={`移除技能 ${skill?.manifest.name ?? key}`} onClick={() => props.onSkillsChange(props.selectedSkills.filter(item => item !== key))}><BookOpen size={13} /><span>{skill?.manifest.name ?? "缺失的技能"}{skill && !skill.manifest.enabled ? " · 需确认" : ""}</span><X size={12} /></button>; })}</div>{props.skillError && <small role="alert">{props.skillError}</small>}{props.modelError && <small role="alert">{props.modelError}</small>}</>}
@@ -1571,12 +1586,12 @@ function ChatView(props: {
             !props.workspace ? "先选择项目，再开始对话…" : props.hasSession ? "描述你的想法，或粘贴错误截图…" : "点击新建任务创建会话…"
           }
           disabled={!props.workspace || !props.hasSession || props.withdrawing}
-          busy={props.busy || props.modelSaving}
+          busy={props.busy || props.modelSaving || props.uploadingAttachments}
           {...(props.runId && !props.paused && props.canPause ? { onHold: props.onPause } : {})}
           holding={props.paused}
           {...(props.runId ? { onRelease: props.onResume, canRelease: !props.steering } : {})}
           withdrawing={props.withdrawing}
-          runDisabled={props.withdrawing}
+          runDisabled={props.withdrawing || props.uploadingAttachments}
           {...(props.attachments.length > 0
             ? {
                 attachments: (
@@ -1591,8 +1606,17 @@ function ChatView(props: {
               <BuiButton
                 variant="ghost"
                 size="sm"
+                title="添加文件"
+                disabled={!props.profile || props.busy || props.withdrawing || props.uploadingAttachments}
+                onClick={props.onChooseFiles}
+              >
+                <FileUp size={17} /> 文件
+              </BuiButton>
+              <BuiButton
+                variant="ghost"
+                size="sm"
                 title="添加图片"
-                disabled={!props.profile || props.busy}
+                disabled={!props.profile || props.busy || props.withdrawing || props.uploadingAttachments}
                 onClick={props.onChooseImages}
               >
                 <ImageIcon size={17} /> 图片
@@ -1601,7 +1625,7 @@ function ChatView(props: {
                 variant="ghost"
                 size="sm"
                 title="区域截图"
-                disabled={!props.profile || props.busy}
+                disabled={!props.profile || props.busy || props.withdrawing || props.uploadingAttachments}
                 onClick={props.onCapture}
               >
                 <Camera size={17} /> 截图
@@ -1750,7 +1774,7 @@ function ConversationTurnView({ turn, busy, continuationDisabled, onContinue, on
   const renderStreamItem = (item: ConversationStreamItem, active = false): React.ReactNode => item.kind === "text"
     ? item.process
       ? <ProcessTraceRow key={item.id} id={item.id} text={item.text} live={active && stream.at(-1) === item} />
-      : <Message key={item.id}><MessageContent><article className="assistant-message">{item.result?.status !== "completed" && <FinalReportStatus {...(item.result ? { result: item.result } : {})} />}<MarkdownMessage text={item.text} /></article></MessageContent></Message>
+      : <Message key={item.id}><MessageContent><article className="assistant-message">{item.result?.status !== "completed" && <FinalReportStatus {...(item.result ? { result: item.result } : {})} />}<MarkdownMessage text={item.text} isStreaming={active && stream.at(-1) === item && !item.result} /></article></MessageContent></Message>
     : item.kind === "tool_group"
       ? <ToolTraceList key={item.id} entries={item.entries} active={(busy || replay.replaying) && displayTerminalStatus === undefined} />
       : item.kind === "reasoning"
@@ -1810,7 +1834,7 @@ function ConversationTurnView({ turn, busy, continuationDisabled, onContinue, on
           {processBlocks.length > 0 && <div className="conversation-process-stream">{processBlocks}</div>}
           {visibleStop && <RunStopCard stop={visibleStop} />}
           {last && <WorkflowProgress events={displayEvents} />}
-          {finalItems.length > 0 && <div className="conversation-stream conversation-final-stream">{finalItems.map(item => renderStreamItem(item))}</div>}
+          {finalItems.length > 0 && <div className="conversation-stream conversation-final-stream">{finalItems.map(item => renderStreamItem(item, active))}</div>}
           {last && completed && finalItems.length === 0 && <div className="conversation-stream conversation-final-stream">
             <article className="assistant-message"><MarkdownMessage text={terminalStatus === "failed" ? "运行失败，未生成最终回答。" : terminalStatus === "cancelled" ? "运行已取消。" : terminalStatus === "review" ? "本轮已结束，仍有待复核事项。" : "运行已完成，未生成最终回答。"} /></article>
           </div>}

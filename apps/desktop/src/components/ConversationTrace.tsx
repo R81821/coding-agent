@@ -106,13 +106,13 @@ export function ReasoningTraceRow({ id, text, running = false }: { id: string; t
         <TraceTitle>{running ? "正在思考" : "思考摘要"}</TraceTitle>
       </TraceLine>
     </TraceCollapsibleTrigger>
-    <TraceCollapsibleContent><div className="conversation-reasoning-text"><MarkdownMessage text={text} compact /></div></TraceCollapsibleContent>
+    <TraceCollapsibleContent><div className="conversation-reasoning-text"><MarkdownMessage text={text} compact isStreaming={running} /></div></TraceCollapsibleContent>
   </TraceCollapsible>;
 }
 
 export function ProcessTraceRow({ id, text, live }: { id: string; text: string; live: boolean }) {
   return <div className="conversation-process-message" data-conversation-process-message={id} data-streaming={String(live)} aria-label="过程对话" aria-busy={live}>
-    <MarkdownMessage text={text} compact />
+    <MarkdownMessage text={text} compact isStreaming={live} />
   </div>;
 }
 

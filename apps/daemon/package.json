@@ -3,6 +3,6 @@
   "version": "1.4.51",
   "type": "module",
   "scripts": { "dev": "tsx src/main.ts", "build": "tsup && node scripts/copy-wasm.mjs" },
-  "dependencies": { "@harness/core": "workspace:*", "@harness/extensions": "workspace:*", "@harness/protocol": "workspace:*" },
+  "dependencies": { "@harness/core": "workspace:*", "@harness/extensions": "workspace:*", "@harness/protocol": "workspace:*", "@harness/providers": "workspace:*" },
   "devDependencies": { "tsx": "^4.20.5" }
 }

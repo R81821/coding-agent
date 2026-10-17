@@ -85,9 +85,9 @@ button:focus-visible, summary:focus-visible, select:focus-visible, input:focus-v
 .workbench .secure { display: inline-flex; align-items: center; gap: 5px; padding: 6px 9px; border: 0; color: #9c97a2; font-size: 11px; background: transparent; }
 .workbench .content { background: transparent; }
 .workbench .chat-content { min-width: 0; }
-.workbench .chat-layout { --chat-content-max: 940px; --chat-gutter: 28px; min-width: 0; grid-template-columns: minmax(0, 1fr); container-type: inline-size; }
-.workbench .conversation { padding: 30px 0 20px; }
-.workbench .conversation-content { max-width: min(var(--chat-content-max), calc(100cqw - 2 * var(--chat-gutter))); margin-inline-start: max(var(--chat-gutter), calc((100cqw - var(--chat-content-max)) / 2)); }
+.workbench .chat-layout { --chat-content-max: 820px; --chat-gutter: 28px; min-width: 0; grid-template-columns: minmax(0, 1fr); container-type: inline-size; }
+.workbench .conversation { padding: 30px 0 20px; scrollbar-gutter: stable both-edges; }
+.workbench .conversation-content { max-width: min(var(--chat-content-max), calc(100cqw - 2 * var(--chat-gutter))); margin-inline: auto; }
 .workbench .conversation > * { min-width: 0; }
 .workbench :is(.conversation-process, .conversation-final-stream, .conversation-inline-review) { width: 100%; }
 .workbench :is(.conversation-process-summary, .conversation-process-body, .conversation-final-stream) { padding-inline: 0; }

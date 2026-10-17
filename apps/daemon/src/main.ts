@@ -5,6 +5,8 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { dispatchMcp, isMcpRequest } from "./mcp-rpc.js";
 import { watchParentLifetime } from "./parent-lifetime.js";
+import { ingestUploadedAttachment, sniffImage } from "./attachment-ingest.js";
+import { validateFileAttachment } from "@harness/providers";
 import { createRuntime, profileFor, validateSessionRunStart, type HarnessRuntime } from "@harness/core";
 import { FeishuConnector, PairingService, TelegramConnector, type MessageConnector, type RemoteMessage } from "@harness/extensions";
 import {
@@ -230,9 +232,15 @@ async function dispatch(request: DaemonRequest, target: HarnessRuntime): Promise
       target.profiles.set(request.params.id, request.params);
       return request.params;
     case "memory.list":
-      return target.database.listMemories(request.params?.scopeId);
+      return target.memory.list(request.params?.scopeId);
+    case "memory.create":
+      return target.memory.create(request.params, request.params.actor);
+    case "memory.publishPreview":
+      return target.projectMemory.preview(request.params.workspacePath, request.params.memoryIds);
+    case "memory.publish":
+      return target.projectMemory.publish(request.params.workspacePath, request.params.memoryIds, request.params.token);
     case "memory.decide":
-      return target.memory.decide(request.params.memoryId, request.params.approved, request.params.actor);
+      return target.memory.decide(request.params.memoryId, request.params.approved, request.params.actor, request.params.replaceConflicts);
     case "memory.update":
       return target.memory.update(request.params.memoryId, request.params.patch, request.params.actor);
     case "memory.delete":
@@ -243,7 +251,7 @@ async function dispatch(request: DaemonRequest, target: HarnessRuntime): Promise
     case "profiles.memoryScopes": {
       const current = target.profiles.get(request.params.profileId);
       if (!current) throw new Error("Unknown profile");
-      const updated = { ...current, memoryScopes: [...new Set(request.params.memoryScopes)] };
+      const updated = { ...current, memoryScopes: [...new Set(request.params.memoryScopes)], memoryPolicyVersion: 1 };
       target.database.saveProfile(updated);
       target.profiles.set(updated.id, updated);
       return updated;
@@ -317,13 +325,7 @@ async function dispatch(request: DaemonRequest, target: HarnessRuntime): Promise
       if (!connectors.has(request.params.connector)) throw new Error(`${request.params.connector} is not configured`);
       return { connector: request.params.connector, code: pairing.create(request.params.connector), expiresInSeconds: 600 };
     case "attachment.put": {
-      const bytes = Buffer.from(request.params.base64, "base64");
-      if (bytes.byteLength === 0 || bytes.byteLength > 30_000_000) throw new Error("Attachment must be between 1 byte and 30 MB");
-      const detected = sniffImage(bytes);
-      if (!detected || detected !== request.params.mimeType) throw new Error(`Image content does not match declared MIME type (${request.params.mimeType})`);
-      const attachment = await target.blobs.put({ bytes, mimeType: detected, source: request.params.source, allowedProviders: request.params.allowedProviders });
-      target.database.saveAttachment(attachment);
-      return attachment;
+      return ingestUploadedAttachment(request.params, target, validateFileAttachment);
     }
   }
 }
@@ -417,14 +419,6 @@ async function notifyRemote(event: AgentEvent): Promise<void> {
     await remote.connector.send(remote.chatId, `任务 ${event.status}：\n${event.text.slice(0, 3_500)}`);
     remoteRuns.delete(event.runId);
   }
-}
-
-function sniffImage(bytes: Buffer): string | undefined {
-  if (bytes.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))) return "image/png";
-  if (bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) return "image/jpeg";
-  if (bytes.subarray(0, 6).toString("ascii").match(/^GIF8[79]a$/)) return "image/gif";
-  if (bytes.subarray(0, 4).toString("ascii") === "RIFF" && bytes.subarray(8, 12).toString("ascii") === "WEBP") return "image/webp";
-  return undefined;
 }
 
 async function readPassphrase(): Promise<string | undefined> {

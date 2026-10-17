@@ -69,6 +69,7 @@ import { resolveMainOutputTokens, resolveReviewOutputLimit } from "./generation-
 import { PermissionEngine, summarizeToolRequest } from "./security.js";
 import type { ProjectTrustService } from "./project-trust.js";
 import type { RunReviewService } from "./run-review.js";
+import type { learnFromRun } from "./memory-learning.js";
 
 const transitions: Record<RunStatus, RunStatus[]> = {
   queued: ["planning", "cancelled", "failed"],
@@ -94,6 +95,7 @@ const transitions: Record<RunStatus, RunStatus[]> = {
 };
 
 export interface EngineDependencies {
+  learnMemory?: typeof learnFromRun;
   concurrency?: ExecutionConcurrency;
   database: HarnessDatabase;
   providers: ModelProvider[];
@@ -2159,13 +2161,30 @@ export class HarnessEngine extends EventEmitter {
           finalText.slice(0, 6_000),
           `run:${spec.id}`,
         );
-        this.deps.memory.propose({
-          content: `Task: ${spec.request.slice(0, 1_000)}\nOutcome: ${finalText.slice(0, 2_000)}`,
-          source: `run:${spec.id}`,
-          scope: "project",
-          scopeId: spec.workspacePath,
-          confidence: verified ? 0.8 : 0.55,
-        });
+        if (this.deps.learnMemory && !spec.parentRunId && state.turns < spec.budget.maxTurns) {
+          try {
+            await this.deps.learnMemory({ runId: spec.id, workspacePath: spec.workspacePath, verified, outcome: finalText,
+              userMessages: [spec.request, ...this.deps.database.listEvents(spec.id).flatMap(event => event.type === "steering_submitted" && retainedSteering.has(event.messageId) ? [event.text] : [])],
+              scopes: profile.memoryScopes, memory: this.deps.memory, provider: route.provider, model: route.model,
+              signal: state.controller.signal, remainingUsd: Math.max(0, spec.budget.maxUsd - state.spentUsd),
+              beforeRequest: () => { this.checkBudget(spec, state); if (state.pauseRequested) throw new Error("Memory learning paused"); state.turns += 1; },
+              onUsage: usage => { state.spentUsd += usage.estimatedUsd; state.costKnown &&= usage.costKnown !== false;
+                state.inputTokens += usage.inputTokens; state.outputTokens += usage.outputTokens;
+                this.emitEvent(spec.id, state, { type: "usage", usage }); },
+              onFinished: timing => this.emitEvent(spec.id, state, { type: "model_request_finished", ...timing }),
+            });
+          } catch (error) {
+            // Optional learning never invalidates the user's completed implementation.
+            process.stderr.write(`Memory learning skipped for ${spec.id}: ${error instanceof Error ? error.message : String(error)}\n`);
+          }
+        }
+      }
+      if (state.controller.signal.aborted) throw state.controller.signal.reason ?? new Error("Run cancelled");
+      if (state.pauseRequested || state.steering.some(message => !retainedSteering.has(message.id))) {
+        this.status(spec.id, state, "paused");
+        this.saveCheckpoint(spec.id, state, "manual");
+        this.emitEvent(spec.id, state, { type: "result", text: finalText, status: "paused" });
+        return;
       }
       this.status(spec.id, state, verified ? "completed" : "review");
       this.saveCheckpoint(spec.id, state, "manual");

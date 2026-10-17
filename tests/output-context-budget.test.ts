@@ -1,8 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { runWithPiAgent } from "@harness/core";
 import { descriptor, type ModelProvider } from "@harness/providers";
-import type { ModelMessage, ModelRequest } from "@harness/protocol";
+import type { AttachmentRef, ModelMessage, ModelRequest } from "@harness/protocol";
 import { workflowReadTool } from "./workflow-fixture.js";
+import { estimateRequestInputTokens, resolveRequestOutputTokens } from "../packages/core/src/generation-policy.js";
 
 describe("output ceiling and usable task context", () => {
   it.each([
@@ -79,6 +80,31 @@ it.each([false, true])("reserves input space for initial Chinese text and images
   const { result, requests } = await budgetFixture(128_000, 393_216, [{ role: "user", content }], () => image ? 18_000 : 8_000);
   expect(result.errorMessage).toBeUndefined();
   expect(requests).toHaveLength(1);
+});
+
+it.each([undefined, 50_000])("reserves extracted file text before allocating output tokens (parsed estimate=%s)", async textTokenEstimate => {
+  const attachment: AttachmentRef = { id: "document", sha256: "b".repeat(64), mimeType: "text/plain", byteLength: 100_000, encryptedPath: "encrypted/document", source: "file", trust: "untrusted_attachment", allowedProviders: ["fixture"], createdAt: "2026-10-16T00:00:00.000Z",
+    ...(textTokenEstimate === undefined ? {} : { textTokenEstimate }) };
+  const messages: ModelMessage[] = [{ role: "user", content: [
+    { type: "text", trust: "user_request", text: "Read this document" }, { type: "file", attachment },
+  ] }];
+  const { result, requests } = await budgetFixture(128_000, 393_216, messages, () => 50_000);
+  expect(result.errorMessage).toBeUndefined();
+  expect(requests).toHaveLength(1);
+  expect(requests[0]!.maxOutputTokens).toBeLessThan(78_000);
+  expect(requests[0]!.messages[0]?.content).toContainEqual({ type: "file", attachment });
+});
+
+it("uses parsed text size rather than a small compressed file's byte length for capacity refusal", async () => {
+  const attachment: AttachmentRef = { id: "compressed-document", sha256: "b".repeat(64), mimeType: "application/pdf", byteLength: 100, textTokenEstimate: 20_000, encryptedPath: "encrypted/document", source: "file", trust: "untrusted_attachment", allowedProviders: ["fixture"], createdAt: "2026-10-16T00:00:00.000Z" };
+  const messages: ModelMessage[] = [{ role: "user", content: [{ type: "text", trust: "user_request", text: "Read the PDF" }, { type: "file", attachment }] }];
+  const estimate = estimateRequestInputTokens({ messages, tools: [] });
+  expect(estimate).toBeGreaterThan(20_000);
+  const model = descriptor({ providerId: "fixture", modelId: "tiny", displayName: "Tiny", maxContextTokens: 16_384 });
+  expect(() => resolveRequestOutputTokens({ model, maxOutputTokens: 128, estimatedInputTokens: estimate })).toThrow("context_budget_exceeded");
+  const { result, requests } = await budgetFixture(16_384, 128, messages, () => 20_000);
+  expect(result.errorMessage).toContain("context_budget_exceeded");
+  expect(requests).toHaveLength(0);
 });
 
 async function budgetFixture(context: number, ceiling: number, messages: ModelMessage[], inputTokens: (request: ModelRequest, turn: number) => number, toolTurn = false) {

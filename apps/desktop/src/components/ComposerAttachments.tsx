@@ -1,11 +1,12 @@
 import React, { useState } from "react";
-import { FileText, Image as ImageIcon, X } from "lucide-react";
+import { FileCode, FileText, Image as ImageIcon, X } from "lucide-react";
 import type { DesktopAttachment } from "../preload.js";
 import { Attachment, AttachmentAction, AttachmentActions, AttachmentContent, AttachmentDescription, AttachmentGroup, AttachmentMedia, AttachmentTitle } from "../ui/attachment.js";
 import "./composer-attachments.css";
 
 function attachmentName(item: DesktopAttachment, index: number): string {
-  if (item.fileName?.trim()) return item.fileName;
+  const fileName = item.fileName ?? item.attachment.fileName;
+  if (fileName?.trim()) return fileName;
   const sourceNames = { file: "图片附件", clipboard: "剪贴板图片", screenshot: "截图", browser: "浏览器图片", telegram: "图片附件", feishu: "图片附件" };
   return `${item.attachment.mimeType.startsWith("image/") ? sourceNames[item.attachment.source] ?? "图片附件" : "附件"} ${index + 1}`;
 }
@@ -19,7 +20,9 @@ function byteLabel(bytes: number): string {
 
 function attachmentMetadata(item: DesktopAttachment): string {
   const { mimeType, byteLength, width, height } = item.attachment;
-  const format = ({ "image/png": "PNG", "image/jpeg": "JPG", "image/gif": "GIF", "image/webp": "WebP" } as Record<string, string>)[mimeType] ?? mimeType;
+  const extension = (item.fileName ?? item.attachment.fileName ?? "").split(".").at(-1)?.toLowerCase() ?? "";
+  const extensionLabel = ({ ts: "TypeScript", tsx: "TypeScript", js: "JavaScript", jsx: "JavaScript", py: "Python", md: "Markdown", json: "JSON", csv: "CSV" } as Record<string, string>)[extension];
+  const format = !mimeType.startsWith("image/") && extensionLabel ? extensionLabel : ({ "image/png": "PNG", "image/jpeg": "JPG", "image/gif": "GIF", "image/webp": "WebP", "application/pdf": "PDF", "text/plain": "文本文档", "text/markdown": "Markdown", "text/csv": "CSV", "application/json": "JSON", "text/javascript": "JavaScript", "application/javascript": "JavaScript", "text/typescript": "TypeScript", "application/octet-stream": "文件" } as Record<string, string>)[mimeType] ?? (mimeType.startsWith("text/") ? "文本文档" : "文件");
   const dimensions = typeof width === "number" && width > 0 && typeof height === "number" && height > 0 ? `${width} × ${height}` : "";
   return [format, byteLabel(byteLength), dimensions].filter(Boolean).join(" · ");
 }
@@ -27,7 +30,7 @@ function attachmentMetadata(item: DesktopAttachment): string {
 function Thumbnail({ src, name, image }: { src: string; name: string; image: boolean }) {
   const [failed, setFailed] = useState(false);
   if (src && image && !failed) return <img src={src} alt={name} draggable={false} onError={() => setFailed(true)} />;
-  const Icon = image ? ImageIcon : FileText;
+  const Icon = image ? ImageIcon : /\.(?:[cm]?[jt]sx?|py|rs|go|java|c|cpp|h|css|scss|html?|vue|svelte|sh|ps1|sql|json|ya?ml)$/i.test(name) ? FileCode : FileText;
   return <Icon aria-hidden="true" />;
 }
 
@@ -54,7 +57,7 @@ export function ComposerAttachments({ attachments, onRemove, disabled = false }:
       const name = attachmentName(item, index);
       const image = item.attachment.mimeType.startsWith("image/");
       return <Attachment key={`${item.attachment.id}:${index}`} size="sm" orientation={image ? "vertical" : "horizontal"}
-        className={image ? "composer-attachment-image" : ""} data-attachment-id={item.attachment.id} onFocus={revealFocusedAttachment}>
+        className={image ? "composer-attachment-image" : "composer-attachment-file"} data-attachment-id={item.attachment.id} onFocus={revealFocusedAttachment}>
         <AttachmentMedia variant={image && item.previewDataUrl ? "image" : "icon"}>
           <Thumbnail key={item.previewDataUrl} src={item.previewDataUrl} name={name} image={image} />
         </AttachmentMedia>

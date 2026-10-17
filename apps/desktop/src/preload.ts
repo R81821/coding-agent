@@ -59,17 +59,28 @@ const api = {
     ipcRenderer.invoke("harness:choose-images", allowedProviders) as Promise<
       DesktopAttachment[]
     >,
+  chooseFiles: (allowedProviders: string[]) =>
+    ipcRenderer.invoke("harness:choose-files", allowedProviders) as Promise<DesktopAttachment[]>,
+  putFile: (
+    base64: string,
+    mimeType: string,
+    fileName: string,
+    source: "file" | "clipboard",
+    allowedProviders: string[],
+  ) => ipcRenderer.invoke("harness:put-file", { base64, mimeType, fileName, source, allowedProviders }) as Promise<DesktopAttachment>,
   putImage: (
     base64: string,
     mimeType: string,
-    source: "clipboard" | "screenshot",
+    source: "file" | "clipboard" | "screenshot",
     allowedProviders: string[],
+    fileName?: string,
   ) =>
     ipcRenderer.invoke("harness:put-image", {
       base64,
       mimeType,
       source,
       allowedProviders,
+      ...(fileName ? { fileName } : {}),
     }) as Promise<DesktopAttachment>,
   captureScreen: () =>
     ipcRenderer.invoke("harness:capture-screen") as Promise<{
@@ -82,7 +93,7 @@ const api = {
 export interface DesktopAttachment {
   attachment: import("@harness/protocol").AttachmentRef;
   previewDataUrl: string;
-  /** Local display metadata; never included in the attachment sent to a provider. */
+  /** Display name mirrored from the persisted reference; also supports older local drafts. */
   fileName?: string;
 }
 

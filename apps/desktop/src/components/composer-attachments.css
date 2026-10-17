@@ -5,3 +5,10 @@
 .composer-attachment-image > .ui-attachment-content { width: 100%; flex: 0 0 auto; }
 .composer-attachment-image > .ui-attachment-actions { position: absolute; top: 12px; right: 12px; }
 .composer-attachment-image .ui-attachment-action { background: var(--color-surface-strong, var(--panel-2, #292929)); color: var(--color-text); border-color: var(--color-line-strong, var(--line-strong)); box-shadow: 0 1px 4px #0002; }
+.composer-attachments .composer-attachment-file { width: 248px; min-height: 58px; }
+.composer-upload-status { display: flex; align-items: center; gap: 6px; padding: 5px 12px; color: var(--color-text-muted, var(--muted, #a3a3a3)); font-size: 12px; }
+.composer-upload-status svg { animation: composer-upload-spin 1s linear infinite; }
+.composer-upload-error { margin: 5px 12px; color: var(--color-danger, #ff525d); font-size: 12px; }
+@keyframes composer-upload-spin { to { transform: rotate(360deg); } }
+:root[data-reduced-motion="true"] .composer-upload-status svg { animation: none; }
+@media (prefers-reduced-motion: reduce) { .composer-upload-status svg { animation: none; } }

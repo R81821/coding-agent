@@ -356,7 +356,6 @@ select {
   padding: 32px max(7vw, 54px) 20px;
   scrollbar-color: rgba(108, 194, 245, 0.46) transparent;
 }
-.conversation .markdown-message,
 .conversation .user-message {
   font-weight: 700;
 }

@@ -1,6 +1,6 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { existsSync } from "node:fs";
-import { appendFile, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { appendFile, mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { connect } from "node:net";
@@ -18,8 +18,9 @@ import {
   screen,
   Tray,
 } from "electron";
-import type { DaemonRequest, DaemonResponse } from "@harness/protocol";
-import { daemonEndpointName, DaemonResponseSchema, newId } from "@harness/protocol";
+import type { AttachmentRef, DaemonRequest, DaemonResponse } from "@harness/protocol";
+import { attachmentFileName, attachmentMimeTypeForFileName, daemonEndpointName, DaemonResponseSchema, MAX_ATTACHMENT_BYTES, newId } from "@harness/protocol";
+import type { DesktopAttachment } from "./preload.js";
 import { ensureV2Storage } from "@harness/persistence";
 import {
   credentialNames,
@@ -33,6 +34,8 @@ import {
 } from "./provider-settings.js";
 import { appendBounded, daemonStartupError, DaemonStartupMonitor } from "./daemon-startup.js";
 import { stopDaemonProcess } from "./daemon-process.js";
+import { developmentDaemonCommand } from "./daemon-launch.js";
+import { QuitCoordinator } from "./quit-coordinator.js";
 import { sanitizeRendererRequest } from "./renderer-ipc.js";
 import { messageHttpUrl } from "./message-links.js";
 import { runDesktopCommand } from "./desktop-menu.js";
@@ -60,6 +63,8 @@ let window: BrowserWindow | undefined;
 let tray: Tray | undefined;
 let daemon: ChildProcess | undefined;
 let quitting = false;
+const quitCoordinator = new QuitCoordinator();
+let quitRequested = false;
 let currentPassphrase: string | undefined;
 let browserHost: DesktopBrowserHost | undefined;
 let daemonStarting: Promise<void> | undefined;
@@ -113,16 +118,26 @@ app.on("window-all-closed", () => {
   /* tray keeps the daemon alive */
 });
 app.on("before-quit", (event) => {
+  if (quitCoordinator.completed) return;
+  event.preventDefault();
+  if (quitRequested) return;
+  quitRequested = true;
   quitting = true;
-  browserHost?.close();
-  if (daemon) {
-    event.preventDefault();
-    const previous = daemon;
-    daemon = undefined;
-    void stopDaemonProcess(previous)
-      .catch((error: unknown) => logLifecycle("daemon-stop-failed", { error: String(error) }))
-      .finally(() => app.quit());
-  }
+  void quitCoordinator.run(async () => {
+    // Let an in-flight start settle before deciding which process must be stopped.
+    await daemonStarting?.catch(() => {});
+    browserHost?.close();
+    if (daemon) {
+      const previous = daemon;
+      await stopDaemonProcess(previous);
+      if (daemon === previous) daemon = undefined;
+    }
+  }).then(() => app.quit()).catch((error: unknown) => {
+    quitRequested = false;
+    quitting = false;
+    void logLifecycle("daemon-stop-failed", { error: String(error) });
+    dialog.showErrorBox("退出未完成", error instanceof Error ? error.message : String(error));
+  });
 });
 
 ipcMain.handle(
@@ -153,9 +168,15 @@ ipcMain.handle(
       }
       return { ok: true };
     } catch (error) {
-      if (daemon) await stopDaemonProcess(daemon).catch((stopError: unknown) =>
-        logLifecycle("daemon-stop-failed", { error: String(stopError) }));
-      daemon = undefined;
+      if (daemon) {
+        const previous = daemon;
+        try {
+          await stopDaemonProcess(previous);
+          if (daemon === previous) daemon = undefined;
+        } catch (stopError) {
+          void logLifecycle("daemon-stop-failed", { error: String(stopError) });
+        }
+      }
       return {
         ok: false,
         error: error instanceof Error ? error.message : String(error),
@@ -262,13 +283,31 @@ ipcMain.handle(
     });
     if (result.canceled) return [];
     return Promise.all(
-      result.filePaths.map(async (path) => ({
-        ...(await normalizeAndPut(await readFile(path), "file", allowedProviders)),
-        fileName: basename(path),
-      })),
+      result.filePaths.map(async (path) => normalizeAndPut(await readAttachmentFile(path), "file", attachmentProviders(allowedProviders), basename(path))),
     );
   },
 );
+
+ipcMain.handle("harness:choose-files", async (_event, allowedProviders: string[]) => {
+  const providers = attachmentProviders(allowedProviders);
+  const result = await dialog.showOpenDialog(window!, {
+    title: "选择文件",
+    properties: ["openFile", "multiSelections"],
+    filters: [
+      { name: "文本、代码和文档", extensions: ["txt", "md", "mdx", "csv", "json", "yaml", "yml", "xml", "html", "css", "ts", "tsx", "js", "jsx", "py", "go", "rs", "java", "c", "cpp", "h", "cs", "sh", "ps1", "sql", "toml", "ini", "log", "pdf", "docx"] },
+      { name: "所有文件", extensions: ["*"] },
+    ],
+  });
+  if (result.canceled) return [];
+  return Promise.all(result.filePaths.map(async path => putFileBytes(await readAttachmentFile(path), basename(path), "file", providers)));
+});
+
+ipcMain.handle("harness:put-file", async (_event, input: {
+  base64: string; mimeType: string; fileName: string; source: "file" | "clipboard"; allowedProviders: string[];
+}) => {
+  if (!input || !["file", "clipboard"].includes(input.source)) throw new Error("无效的附件来源");
+  return putFileBytes(decodeAttachmentBytes(input.base64), input.fileName, input.source, attachmentProviders(input.allowedProviders));
+});
 
 ipcMain.handle(
   "harness:put-image",
@@ -277,14 +316,17 @@ ipcMain.handle(
     input: {
       base64: string;
       mimeType: string;
-      source: "clipboard" | "screenshot";
+      source: "file" | "clipboard" | "screenshot";
       allowedProviders: string[];
+      fileName?: string;
     },
   ) => {
+    if (!input || !["file", "clipboard", "screenshot"].includes(input.source)) throw new Error("无效的图片来源");
     return normalizeAndPut(
-      Buffer.from(input.base64, "base64"),
+      decodeAttachmentBytes(input.base64),
       input.source,
-      input.allowedProviders,
+      attachmentProviders(input.allowedProviders),
+      input.fileName,
     );
   },
 );
@@ -456,6 +498,7 @@ async function ensureDaemon(passphrase: string): Promise<void> {
 }
 
 async function startDaemon(passphrase: string): Promise<void> {
+  if (quitting) throw new Error("应用正在退出，已取消启动 daemon");
   try {
     await daemonRequest({ id: newId("request"), method: "health" }, 1_000);
     return;
@@ -466,6 +509,7 @@ async function startDaemon(passphrase: string): Promise<void> {
   const settingsEnvironment = providerSettingsEnvironment(
     await loadProviderSettings(providerSettingsPath()),
   );
+  if (quitting) throw new Error("应用正在退出，已取消启动 daemon");
   const packagedPath = join(process.resourcesPath, "daemon", "main.js");
   const daemonEnvironment = {
     ...process.env,
@@ -482,18 +526,15 @@ async function startDaemon(passphrase: string): Promise<void> {
       windowsHide: true,
       env: { ...daemonEnvironment, ELECTRON_RUN_AS_NODE: "1" },
     });
-  else
-    daemon = spawn(
-      process.platform === "win32" ? "pnpm.cmd" : "pnpm",
-      ["--filter", "@harness/daemon", "dev"],
-      {
-        cwd: join(here, "..", "..", ".."),
-        stdio: ["pipe", "pipe", "pipe"],
-        windowsHide: true,
-        shell: process.platform === "win32",
-        env: daemonEnvironment,
-      },
-    );
+  else {
+    const command = developmentDaemonCommand(join(here, "..", "..", ".."));
+    daemon = spawn(process.execPath, command.args, {
+      cwd: command.cwd,
+      stdio: ["pipe", "pipe", "pipe"],
+      windowsHide: true,
+      env: { ...daemonEnvironment, ELECTRON_RUN_AS_NODE: "1" },
+    });
+  }
   const startup = new DaemonStartupMonitor();
   let stderr = "";
   let spawnError: Error | undefined;
@@ -515,6 +556,7 @@ async function startDaemon(passphrase: string): Promise<void> {
   daemon.stdin?.end();
   while (!startup.expired) {
     await new Promise((resolveWait) => setTimeout(resolveWait, 250));
+    if (quitting) throw new Error("应用正在退出，已取消等待 daemon 启动");
     if (spawnError) throw spawnError;
     if (startup.failure) throw startup.failure;
     if (exited) throw daemonStartupError(stderr, exited.code);
@@ -572,7 +614,10 @@ async function normalizeAndPut(
   bytes: Buffer,
   source: "file" | "clipboard" | "screenshot",
   allowedProviders: string[],
-) {
+  originalFileName?: string,
+): Promise<DesktopAttachment> {
+  assertAttachmentSize(bytes.byteLength);
+  const fileName = typeof originalFileName === "string" ? attachmentFileName(originalFileName) : undefined;
   const { default: sharp } = await import("sharp");
   const metadata = await sharp(bytes, { animated: true }).metadata();
   if (
@@ -587,9 +632,9 @@ async function normalizeAndPut(
     .rotate()
     .toFormat(format as "png" | "jpeg" | "gif" | "webp")
     .toBuffer();
-  if (normalized.byteLength > 30_000_000) throw new Error("图片不能超过 30 MB");
+  assertAttachmentSize(normalized.byteLength);
   const mimeType = `image/${format}`;
-  const attachment = await daemonRequest(
+  const attachment = await daemonRequest<AttachmentRef>(
     {
       id: newId("request"),
       method: "attachment.put",
@@ -598,6 +643,7 @@ async function normalizeAndPut(
         mimeType,
         source,
         allowedProviders,
+        ...(fileName ? { fileName } : {}),
       },
     },
     60_000,
@@ -614,7 +660,46 @@ async function normalizeAndPut(
   return {
     attachment,
     previewDataUrl: `data:image/png;base64,${preview.toString("base64")}`,
+    ...(fileName ? { fileName } : {}),
   };
+}
+
+function attachmentProviders(value: unknown): string[] {
+  if (!Array.isArray(value) || !value.every(item => typeof item === "string" && item.length > 0)) throw new Error("无效的附件模型范围");
+  return value;
+}
+
+function assertAttachmentSize(size: number): void {
+  if (size === 0 || size > MAX_ATTACHMENT_BYTES) throw new Error("附件大小必须在 1 字节到 30 MB 之间");
+}
+
+async function readAttachmentFile(path: string): Promise<Buffer> {
+  const metadata = await stat(path);
+  if (!metadata.isFile()) throw new Error("请选择有效的文件附件");
+  assertAttachmentSize(metadata.size);
+  const bytes = await readFile(path);
+  assertAttachmentSize(bytes.byteLength);
+  return bytes;
+}
+
+function decodeAttachmentBytes(value: unknown): Buffer {
+  if (typeof value !== "string" || !value || value.length % 4 !== 0 || value.length > Math.ceil(MAX_ATTACHMENT_BYTES / 3) * 4 || !/^[A-Za-z0-9+/]+={0,2}$/.test(value)) throw new Error("附件内容无效或超过 30 MB，请重新选择文件");
+  const bytes = Buffer.from(value, "base64");
+  if (bytes.toString("base64") !== value) throw new Error("附件内容编码无效，请重新选择文件");
+  assertAttachmentSize(bytes.byteLength);
+  return bytes;
+}
+
+async function putFileBytes(bytes: Buffer, originalFileName: string, source: "file" | "clipboard", allowedProviders: string[]): Promise<DesktopAttachment> {
+  const fileName = typeof originalFileName === "string" ? attachmentFileName(originalFileName) : undefined;
+  const mimeType = fileName ? attachmentMimeTypeForFileName(fileName) : undefined;
+  if (!fileName || !mimeType) throw new Error("不支持此文件格式。请选择文本、源代码、PDF、DOCX 或 PNG、JPEG、GIF、WebP 图片");
+  assertAttachmentSize(bytes.byteLength);
+  if (mimeType.startsWith("image/")) return normalizeAndPut(bytes, source, allowedProviders, fileName);
+  const attachment = await daemonRequest<AttachmentRef>({ id: newId("request"), method: "attachment.put", params: {
+    base64: bytes.toString("base64"), mimeType, fileName, source, allowedProviders,
+  } }, 60_000);
+  return { attachment, previewDataUrl: "", fileName };
 }
 
 async function daemonRequest<T = unknown>(

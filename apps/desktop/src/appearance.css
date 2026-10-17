@@ -168,11 +168,7 @@
     .composer-project-bar button,
     .topbar select,
     .tool-group-summary strong
-  ),
-:root[data-appearance]
-  .workbench
-  .md-content
-  :is(h1, h2, h3, h4, h5, h6, strong) {
+  ) {
   color: var(--color-text);
 }
 :root[data-appearance] .workbench .sidebar nav button[aria-current="page"],
@@ -192,31 +188,6 @@
 :root[data-appearance] .workbench main {
   border-color: var(--line);
 }
-:root[data-appearance]
-  .workbench
-  .markdown-message
-  :is(.md-code-block pre, .md-source) {
-  color: var(--color-text);
-  background: var(--panel);
-  font-family: var(--code-font);
-  font-size: var(--code-font-size);
-  font-weight: var(--code-font-weight);
-}
-:root[data-appearance] .workbench .md-content :not(pre) > code {
-  color: var(--color-text);
-  background: var(--accent-soft);
-  border-color: var(--line);
-}
-:root[data-appearance]
-  .workbench
-  .md-content
-  :is(blockquote, th, tr:nth-child(even) td) {
-  color: var(--color-text);
-  background: var(--panel);
-}
-:root[data-appearance] .workbench .md-content a {
-  color: var(--accent);
-}
 :root[data-appearance] .workbench .prompt-send {
   color: var(--appearance-on-accent);
   background: var(--accent);
@@ -224,46 +195,6 @@
 :root[data-appearance] .workbench .prompt-add {
   color: var(--color-text);
   background: var(--panel);
-}
-:root[data-appearance-tone="dark"]
-  .workbench
-  :is(.hljs-keyword, .hljs-selector-tag, .hljs-literal) {
-  color: #c9a6ef;
-}
-:root[data-appearance-tone="dark"]
-  .workbench
-  :is(.hljs-string, .hljs-attr, .hljs-addition) {
-  color: #a4ce9c;
-}
-:root[data-appearance-tone="dark"]
-  .workbench
-  :is(.hljs-title, .hljs-function, .hljs-section) {
-  color: #9cc7ed;
-}
-:root[data-appearance-tone="dark"]
-  .workbench
-  :is(.hljs-number, .hljs-symbol, .hljs-built_in) {
-  color: #e7bc8a;
-}
-:root[data-appearance-tone="light"]
-  .workbench
-  :is(.hljs-keyword, .hljs-selector-tag, .hljs-literal) {
-  color: #7635a0;
-}
-:root[data-appearance-tone="light"]
-  .workbench
-  :is(.hljs-string, .hljs-attr, .hljs-addition) {
-  color: #216638;
-}
-:root[data-appearance-tone="light"]
-  .workbench
-  :is(.hljs-title, .hljs-function, .hljs-section) {
-  color: #175da2;
-}
-:root[data-appearance-tone="light"]
-  .workbench
-  :is(.hljs-number, .hljs-symbol, .hljs-built_in) {
-  color: #914b16;
 }
 :root[data-diff-markers="color"][data-appearance-tone="dark"] .diff-add {
   background: #238b4530;
@@ -325,20 +256,17 @@
 }
 :root[data-appearance]
   .workbench
-  :is(.md-content, .md-source, .user-message, .prompt-textarea) {
+  :is(.user-message, .prompt-textarea) {
   font-family: var(--content-font);
   font-weight: var(--content-font-weight);
   font-size: var(--ui-font-size);
   color: var(--color-text);
 }
-:root[data-appearance] .workbench .md-content :is(p, li, blockquote, td, th) {
-  font-size: inherit;
-  font-family: inherit;
-}
 :root[data-appearance]
   .workbench
   :is(
     .md-code-block pre,
+    .md-source,
     .md-content code,
     .diff-table,
     .diff-table pre,
@@ -352,9 +280,12 @@
 :root[data-appearance] .workbench .md-code-block pre code {
   font: inherit;
 }
-:root[data-appearance] .workbench :is(.md-code-block, .md-code-toolbar) {
-  background: var(--panel);
-  border-color: var(--line);
+:root[data-appearance] .workbench .markdown-message .md-action {
+  font-size: max(11px, calc(var(--ui-font-size) - 2px));
+  font-weight: 400;
+}
+:root[data-appearance] .workbench .md-code-toolbar {
+  font-size: max(11px, calc(var(--ui-font-size) - 3px));
 }
 :root[data-appearance][data-pointer-cursor="false"]
   .workbench

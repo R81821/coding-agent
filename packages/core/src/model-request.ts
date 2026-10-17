@@ -1,7 +1,7 @@
 import type { ModelRequest } from "@harness/protocol";
 import type { ModelProvider } from "@harness/providers";
 export interface RequestTiming {
-  purpose: "main" | "compaction" | "review" | "sampling";
+  purpose: "main" | "compaction" | "review" | "sampling" | "memory";
   durationMs: number;
   succeeded: boolean;
   maxOutputTokens?: number;

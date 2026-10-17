@@ -1,4 +1,4 @@
-import type { GenerationPolicy, ModelDescriptor, ModelRequest } from "@harness/protocol";
+import type { GenerationPolicy, ModelDescriptor, ModelMessage, ModelRequest } from "@harness/protocol";
 
 export const DEFAULT_MAX_OUTPUT_TOKENS = 393_216;
 export const DEFAULT_REVIEW_MAX_OUTPUT_TOKENS = 32_768;
@@ -25,7 +25,13 @@ export function nextReviewOutputTokens(previousActual: number, hardLimit = DEFAU
 export function estimateRequestInputTokens(request: Pick<ModelRequest, "messages" | "tools">): number {
   const payload = JSON.stringify({ messages: request.messages, tools: request.tools });
   const asciiLength = payload.replace(/[^\x00-\x7f]/g, "").length;
-  return Math.max(1, Math.ceil(asciiLength / 2 + Buffer.byteLength(payload, "utf8") - asciiLength));
+  return Math.max(1, Math.ceil(asciiLength / 2 + Buffer.byteLength(payload, "utf8") - asciiLength + fileInputTokenReserve(request.messages)));
+}
+
+/** File refs expand to extracted document text at provider dispatch. */
+export function fileInputTokenReserve(messages: ModelMessage[]): number {
+  return messages.flatMap(message => message.content).reduce((total, part) => part.type !== "file" ? total
+    : total + (part.attachment.textTokenEstimate ?? Math.ceil(part.attachment.byteLength / 2)), 0);
 }
 
 /** Never removes input evidence to create room for generated text. */

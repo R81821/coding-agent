@@ -2,6 +2,11 @@ import { createHash } from "node:crypto";
 import { readFile, writeFile } from "node:fs/promises";
 import { isAbsolute, relative, resolve } from "node:path";
 import { AGENTS_MD_TEMPLATE } from "./context.js";
+import type { MemoryRecord } from "@harness/protocol";
+
+export function knowledgeFingerprint(memory: MemoryRecord): string {
+  return createHash("sha256").update(JSON.stringify([memory.content, memory.scope, memory.scopeId, memory.kind, memory.key, memory.expiresAt])).digest("hex");
+}
 
 export interface ProjectTrustFile {
   path: string;
@@ -13,11 +18,13 @@ export interface ProjectTrustRecord {
   workspacePath: string;
   files: Array<{ path: string; sha256: string }>;
   trustedAt: string;
+  memoryRefs?: Array<{ id: string; hash: string }>;
 }
 
 export interface ProjectTrustRepository {
   saveProjectTrust(workspacePath: string, value: unknown): void;
   getProjectTrust<T>(workspacePath: string): T | undefined;
+  listMemories?(): MemoryRecord[];
 }
 
 export class ProjectTrustService {
@@ -40,14 +47,16 @@ export class ProjectTrustService {
     return { files, trusted, changed };
   }
 
-  trust(workspacePath: string, files: Array<{ path: string; sha256: string }>): ProjectTrustRecord {
+  trust(workspacePath: string, files: Array<{ path: string; sha256: string }>, memoryRefs?: ProjectTrustRecord["memoryRefs"]): ProjectTrustRecord {
     const root = resolve(workspacePath);
     for (const file of files) {
       const candidate = resolve(root, file.path);
       const rel = relative(root, candidate);
       if (isAbsolute(rel) || rel.startsWith("..")) throw new Error(`Trusted instruction path escapes workspace: ${file.path}`);
     }
-    const record = { workspacePath: root, files, trustedAt: new Date().toISOString() };
+    const previous = this.repository.getProjectTrust<ProjectTrustRecord>(root);
+    const refs = memoryRefs ?? (JSON.stringify(previous?.files) === JSON.stringify(files) ? previous?.memoryRefs : undefined);
+    const record = { workspacePath: root, files, trustedAt: new Date().toISOString(), ...(refs ? { memoryRefs: refs } : {}) };
     this.repository.saveProjectTrust(root, record);
     return record;
   }
@@ -76,12 +85,18 @@ export class ProjectTrustService {
     const root = resolve(workspacePath);
     const record = this.repository.getProjectTrust<ProjectTrustRecord>(root);
     if (!record) return undefined;
+    const memories = this.repository.listMemories?.() ?? [];
+    const staleKnowledge = record.memoryRefs?.some(ref => {
+      const memory = memories.find(item => item.id === ref.id);
+      return !memory || memory.status !== "approved" || memory.expiresAt && Date.parse(memory.expiresAt) <= Date.now() || knowledgeFingerprint(memory) !== ref.hash;
+    });
     const contents: string[] = [];
     for (const file of record.files) {
       const candidate = resolve(root, file.path);
       const content = await readFile(candidate, "utf8");
       if (createHash("sha256").update(content).digest("hex") !== file.sha256) return undefined;
-      contents.push(`# ${file.path}\n${content}`);
+      const active = staleKnowledge ? content.replace(/<!-- harness-memory:start -->[\s\S]*?<!-- harness-memory:end -->/, "已同步的项目知识发生变化，本轮使用当前有效的项目记忆；请在记忆页重新同步项目规范。") : content;
+      contents.push(`# ${file.path}\n${active}`);
     }
     return contents.length ? contents.join("\n\n") : undefined;
   }

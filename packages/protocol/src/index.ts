@@ -7,6 +7,7 @@ import { ConversationTaskQueueReferenceSchema } from "./conversation-tasks.js";
 export * from "./conversation-tasks.js";
 export * from "./workflow.js";
 export * from "./mcp.js";
+export * from "./attachments.js";
 
 export const TrustLevelSchema = z.enum([
   "app_policy",
@@ -64,6 +65,8 @@ export const AttachmentRefSchema = z.object({
   id: z.string(),
   sha256: z.string().regex(/^[a-f0-9]{64}$/),
   mimeType: z.string(),
+  fileName: z.string().min(1).max(255).optional(),
+  textTokenEstimate: z.number().int().nonnegative().optional(),
   byteLength: z.number().int().nonnegative(),
   width: z.number().int().positive().optional(),
   height: z.number().int().positive().optional(),
@@ -78,6 +81,7 @@ export type AttachmentRef = z.infer<typeof AttachmentRefSchema>;
 export const ContentPartSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("text"), text: z.string(), trust: TrustLevelSchema }),
   z.object({ type: z.literal("image"), attachment: AttachmentRefSchema, detail: z.enum(["auto", "low", "high"]).default("auto") }),
+  z.object({ type: z.literal("file"), attachment: AttachmentRefSchema }),
   z.object({ type: z.literal("tool_call"), toolCallId: z.string(), name: z.string(), input: z.record(z.string(), z.unknown()) }),
   z.object({ type: z.literal("tool_result"), toolCallId: z.string(), output: z.unknown(), trust: z.literal("untrusted_tool") })
 ]);
@@ -154,7 +158,7 @@ export type ToolCallOrigin = z.infer<typeof ToolCallOriginSchema>;
 export const UsageSchema = z.object({
   reasoningTokens: z.number().int().nonnegative().optional(),
   costKnown: z.boolean().optional(),
-  purpose: z.enum(["main", "compaction", "review", "sampling"]).optional(),
+  purpose: z.enum(["main", "compaction", "review", "sampling", "memory"]).optional(),
   cachedInputTokens: z.number().int().nonnegative().optional(),
   inputTokens: z.number().int().nonnegative(),
   outputTokens: z.number().int().nonnegative(),
@@ -390,7 +394,7 @@ export const ModelRequestSchema = z.object({
   reasoningEffort: ReasoningEffortSchema.optional(),
   disableThinking: z.boolean().optional(),
   cacheDiagnostics: z.boolean().optional(),
-  purpose: z.enum(["main", "compaction", "review", "sampling"]).optional(),
+  purpose: z.enum(["main", "compaction", "review", "sampling", "memory"]).optional(),
   promptCacheKey: z.string().max(64).optional(),
   runId: z.string(),
   model: ModelDescriptorSchema,
@@ -478,7 +482,7 @@ export const AgentEventSchema = z.discriminatedUnion("type", [
   z.object({ ...eventBase, type: z.literal("plugin_event"), pluginId: z.string(), action: z.string(), detail: z.string().optional() }),
   z.object({ ...eventBase, type: z.literal("search_usage"), providerId: z.string(), searchId: z.string(), resultCount: z.number().int().nonnegative(), usage: z.record(z.string(), z.unknown()).default({}) }),
   z.object({ ...eventBase, type: z.literal("recovery_event"), checkpointId: z.string().optional(), action: z.enum(["restored", "paused_non_idempotent", "failed"]), detail: z.string() }),
-  z.object({ ...eventBase, type: z.literal("model_request_finished"), purpose: z.enum(["main", "compaction", "review", "sampling"]), durationMs: z.number().nonnegative(), succeeded: z.boolean(), maxOutputTokens: z.number().int().positive().optional(), configuredMaxOutputTokens: z.number().int().positive().optional(), attempt: z.number().int().positive().optional(), errorCode: z.string().optional() }),
+  z.object({ ...eventBase, type: z.literal("model_request_finished"), purpose: z.enum(["main", "compaction", "review", "sampling", "memory"]), durationMs: z.number().nonnegative(), succeeded: z.boolean(), maxOutputTokens: z.number().int().positive().optional(), configuredMaxOutputTokens: z.number().int().positive().optional(), attempt: z.number().int().positive().optional(), errorCode: z.string().optional() }),
   z.object({ ...eventBase, type: z.literal("usage"), usage: UsageSchema }),
   // Accepted user input appears in the conversation before model delivery. Its stable ID joins
   // submission and delivery without duplicating the human message after resume or reload.
@@ -584,6 +588,7 @@ export const ProfileSchema = z.object({
   routeWeights: z.object({ quality: z.number(), cost: z.number(), latency: z.number() }),
   toolNames: z.array(z.string()),
   memoryScopes: z.array(z.enum(["session", "project", "global"])),
+  memoryPolicyVersion: z.number().int().nonnegative().optional(),
   skillIds: z.array(z.string()),
   sandbox: z.enum(["local", "docker", "auto"]),
   budget: RunBudgetSchema,
@@ -639,6 +644,21 @@ export const ApprovalRequestSchema = z.object({
 });
 export type ApprovalRequest = z.infer<typeof ApprovalRequestSchema>;
 
+export const MemoryKindSchema = z.enum(["preference", "convention", "decision", "fact", "summary"]);
+export const MemoryCreateSchema = z.object({
+  content: z.string().trim().min(1).max(4000),
+  scope: z.enum(["project", "global"]),
+  scopeId: z.string().min(1),
+  kind: MemoryKindSchema.exclude(["summary"]),
+  key: z.string().trim().min(1).max(120),
+});
+export type MemoryCreate = z.infer<typeof MemoryCreateSchema>;
+export interface MemoryPublicationPreview {
+  workspacePath: string;
+  token: string;
+  files: Array<{ path: string; before: string; after: string }>;
+  memoryIds: string[];
+}
 export const MemoryRecordSchema = z.object({
   id: z.string(),
   content: z.string(),
@@ -646,7 +666,14 @@ export const MemoryRecordSchema = z.object({
   scope: z.enum(["session", "project", "global"]),
   scopeId: z.string(),
   confidence: z.number().min(0).max(1),
-  status: z.enum(["candidate", "approved", "rejected", "expired"]),
+  status: z.enum(["candidate", "approved", "rejected", "expired", "superseded"]),
+  kind: MemoryKindSchema.optional(),
+  key: z.string().max(120).optional(),
+  evidence: z.array(z.object({ source: z.string(), quote: z.string().max(2000) })).max(8).optional(),
+  sources: z.array(z.string()).max(16).optional(),
+  conflictIds: z.array(z.string()).optional(),
+  supersededBy: z.string().optional(),
+  lastSeenAt: z.string().optional(),
   pinned: z.boolean(),
   approvedBy: z.string().optional(),
   createdAt: z.string().datetime(),
@@ -659,7 +686,11 @@ export type MemoryRecord = z.infer<typeof MemoryRecordSchema>;
 export const MemoryPatchSchema = z.object({
   content: z.string().trim().min(1).max(50_000).optional(),
   pinned: z.boolean().optional(),
-  expiresAt: z.string().datetime().nullable().optional()
+  expiresAt: z.string().datetime().nullable().optional(),
+  scope: z.enum(["project", "global"]).optional(),
+  scopeId: z.string().min(1).optional(),
+  kind: MemoryKindSchema.exclude(["summary"]).optional(),
+  key: z.string().trim().min(1).max(120).optional()
 }).strict().refine((value) => Object.keys(value).length > 0, "Empty memory update");
 export type MemoryPatch = z.infer<typeof MemoryPatchSchema>;
 export type MemoryScopeSelection = Pick<MemoryRecord, "scope" | "scopeId">;
@@ -747,7 +778,10 @@ export const DaemonRequestSchema = z.discriminatedUnion("method", [
   z.object({ id: z.string(), method: z.literal("profiles.list") }),
   z.object({ id: z.string(), method: z.literal("profiles.upsert"), params: ProfileSchema }),
   z.object({ id: z.string(), method: z.literal("memory.list"), params: z.object({ scopeId: z.string().optional() }).optional() }),
-  z.object({ id: z.string(), method: z.literal("memory.decide"), params: z.object({ memoryId: z.string(), approved: z.boolean(), actor: z.string() }) }),
+  z.object({ id: z.string(), method: z.literal("memory.decide"), params: z.object({ memoryId: z.string(), approved: z.boolean(), actor: z.string(), replaceConflicts: z.boolean().optional() }) }),
+  z.object({ id: z.string(), method: z.literal("memory.create"), params: MemoryCreateSchema.extend({ actor: z.string() }) }),
+  z.object({ id: z.string(), method: z.literal("memory.publishPreview"), params: z.object({ workspacePath: z.string(), memoryIds: z.array(z.string()).max(100) }) }),
+  z.object({ id: z.string(), method: z.literal("memory.publish"), params: z.object({ workspacePath: z.string(), memoryIds: z.array(z.string()).max(100), token: z.string().regex(/^[a-f0-9]{64}$/) }) }),
   z.object({ id: z.string(), method: z.literal("memory.update"), params: z.object({ memoryId: z.string(), patch: MemoryPatchSchema, actor: z.string() }) }),
   z.object({ id: z.string(), method: z.literal("memory.delete"), params: z.object({ memoryId: z.string() }) }),
   z.object({ id: z.string(), method: z.literal("memory.export"), params: z.object({ memoryIds: z.array(z.string()).max(1000) }) }),
@@ -769,7 +803,7 @@ export const DaemonRequestSchema = z.discriminatedUnion("method", [
   z.object({ id: z.string(), method: z.literal("project.trust"), params: z.object({ workspacePath: z.string(), files: z.array(z.object({ path: z.string(), sha256: z.string() })) }) }),
   z.object({ id: z.string(), method: z.literal("project.scaffold"), params: z.object({ workspacePath: z.string() }) }),
   z.object({ id: z.string(), method: z.literal("connectors.pairing"), params: z.object({ connector: z.enum(["telegram", "feishu"]) }) }),
-  z.object({ id: z.string(), method: z.literal("attachment.put"), params: z.object({ base64: z.string(), mimeType: z.string(), source: z.enum(["file", "clipboard", "screenshot", "telegram", "feishu", "browser"]), allowedProviders: z.array(z.string()).default([]) }) })
+  z.object({ id: z.string(), method: z.literal("attachment.put"), params: z.object({ base64: z.string(), mimeType: z.string(), fileName: z.string().min(1).max(255).optional(), source: z.enum(["file", "clipboard", "screenshot", "telegram", "feishu", "browser"]), allowedProviders: z.array(z.string()).default([]) }) })
 ]);
 export type DaemonRequest = z.infer<typeof DaemonRequestSchema>;
 export type DaemonRequestInput = DaemonRequest extends infer Request ? Request extends DaemonRequest ? Omit<Request, "id"> : never : never;
@@ -790,7 +824,7 @@ export const DEFAULT_PROFILE: Profile = ProfileSchema.parse({
   preferredModels: [],
   routeWeights: { quality: 0.5, cost: 0.25, latency: 0.25 },
   toolNames: ["read_file", "read_range", "list_files", "search_text", "apply_patch", "terminal", "git_diff", "browser", "web_search", "delegate"],
-  memoryScopes: ["session", "project"],
+  memoryScopes: ["session", "project", "global"],
   skillIds: [],
   sandbox: "auto",
   budget: { maxTurns: 64, maxToolCalls: 128, maxDurationMs: 1_800_000, maxUsd: 5 },

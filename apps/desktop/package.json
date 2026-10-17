@@ -18,13 +18,13 @@
     "@harness/persistence": "workspace:*",
     "@harness/protocol": "workspace:*",
     "@harness/tools": "workspace:*",
-    "lowlight": "^3.3.0",
+    "@streamdown/cjk": "1.0.4",
+    "@streamdown/code": "2.0.0",
     "lucide-react": "^1.39.0",
     "react": "^19.1.1",
     "react-dom": "^19.1.1",
-    "react-markdown": "^10.1.0",
-    "remark-gfm": "^4.0.1",
-    "sharp": "^0.35.5"
+    "sharp": "^0.35.5",
+    "streamdown": "2.7.0"
   },
   "devDependencies": {
     "@electron/get": "5.1.0",

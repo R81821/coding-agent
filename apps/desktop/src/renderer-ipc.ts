@@ -41,6 +41,9 @@ const RENDERER_ALLOWED_METHODS: ReadonlySet<DaemonRequest["method"]> = new Set([
   "tasks.upsert",
   "profiles.list",
   "memory.list",
+  "memory.create",
+  "memory.publishPreview",
+  "memory.publish",
   "memory.decide",
   "memory.update",
   "memory.delete",
@@ -99,7 +102,7 @@ export function sanitizeRendererRequest(
   if (!RENDERER_ALLOWED_METHODS.has(method as DaemonRequest["method"])) {
     throw new Error(`Renderer cannot invoke daemon method: ${method}`);
   }
-  if (["approval.decide", "plan.decide", "memory.decide", "memory.update"].includes(method)) {
+  if (["approval.decide", "plan.decide", "memory.decide", "memory.update", "memory.create"].includes(method)) {
     return {
       method: method as DaemonRequest["method"],
       params: { ...(params as Record<string, unknown>), actor: "desktop:user" },

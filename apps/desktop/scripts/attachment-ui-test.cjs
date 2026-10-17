@@ -21,6 +21,9 @@ const sessions = new Map(["a", "b"].map(id => [id, { id, workspacePath: "D:/fixt
 const runs = new Map();
 const requests = [];
 let attachments;
+let files;
+let fileChooserError = false;
+const importedAttachments = [];
 function sessionRuns(id) { return [...runs.values()].filter(run => run.spec.sessionId === id); }
 async function fixtureRequest(request) {
   requests.push(request);
@@ -34,13 +37,27 @@ async function fixtureRequest(request) {
     case "projects.list": return [{ id: "project", workspacePath: "D:/fixture-attachment-project", createdAt: at, updatedAt: at }];
     case "session.view": return { session: sessions.get(params.sessionId), runs: sessionRuns(params.sessionId), hasMore: false };
     case "fixture.chooseImages": assert.deepEqual(params.allowedProviders, profile.allowedProviders); return attachments;
+    case "fixture.chooseFiles":
+      assert.deepEqual(params.allowedProviders, profile.allowedProviders);
+      if (fileChooserError) throw new Error("测试文件读取失败");
+      return files;
+    case "fixture.putFile":
+    case "fixture.putImage": {
+      assert.deepEqual(params.allowedProviders, profile.allowedProviders);
+      await new Promise(resolve => setTimeout(resolve, 250));
+      const id = `imported-${importedAttachments.length}`;
+      const attachment = { id, sha256: "a".repeat(64), mimeType: params.mimeType || "text/plain", byteLength: Buffer.from(params.base64, "base64").length, encryptedPath: `fixture/${id}.enc`, source: params.source, trust: "untrusted_attachment", allowedProviders: params.allowedProviders, createdAt: at, ...(params.fileName ? { fileName: params.fileName } : {}) };
+      const result = { attachment, previewDataUrl: params.mimeType?.startsWith("image/") ? `data:${params.mimeType};base64,${params.base64}` : "", ...(params.fileName ? { fileName: params.fileName } : {}) };
+      importedAttachments.push(result);
+      return result;
+    }
     case "run.start": runs.set(params.id, { spec: params, status: "paused", events: [] }); return { runId: params.id };
     case "run.eventPage": return { runId: params.runId, status: "paused", events: [], nextSequence: params.afterSequence ?? -1, hasMore: false };
     default: return [];
   }
 }
 ipcMain.handle("attachment-fixture", (_event, request) => {
-  assert.equal(request.method, "fixture.chooseImages");
+  assert.ok(["fixture.chooseImages", "fixture.chooseFiles", "fixture.putFile", "fixture.putImage"].includes(request.method));
   return fixtureRequest(request);
 });
 ipcMain.handle("harness:request", (_event, request) => fixtureRequest({ ...request, ...sanitizeRendererRequest(request.method, request.params) }));
@@ -48,6 +65,9 @@ const preload = path.join(scratch, "preload.cjs");
 fs.writeFileSync(preload, `const {contextBridge,ipcRenderer}=require('electron');contextBridge.exposeInMainWorld('harness',{
   desktopPlatform:'win32',restoreUnlock:async()=>({ok:true}),request:request=>ipcRenderer.invoke('harness:request',request),
   chooseImages:allowedProviders=>ipcRenderer.invoke('attachment-fixture',{method:'fixture.chooseImages',params:{allowedProviders}}),
+  chooseFiles:allowedProviders=>ipcRenderer.invoke('attachment-fixture',{method:'fixture.chooseFiles',params:{allowedProviders}}),
+  putFile:(base64,mimeType,fileName,source,allowedProviders)=>ipcRenderer.invoke('attachment-fixture',{method:'fixture.putFile',params:{base64,mimeType,fileName,source,allowedProviders}}),
+  putImage:(base64,mimeType,source,allowedProviders,fileName)=>ipcRenderer.invoke('attachment-fixture',{method:'fixture.putImage',params:{base64,mimeType,source,allowedProviders,fileName}}),
   desktopCommand:async()=>{},setTitlebarTheme:async()=>{},browserState:async(sessionId)=>({sessionId,tabs:[],visible:false,revealVersion:0}),
   onBrowserState:()=>()=>{},browserLayout:async()=>{},browserCommand:async()=>{},chooseWorkspace:async()=>undefined
 });`);
@@ -64,6 +84,14 @@ async function waitFor(code, label) {
   throw new Error(`${label}: timed out\n${await evaluate("document.body.innerText")}`);
 }
 async function click(selector) { await evaluate(`document.querySelector(${JSON.stringify(selector)}).click()`); }
+async function waitForFixture(predicate, label) {
+  const deadline = Date.now() + 10000;
+  while (Date.now() < deadline) {
+    if (predicate()) { checks.push(label); return; }
+    await new Promise(resolve => setTimeout(resolve, 40));
+  }
+  throw new Error(`${label}: timed out`);
+}
 async function openSession(id) {
   await evaluate(`[...document.querySelectorAll('.history-session')].find(el=>el.textContent.includes('附件会话 ${id}')).click()`);
   await waitFor("!document.querySelector('.new-task-button').disabled", `opened session ${id}`);
@@ -84,6 +112,10 @@ async function main() {
     attachment: { id: `attachment-${index}`, sha256: String(index).repeat(64), mimeType: "image/png", byteLength: index === 0 ? 2097152 : 1024 + index, width: 160, height: 96, encryptedPath: `fixture/${index}.enc`, source: index === 5 ? "clipboard" : "file", trust: "untrusted_attachment", allowedProviders: ["openai"], createdAt: at },
     previewDataUrl: index === 1 ? "" : thumbnail,
     ...(fileName ? { fileName } : {}),
+  }));
+  files = [["项目需求.txt", "text/plain", 3072], ["message-renderer.tsx", "text/plain", 12288], ["sales-dashboard.pdf", "application/pdf", 65536]].map(([fileName, mimeType, byteLength], index) => ({
+    attachment: { id: `file-${index}`, sha256: String(index + 6).repeat(64), mimeType, byteLength, encryptedPath: `fixture/file-${index}.enc`, source: "file", trust: "untrusted_attachment", allowedProviders: ["openai"], createdAt: at, fileName },
+    previewDataUrl: "",
   }));
   win = new BrowserWindow({ show: false, width: 1324, height: 839, webPreferences: { preload, contextIsolation: true, nodeIntegration: false, backgroundThrottling: false, offscreen: true } });
   win.webContents.on("preload-error", (_event, _file, error) => { throw error; });
@@ -154,6 +186,66 @@ async function main() {
   assert.deepEqual(submitted.attachments, attachments.filter((_, index) => index !== 2).map(item => item.attachment));
   assert.equal(submitted.request, "请参考这些图片调整界面");
   checks.push("submission retains exact AttachmentRef values without local filename or preview metadata");
+  win.setSize(1324, 839);
+  await openSession("b");
+  await click(".prompt-add");
+  await waitFor("document.querySelector('.prompt-add-panel [title=添加文件]')", "add menu exposes a separate generic file chooser");
+  await click('.prompt-add-panel [title="添加文件"]');
+  await waitFor("document.querySelectorAll('[data-slot=attachment]').length === 3", "file chooser imports TXT, TSX and PDF attachments");
+  assert.equal(requests.filter(request => request.method === "fixture.chooseFiles").length, 1);
+  checks.push("generic file chooser receives profile provider scope");
+  assertCheck(await evaluate("[...document.querySelectorAll('[data-slot=attachment]')].every(card=>card.dataset.orientation==='horizontal' && !card.querySelector('img'))"), "ordinary files use horizontal Attachment cards with file icons");
+  assert.equal(await evaluate("document.querySelector('[data-attachment-id=file-1] [data-slot=attachment-title]').textContent"), "message-renderer.tsx");
+  assert.match(await evaluate("document.querySelector('[data-attachment-id=file-1] [data-slot=attachment-description]').textContent"), /TypeScript.*12\s*KB/);
+  assert.match(await evaluate("document.querySelector('[data-attachment-id=file-2] [data-slot=attachment-description]').textContent"), /PDF.*64\s*KB/);
+  checks.push("persisted filenames, code type and actual file byte sizes are shown");
+  assert.equal(requests.filter(request => request.method === "model.current").at(-1).params.needsVision, false);
+  checks.push("a file-only draft does not require a vision model");
+  await screenshot("files-desktop.png");
+  await openSession("a");
+  await waitFor("!document.querySelector('[data-slot=attachment]')", "sent image session has an empty attachment draft");
+  await openSession("b");
+  await waitFor("document.querySelectorAll('[data-slot=attachment]').length === 3", "generic file drafts restore after switching sessions");
+  fileChooserError = true;
+  await click(".prompt-add");
+  await waitFor("document.querySelector('.prompt-add-panel [title=添加文件]')", "generic file menu can reopen");
+  await click('.prompt-add-panel [title="添加文件"]');
+  await waitFor("document.querySelector('.composer-upload-error')?.textContent.includes('测试文件读取失败')", "file chooser failure is visible next to composer");
+  assert.equal(await evaluate("document.querySelectorAll('[data-slot=attachment]').length"), 3);
+  checks.push("a failed file import keeps the existing draft");
+  fileChooserError = false;
+  await evaluate("(() => {const field=document.querySelector('.prompt-textarea');Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype,'value').set.call(field,'请分析代码和这些附件');field.dispatchEvent(new Event('input',{bubbles:true}));})()");
+  await evaluate(`(() => {const transfer=new DataTransfer();transfer.items.add(new File(['drop text'],'dragged-notes.txt',{type:'text/plain'}));transfer.items.add(new File([Uint8Array.from(atob(${JSON.stringify(thumbnail.split(",")[1])}),c=>c.charCodeAt(0))],'dragged-preview.png',{type:'image/png'}));document.querySelector('.app-shell').dispatchEvent(new DragEvent('drop',{bubbles:true,cancelable:true,dataTransfer:transfer}));})()`);
+  await waitFor("!!document.querySelector('.composer-upload-status') && document.querySelector('.prompt-send').disabled", "importing dropped files shows pending state and prevents premature send");
+  await waitFor("document.querySelectorAll('[data-slot=attachment]').length === 5 && !document.querySelector('.composer-upload-status')", "a mixed drop imports every file and normalizes the image");
+  assert.equal(requests.filter(request => request.method === "fixture.putFile")[0].params.source, "file");
+  assert.equal(requests.filter(request => request.method === "fixture.putFile")[0].params.fileName, "dragged-notes.txt");
+  assert.equal(requests.filter(request => request.method === "fixture.putImage").length, 1);
+  await waitForFixture(() => requests.filter(request => request.method === "model.current").at(-1)?.params.needsVision === true, "image import refreshes model selection with vision enabled");
+  checks.push("mixed file drop preserves filenames, uses the file importer and enables vision only for images");
+  await evaluate("(() => {const transfer=new DataTransfer();transfer.items.add(new File(['clipboard file'],'clipboard-notes.txt',{type:'text/plain'}));window.dispatchEvent(new ClipboardEvent('paste',{cancelable:true,clipboardData:transfer}));})()");
+  await waitFor("document.querySelectorAll('[data-slot=attachment]').length === 6 && !document.querySelector('.composer-upload-status')", "a pasted nonimage File is imported as an attachment");
+  assert.equal(requests.filter(request => request.method === "fixture.putFile").at(-1).params.source, "clipboard");
+  checks.push("pasted files retain clipboard source");
+  await click('[data-attachment-id="file-0"] [data-slot=attachment-action]');
+  await waitFor("document.querySelectorAll('[data-slot=attachment]').length === 5 && !document.querySelector('[data-attachment-id=file-0]')", "ordinary file remove action targets its own attachment");
+  await screenshot("files-and-images-desktop.png");
+  win.setSize(760, 700);
+  await waitFor("innerWidth===760", "generic file narrow window applied");
+  assertCheck(await evaluate("(() => {const group=document.querySelector('[data-slot=attachment-group]'),g=group.getBoundingClientRect(),p=document.querySelector('.workbench-prompt').getBoundingClientRect();return group.scrollWidth>group.clientWidth && g.right<=p.right+1 && document.documentElement.scrollWidth<=innerWidth;})()"), "mixed generic files and image attachments stay inside narrow composer");
+  await screenshot("files-and-images-narrow.png");
+  await click('[aria-label="发送"]');
+  await waitFor("!document.querySelector('[data-slot=attachment-group]') && document.querySelector('.prompt-textarea').value === ''", "successful mixed file send clears draft");
+  const mixed = requests.filter(request => request.method === "run.start").at(-1).params;
+  const expectedImported = importedAttachments.map(item => item.attachment);
+  assert.deepEqual(mixed.attachments, [...files.slice(1).map(item => item.attachment), ...expectedImported]);
+  assert.equal(mixed.request, "请分析代码和这些附件");
+  checks.push("mixed file submission sends exact persisted refs for PDF, code, text and image without display metadata");
+  await evaluate("(() => {const transfer=new DataTransfer();transfer.items.add(new File(['belongs to previous session'],'stale-file.txt',{type:'text/plain'}));document.querySelector('.app-shell').dispatchEvent(new DragEvent('drop',{bubbles:true,cancelable:true,dataTransfer:transfer}));})()");
+  await waitFor("!!document.querySelector('.composer-upload-status')", "pending file import is visible before switching session");
+  await openSession("a");
+  await new Promise(resolve => setTimeout(resolve, 400));
+  assertCheck(await evaluate("!document.querySelector('[data-slot=attachment]') && !document.querySelector('.composer-upload-status')"), "a stale file import cannot add an attachment to a different session");
   assert.equal(rendererErrors.length, 0, JSON.stringify(rendererErrors));
   checks.push("renderer has no runtime errors");
   return { checks, rendererErrors, scratch };

@@ -1330,19 +1330,25 @@ export class HarnessDatabase {
   }
 
   saveMemory(memory: MemoryRecord): void {
+    this.saveMemories([memory]);
+  }
+
+  saveMemories(memories: MemoryRecord[]): void {
     this.flushEvents();
     this.db.exec("BEGIN TRANSACTION");
     try {
-      this.upsert("memories", memory.id, memory);
-      this.db
-        .prepare("DELETE FROM memory_search WHERE memory_id=?")
-        .run(memory.id);
-      const terms = tokenize(memory.content)
-        .map((term) => this.crypto.searchToken(term))
-        .join(" ");
-      this.db
-        .prepare("INSERT INTO memory_search (memory_id, terms) VALUES (?, ?)")
-        .run(memory.id, terms);
+      for (const memory of memories) {
+        this.upsert("memories", memory.id, memory);
+        this.db
+          .prepare("DELETE FROM memory_search WHERE memory_id=?")
+          .run(memory.id);
+        const terms = tokenize(memory.content)
+          .map((term) => this.crypto.searchToken(term))
+          .join(" ");
+        this.db
+          .prepare("INSERT INTO memory_search (memory_id, terms) VALUES (?, ?)")
+          .run(memory.id, terms);
+      }
       this.db.exec("COMMIT");
     } catch (error) {
       this.db.exec("ROLLBACK");
@@ -1390,7 +1396,7 @@ export class HarnessDatabase {
       }),
     );
     const now = Date.now();
-    return this.listMemories()
+    const eligible = this.listMemories()
       .filter(
         (item) =>
           item.status === "approved" &&
@@ -1401,12 +1407,17 @@ export class HarnessDatabase {
                 scope.scope === item.scope && scope.scopeId === item.scopeId,
             )) &&
           (!item.expiresAt || Date.parse(item.expiresAt) > now) &&
-          (item.pinned || (matches.get(item.id) ?? 0) > 0),
-      )
+          (item.pinned || item.kind === "preference" || item.kind === "convention" || (matches.get(item.id) ?? 0) > 0),
+      );
+    // Project-specific agreements override global defaults before applying the result limit.
+    const projectKeys = new Set(eligible.filter(item => item.scope === "project" && item.key).map(item => item.key));
+    return eligible.filter(item => !(item.scope === "global" && item.key && projectKeys.has(item.key)))
       .sort(
         (a, b) =>
           Number(b.pinned) - Number(a.pinned) ||
+          Number(b.kind === "preference" || b.kind === "convention") - Number(a.kind === "preference" || a.kind === "convention") ||
           (matches.get(b.id) ?? 0) - (matches.get(a.id) ?? 0) ||
+          (b.updatedAt ?? b.createdAt).localeCompare(a.updatedAt ?? a.createdAt) ||
           a.id.localeCompare(b.id),
       )
       .slice(0, limit);
@@ -1775,7 +1786,8 @@ function projectId(workspacePath: string): string {
 }
 
 function tokenize(value: string): string[] {
+  const cjk = value.match(/[\p{Script=Han}]+/gu) ?? [];
   return [
-    ...new Set(value.toLocaleLowerCase().match(/[\p{L}\p{N}_-]{2,}/gu) ?? []),
+    ...new Set([...(value.toLocaleLowerCase().match(/[\p{L}\p{N}_-]{2,}/gu) ?? []), ...cjk.flatMap(text => Array.from({ length: Math.max(0, text.length - 1) }, (_, i) => text.slice(i, i + 2)))]),
   ].slice(0, 256);
 }

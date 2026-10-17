@@ -1,3 +1,4 @@
+import { learnFromRun } from "../packages/core/src/memory-learning.js";
 import { workflowPrelude, workflowReadTool } from "./workflow-fixture.js";
 import { afterEach, describe, expect, it } from "vitest";
 import { mkdtemp, rm } from "node:fs/promises";
@@ -28,7 +29,7 @@ afterEach(async () => {
 });
 
 describe("HarnessEngine", () => {
-  it("persists a complete event stream and creates reviewed memory", async () => {
+  it.each([false, true])("persists the completed run and isolates memory extraction failures (invalid: %s)", async (invalidMemory) => {
     const root = await mkdtemp(join(tmpdir(), "harness-engine-test-"));
     temporary.push(root);
     const vault = await VaultCrypto.open(
@@ -60,7 +61,7 @@ describe("HarnessEngine", () => {
       async *stream(
         _request: ModelRequest,
       ): AsyncIterable<ProviderStreamEvent> {
-        yield { type: "text_delta", delta: "Implemented and verified." };
+        yield { type: "text_delta", delta: _request.purpose === "memory" ? invalidMemory ? "not-json" : JSON.stringify({ memories: [{ content: "This project uses pnpm.", key: "package-manager", kind: "convention", scope: "project", sourceIndex: 0, quote: "This project uses pnpm." }] }) : "Implemented and verified." };
         yield {
           type: "usage",
           usage: { inputTokens: 20, outputTokens: 5, estimatedUsd: 0 },
@@ -79,6 +80,7 @@ describe("HarnessEngine", () => {
       providers: [provider],
       tools: new ToolRegistry(),
       memory,
+      learnMemory: learnFromRun,
       skills: new SkillService(join(root, "skills")),
       projectTrust: new ProjectTrustService(database),
     });
@@ -90,7 +92,7 @@ describe("HarnessEngine", () => {
     const run: RunSpec = { workflowVersion: 1,
       id: newId("run"),
       sessionId: "session-1",
-      request: "Implement the feature",
+      request: "Implement the feature. This project uses pnpm.",
       workspacePath: root,
       profileId: profile.id,
       attachments: [],
@@ -124,7 +126,15 @@ describe("HarnessEngine", () => {
         .listMemories()
         .map((memoryItem) => memoryItem.status)
         .sort(),
-    ).toEqual(["approved", "candidate"]);
+    ).toEqual(invalidMemory ? ["approved"] : ["approved", "candidate"]);
+    if (!invalidMemory) {
+    const candidate = database.listMemories().find(item => item.status === "candidate")!;
+    expect(candidate).toMatchObject({ kind: "convention", scope: "project", evidence: [{ quote: "This project uses pnpm." }] });
+    expect(memory.retrieve("another task", run.sessionId, root, ["project"])).toEqual([]);
+    memory.decide(candidate.id, true, "desktop:user");
+    expect(memory.retrieve("another task", "next-session", root, profile.memoryScopes)).toContainEqual(expect.objectContaining({ id: candidate.id }));
+    }
+    expect(database.listEvents(run.id)).toContainEqual(expect.objectContaining({ type: "usage", usage: expect.objectContaining({ purpose: "memory" }) }));
     database.close();
     vault.dispose();
   });

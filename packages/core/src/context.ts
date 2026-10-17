@@ -1,5 +1,5 @@
 import { readFile } from "node:fs/promises";
-import type { ModelMessage, Profile, RunSpec, SkillManifest } from "@harness/protocol";
+import type { AttachmentRef, ModelMessage, Profile, RunSpec, SkillManifest } from "@harness/protocol";
 import type { MemoryRecord } from "@harness/protocol";
 import { APP_SAFETY_POLICY } from "./security.js";
 
@@ -69,6 +69,12 @@ export interface ContextInputs {
   trustedSkills?: Array<{ manifest: SkillManifest; instructions: string }>;
 }
 
+export function attachmentContentPart(attachment: AttachmentRef): Extract<ModelMessage["content"][number], { type: "image" | "file" }> {
+  return attachment.mimeType.startsWith("image/")
+    ? { type: "image", attachment, detail: "auto" }
+    : { type: "file", attachment };
+}
+
 export function buildInitialMessages(input: ContextInputs): ModelMessage[] {
   const messages: ModelMessage[] = [
     { role: "system", content: [{ type: "text", text: APP_SAFETY_POLICY, trust: "app_policy" }] },
@@ -88,13 +94,13 @@ export function buildInitialMessages(input: ContextInputs): ModelMessage[] {
     messages.push({ role: "user", content: [{ type: "text", text: `Trusted skill ${skill.manifest.name}@${skill.manifest.version} (source: ${skill.manifest.sourcePath}; bundled resources are relative to this file; existing tool permissions still apply):\n${skill.instructions}`, trust: "trusted_project" }] });
   }
   if (input.memories.length > 0) {
-    messages.push({ role: "user", content: [{ type: "text", text: `User-approved memory (may be stale; verify before acting):\n${input.memories.map((memory) => `- ${memory.content} [source=${memory.source}]`).join("\n")}`, trust: "user_profile" }] });
+    messages.push({ role: "user", content: [{ type: "text", text: `User-approved memory (may be stale; verify before acting; current user instructions take precedence):\n${input.memories.map((memory) => `- ${memory.content} [scope=${memory.scope}; kind=${memory.kind ?? "legacy"}; source=${memory.source}]`).join("\n")}`, trust: "user_profile" }] });
   }
   messages.push({
     role: "user",
     content: [
       { type: "text", text: input.run.request, trust: "user_request" },
-      ...input.run.attachments.map((attachment) => ({ type: "image" as const, attachment, detail: "auto" as const }))
+      ...input.run.attachments.map(attachmentContentPart)
     ]
   });
   return messages;

@@ -86,7 +86,7 @@ export function latestContextUsage(events: readonly AgentEvent[], options: { pre
   return capacityTokens !== undefined && measurement ? { ...measurement, capacityTokens } : undefined;
 }
 export const CacheDiagnosticSchema = z.object({
-  purpose: z.enum(["main", "compaction", "review", "sampling"]),
+  purpose: z.enum(["main", "compaction", "review", "sampling", "memory"]),
   protocol: z.enum(["responses", "chat_completions", "anthropic", "gemini"]),
   reason: z.enum(["first_request", "append", "rewrite", "continuation", "continuation_fallback"]),
   unchangedPrefixItems: z.number().int().nonnegative(), inputItems: z.number().int().nonnegative(),

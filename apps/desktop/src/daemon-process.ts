@@ -1,33 +1,57 @@
 import { spawn, type ChildProcess } from "node:child_process";
 
-/** Wait for the entire Windows launcher tree, not just pnpm's exit event. */
-export async function stopDaemonProcess(child: ChildProcess): Promise<void> {
+const stopping = new WeakMap<ChildProcess, Promise<void>>();
+
+/** Stop once and confirm that the actual database-owning process has exited. */
+export function stopDaemonProcess(child: ChildProcess): Promise<void> {
+  const pending = stopping.get(child);
+  if (pending) return pending;
+  const operation = stopChild(child);
+  stopping.set(child, operation);
+  void operation.catch(() => stopping.delete(child));
+  return operation;
+}
+
+async function stopChild(child: ChildProcess): Promise<void> {
   const pid = child.pid;
-  if (!pid) return;
-  if (process.platform === "win32") {
-    await new Promise<void>((resolve, reject) => {
-      const killer = spawn("taskkill", ["/pid", String(pid), "/t", "/f"], {
-        windowsHide: true, stdio: "ignore",
-      });
-      killer.once("error", reject);
-      killer.once("close", (code) => {
-        if (code === 0 || !isProcessAlive(pid)) resolve();
-        else reject(new Error("旧 daemon 进程未能退出，请关闭旧的开发终端后重试"));
-      });
-    });
-    return;
-  }
-  if (child.exitCode !== null || child.signalCode !== null) return;
-  await new Promise<void>((resolve, reject) => {
+  if (!pid || child.exitCode !== null || child.signalCode !== null) return;
+  let cleanup = () => {};
+  let cleanupKiller = () => {};
+  const exited = new Promise<void>((resolve, reject) => {
     const timer = setTimeout(() => {
       cleanup();
       reject(new Error("旧 daemon 进程未能在 5 秒内退出，请稍后重试"));
     }, 5_000);
-    const exited = () => { cleanup(); resolve(); };
-    const cleanup = () => { clearTimeout(timer); child.off("exit", exited); };
-    child.once("exit", exited);
-    if (!child.kill() && !isProcessAlive(pid)) exited();
+    const onExit = () => { cleanup(); resolve(); };
+    const onError = (error: Error) => { cleanup(); reject(error); };
+    cleanup = () => { clearTimeout(timer); child.off("exit", onExit); child.off("error", onError); };
+    child.once("exit", onExit);
+    child.once("error", onError);
   });
+  try {
+    if (process.platform === "win32") {
+      const killed = new Promise<void>((resolve, reject) => {
+        const killer = spawn("taskkill", ["/pid", String(pid), "/t", "/f"], {
+          windowsHide: true, stdio: "ignore",
+        });
+        const onError = (error: Error) => {
+          if (child.exitCode !== null || child.signalCode !== null) resolve();
+          else reject(error);
+        };
+        const onClose = (code: number | null) => {
+          if (code === 0 || child.exitCode !== null || child.signalCode !== null) resolve();
+          else reject(new Error("旧 daemon 进程未能退出，请关闭旧的开发终端后重试"));
+        };
+        cleanupKiller = () => { killer.off("error", onError); killer.off("close", onClose); };
+        killer.once("error", onError);
+        killer.once("close", onClose);
+      });
+      await Promise.all([killed, exited]);
+    } else {
+      if (!child.kill() && !isProcessAlive(pid)) return;
+      await exited;
+    }
+  } finally { cleanup(); cleanupKiller(); }
 }
 
 function isProcessAlive(pid: number): boolean {
