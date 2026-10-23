@@ -1,0 +1,13 @@
+{
+  "capturedAt": "2026-10-18T08:59:39.134Z",
+  "callId": "call_00_MxImq0nZnK9S65gsWeKI6235",
+  "tool": "terminal",
+  "input": {
+    "command": "cd D:\\npqo; Get-Content dev-server.log -ErrorAction SilentlyContinue; (Invoke-WebRequest -UseBasicParsing http://127.0.0.1:5173/).Content | Select-Object -First 30",
+    "timeoutMs": 60000
+  },
+  "isError": false,
+  "durationMs": 580,
+  "text": "{\n  \"exitCode\": 0,\n  \"stdout\": \"<!doctype html>\\n<html lang=\\\"zh-CN\\\">\\n  <head>\\n    <script type=\\\"module\\\">import { injectIntoGlobalHook } from \\\"/@react-refresh\\\";\\ninjectIntoGlobalHook(window);\\nwindow.$RefreshReg$ = () => {};\\nwindow.$RefreshSig$ = () => (type) => type;</script>\\n\\n    <script type=\\\"module\\\" src=\\\"/@vite/client\\\"></script>\\n\\n    <meta charset=\\\"UTF-8\\\" />\\n    <meta name=\\\"viewport\\\" content=\\\"width=device-width, initial-scale=1.0\\\" />\\n    <meta http-equiv=\\\"Content-Security-Policy\\\" content=\\\"default-src 'self'; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self' ws://127.0.0.1:* http://127.0.0.1:*\\\" />\\n    <title>Harness Agent</title>\\n  </head>\\n  <body>\\n    <div id=\\\"root\\\"></div>\\n    <script type=\\\"module\\\" src=\\\"/src/renderer.tsx\\\"></script>\\n  </body>\\n</html>\\n\\n\\r\\n\",\n  \"stderr\": \"\",\n  \"truncated\": false,\n  \"timedOut\": false\n}",
+  "truncated": false
+}

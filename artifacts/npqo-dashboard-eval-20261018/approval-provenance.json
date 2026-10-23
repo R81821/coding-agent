@@ -1,0 +1,56 @@
+{
+  "runId": "run_a566d631-77eb-418e-ac99-c252a35395ef",
+  "approvals": [
+    {
+      "sequence": 38,
+      "at": "2026-10-18T08:45:38.483Z",
+      "version": 1,
+      "approvedBy": "desktop:user",
+      "approvedAt": "2026-10-18T08:45:38.483Z"
+    },
+    {
+      "sequence": 54,
+      "at": "2026-10-18T08:45:42.849Z",
+      "version": 2,
+      "approvedBy": "desktop:user",
+      "approvedAt": "2026-10-18T08:45:42.849Z"
+    },
+    {
+      "sequence": 114,
+      "at": "2026-10-18T08:45:55.175Z",
+      "version": 3,
+      "approvedBy": "desktop:user",
+      "approvedAt": "2026-10-18T08:45:55.175Z"
+    },
+    {
+      "sequence": 130,
+      "at": "2026-10-18T08:46:27.778Z",
+      "version": 4,
+      "approvedBy": "desktop:user",
+      "approvedAt": "2026-10-18T08:46:27.778Z"
+    },
+    {
+      "sequence": 302,
+      "at": "2026-10-18T08:47:26.992Z",
+      "version": 5,
+      "approvedBy": "desktop:user",
+      "approvedAt": "2026-10-18T08:47:26.991Z"
+    },
+    {
+      "sequence": 353,
+      "at": "2026-10-18T08:50:04.401Z",
+      "version": 6,
+      "approvedBy": "desktop:user",
+      "approvedAt": "2026-10-18T08:50:04.401Z"
+    },
+    {
+      "sequence": 409,
+      "at": "2026-10-18T08:51:02.983Z",
+      "version": 7,
+      "approvedBy": "desktop:user",
+      "approvedAt": "2026-10-18T08:51:02.982Z"
+    }
+  ],
+  "scope": "Recorded RPC event identity; desktop:user cannot identify the physical UI operator.",
+  "evaluatorStatement": "Lead evaluator reported no action on v6 approval; audit collector issued read-only queries only. Do not count the approval as a code fix or a follow-up prompt."
+}

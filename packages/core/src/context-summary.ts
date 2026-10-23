@@ -1,7 +1,8 @@
 import type { ModelDescriptor, ModelMessage, ModelRequest } from "@harness/protocol";
 import type { ModelProvider, ProviderStreamEvent } from "@harness/providers";
-import { estimateRequestInputTokens, resolveRequestOutputTokens } from "./generation-policy.js";
+import { estimateRequestInputTokens, resolveCompactionOutputLimit, resolveRequestOutputTokens } from "./generation-policy.js";
 import { timedProviderStream, type RequestTiming } from "./model-request.js";
+import { preparePromptRequest } from "./prompt-system.js";
 
 const SUMMARY_KEYS = ["goal", "constraints", "decisions", "evidence", "completed", "pending"] as const;
 const ITEM_KEYS = ["id", "text", "status", "tool", "failed", "summary", "decision", "reason", "intent", "revision"];
@@ -15,6 +16,7 @@ export interface ContextSummaryOptions {
   model: ModelDescriptor;
   provider: ModelProvider;
   runId: string;
+  maxOutputTokens?: number;
   messages: ModelMessage[];
   task: string[];
   state: string;
@@ -58,6 +60,12 @@ export function validContextSummary(text: string): boolean {
  */
 export async function summarizeContext(options: ContextSummaryOptions): Promise<string> {
   options.signal.throwIfAborted();
+  const prompt = await preparePromptRequest(options.provider, {
+    runId: options.runId, model: options.model, tools: [], maxOutputTokens: 1,
+    parallelToolCalls: false, store: false, purpose: "compaction",
+    messages: [{ role: "system", content: [{ type: "text", trust: "app_policy", text: SUMMARY_PROMPT }] }],
+  });
+  const maxOutputTokens = resolveCompactionOutputLimit(options.maxOutputTokens === undefined ? undefined : { compactionMaxOutputTokens: options.maxOutputTokens });
   const records = options.messages.map(message => JSON.stringify(message));
   // Prefix weights account for JSON escaping inside the request's text part.
   // Binary search can then size batches without repeatedly serializing history.
@@ -83,7 +91,7 @@ export async function summarizeContext(options: ContextSummaryOptions): Promise<
       runId: options.runId,
       model: options.model,
       messages: [
-        { role: "system", content: [{ type: "text", trust: "app_policy", text: SUMMARY_PROMPT }] },
+        ...prompt.messages,
         { role: "user", content: [{ type: "text", trust: "untrusted_tool", text: `{"task":${task},"state":${stateJson},"records":[${records.slice(offset, end).join(",")}]}` }] },
       ],
       tools: [],
@@ -94,15 +102,15 @@ export async function summarizeContext(options: ContextSummaryOptions): Promise<
     const emptyRequest = makeRequest(offset);
     const emptyTokens = estimateRequestInputTokens(emptyRequest);
     // This also refuses a task/state that cannot fit even without source records.
-    resolveRequestOutputTokens({ model: options.model, maxOutputTokens: Infinity, estimatedInputTokens: emptyTokens });
+    const emptyOutputLimit = resolveRequestOutputTokens({ model: options.model, maxOutputTokens, estimatedInputTokens: emptyTokens });
     const estimateEnd = (end: number): number => Math.ceil(emptyTokens + weights[end]! - weights[offset]! + Math.max(0, end - offset - 1) / 2);
     const capacity = options.model.capabilities.maxContextTokens;
     const overhead = Math.min(1024, Math.floor(capacity / 16));
     const emptyRoom = capacity - emptyTokens - overhead;
-    // Reserve the advertised model output capacity when practical. With no such
-    // ceiling, reserve a fraction of physical room rather than a fixed token cap.
-    // This reservation sizes input batches only; actual output uses all room left.
-    const outputRoom = Math.max(1, Math.floor(Math.min(options.model.capabilities.maxOutputTokens ?? emptyRoom * .2, emptyRoom * .5)));
+    // Reserve a finite summary allowance independent of physical context room.
+    // Later, smaller batches must not increase it beyond model or user limits.
+    const reservationRatio = options.model.capabilities.maxOutputTokens === undefined ? .2 : .5;
+    const outputRoom = Math.max(1, Math.floor(Math.min(emptyOutputLimit, emptyRoom * reservationRatio)));
     const batchInputLimit = capacity - overhead - outputRoom;
     let end = records.length;
     if (estimateEnd(end) > batchInputLimit) {
@@ -117,16 +125,16 @@ export async function summarizeContext(options: ContextSummaryOptions): Promise<
         // A whole record may exceed the preferred reservation but still fit the
         // actual model. Check its exact request estimate before refusing it.
         end = offset + 1;
-        resolveRequestOutputTokens({ model: options.model, maxOutputTokens: Infinity, estimatedInputTokens: estimateRequestInputTokens(makeRequest(end)) });
+        resolveRequestOutputTokens({ model: options.model, maxOutputTokens, estimatedInputTokens: estimateRequestInputTokens(makeRequest(end)) });
       }
     }
     const request = makeRequest(end);
-    request.maxOutputTokens = resolveRequestOutputTokens({ model: options.model, maxOutputTokens: Infinity, estimatedInputTokens: estimateRequestInputTokens(request) });
+    request.maxOutputTokens = resolveRequestOutputTokens({ model: options.model, maxOutputTokens, estimatedInputTokens: estimateRequestInputTokens(request) });
     if (!Number.isFinite(request.maxOutputTokens) || request.maxOutputTokens < 1) throw summaryError("context_budget_exceeded", "the model has no finite output allowance for a continuation summary");
     if (options.beforeRequest && !options.beforeRequest()) throw summaryError("context_summary_budget_exhausted", "the compaction request budget was refused; original history must be retained");
     options.signal.throwIfAborted();
     let generated = "";
-    for await (const event of timedProviderStream(options.provider, request, options.signal, options.onModelRequestFinished)) {
+    for await (const event of timedProviderStream(options.provider, request, options.signal, options.onModelRequestFinished, { configuredMaxOutputTokens: maxOutputTokens, attempt: 1 })) {
       options.signal.throwIfAborted();
       if (event.type === "text_delta") generated += event.delta ?? "";
       if (event.type === "usage" && event.usage) options.onProviderEvent({ ...event, usage: { ...event.usage, purpose: "compaction" } });

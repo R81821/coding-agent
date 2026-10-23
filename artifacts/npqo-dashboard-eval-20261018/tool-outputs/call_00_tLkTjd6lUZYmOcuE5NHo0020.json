@@ -1,0 +1,13 @@
+{
+  "capturedAt": "2026-10-18T08:59:39.136Z",
+  "callId": "call_00_tLkTjd6lUZYmOcuE5NHo0020",
+  "tool": "terminal",
+  "input": {
+    "command": "cd D:\\npqo\n$pkg = Get-Content -Raw package.json\n$pkg = $pkg.Replace('vite --port 5173 --strictPort', 'vite --port 5180 --strictPort')\nSet-Content -Path package.json -Value $pkg -NoNewline -Encoding ascii\n$cfg = Get-Content -Raw vite.config.ts\n$cfg = $cfg.Replace('server: { port: 5173, strictPort: true }', 'server: { port: 5180, strictPort: true }')\nSet-Content -Path vite.config.ts -Value $cfg -NoNewline -Encoding ascii\n$existing = Get-NetTCPConnection -LocalPort 5180 -State Listen -ErrorAction SilentlyContinue\nif (-not $existing) { Start-Process -FilePath 'cmd.exe' -ArgumentList '/c','npm run dev > dev-server.log 2>&1' -WindowStyle Hidden }\nStart-Sleep -Seconds 4\nGet-Content dev-server.log -ErrorAction SilentlyContinue\n(Invoke-WebRequest -UseBasicParsing http://127.0.0.1:5180/).Content | Select-Object -First 8",
+    "timeoutMs": 120000
+  },
+  "isError": false,
+  "durationMs": 5545,
+  "text": "{\n  \"exitCode\": 0,\n  \"stdout\": \"npm notice run npqo-desk@1.0.0 dev\\r\\nnpm notice run vite --port 5180 --strictPort\\r\\n\\r\\n  VITE v7.3.7  ready in 387 ms\\r\\n\\r\\n  �? Local:   http://localhost:5180/\\r\\n  �? Network: use --host to expose\\r\\n  �? press h + enter to show help\\r\\n<!doctype html>\\n<html lang=\\\"en\\\">\\n  <head>\\n    <script type=\\\"module\\\">import { injectIntoGlobalHook } from \\\"/@react-refresh\\\";\\ninjectIntoGlobalHook(window);\\nwindow.$RefreshReg$ = () => {};\\nwindow.$RefreshSig$ = () => (type) => type;</script>\\n\\n    <script type=\\\"module\\\" src=\\\"/@vite/client\\\"></script>\\n\\n    <meta charset=\\\"UTF-8\\\" />\\n    <meta name=\\\"viewport\\\" content=\\\"width=device-width, initial-scale=1.0\\\" />\\n    <meta name=\\\"theme-color\\\" content=\\\"#08070c\\\" />\\n    <meta name=\\\"description\\\" content=\\\"GROKBOT x JEV pixel trading desk dashboard\\\" />\\n    <title>GROKBOT + JEV // trading desk</title>\\n  </head>\\n  <body>\\n    <div id=\\\"root\\\"></div>\\n    <script type=\\\"module\\\" src=\\\"/src/main.tsx\\\"></script>\\n  </body>\\n</html>\\r\\n\\r\\n\",\n  \"stderr\": \"\",\n  \"truncated\": false,\n  \"timedOut\": false\n}",
+  "truncated": false
+}

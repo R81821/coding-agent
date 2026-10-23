@@ -1,0 +1,13 @@
+{
+  "capturedAt": "2026-10-18T09:09:25.221Z",
+  "callId": "call_00_TGhMy80aZRnIwsr5HRIt3372",
+  "tool": "read_file",
+  "input": {
+    "limit": 12,
+    "path": "README.md"
+  },
+  "isError": false,
+  "durationMs": 32,
+  "text": "{\n  \"path\": \"README.md\",\n  \"offset\": 1,\n  \"returnedLines\": 12,\n  \"content\": \"1: # GROKBOT + JEV // 像素交易台\\n2: \\n3: 一个可运行的 React + TypeScript 实时仪表盘：8 个 Agent 卡片、动态金融图表、中央像素房间，全部由同一个可复现的模拟行情事件源驱动。视觉参考来自用户提供的图片，布局、文案和像素场景均为独立实现。\\n4: \\n5: > 所有行情、余额、订单簿和 Agent 指标都是模拟数据，不构成投资建议。\\n6: \\n7: ## 快速开始\\n8: \\n9: 环境：Node.js 20+（本机使用 Node 24）。\\n10: \\n11: ```bash\\n12: npm install\",\n  \"hasMore\": true,\n  \"truncated\": false,\n  \"nextOffset\": 13\n}",
+  "truncated": false
+}

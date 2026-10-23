@@ -61,7 +61,7 @@ export class SequentialWorkflow extends LightweightWorkflow {
       this.sequence.understoodAt = this.state.observationSequence;
       this.resetFrom(0);
     }
-    if (this.needsChange || this.sequence.steps.length) this.state.broaderPolicy = "required";
+    if ((this.state.behaviorPolicyVersion === 1 && this.needsChange) || this.sequence.steps.length) this.state.broaderPolicy = "required";
     synchronizeWorkflowTodos(this.state);
   }
 
@@ -70,6 +70,7 @@ export class SequentialWorkflow extends LightweightWorkflow {
     super.move(phase, detail);
   }
 
+  private get graphRequired() { return this.state.behaviorPolicyVersion === 1 || this.sequence.steps.length > 0; }
   private get sequence() { return this.state.sequential!; }
   private get activeStep() { return this.sequence.steps.find(step => step.id === this.sequence.activeStepId); }
   private get prepared() { return !!this.sequence.understanding && !!this.sequence.architecture && this.sequence.architectureEpoch === this.state.epoch; }
@@ -107,6 +108,7 @@ export class SequentialWorkflow extends LightweightWorkflow {
     if (steps.some(step => !step?.execution)) throw new Error("Every dispatched step must be eligible and define execution.mode and its scope.");
     if (!reason && this.sequence.taskExecutions.some(task => ids.includes(task.stepId) && task.status === "interrupted")) throw new Error("Interrupted tasks require an explicit retry reason after inspecting saved artifacts; unknown writes are never replayed automatically.");
     const tasks = steps.map(step => ({ id: newId("task"), stepId: step!.id, prompt: step!.execution!.prompt ?? `${step!.text}\nAcceptance requirements: ${this.state.requirements.join("; ")}\nArchitecture: ${this.sequence.architecture}\nWork only within this node; return incremental changes. The parent will integrate and verify them.`, mode: step!.execution!.mode, ...(step!.execution!.writePaths ? { writePaths: step!.execution!.writePaths } : {}) }));
+    if (tasks.some(task => task.mode === "write")) this.state.intent = "change";
     for (const task of tasks) {
       const step = this.sequence.steps.find(item => item.id === task.stepId)!;
       step.status = "in_progress"; step.check = pending();
@@ -201,7 +203,7 @@ export class SequentialWorkflow extends LightweightWorkflow {
     delete sequence.patchRecovery;
     this.clearRequirementAcceptance();
     this.state.plan = steps.map(step => step.text);
-    this.state.intent = "change";
+    if (this.state.behaviorPolicyVersion === 1) this.state.intent = "change";
     this.state.broaderPolicy = "required";
   }
   private resetFrom(index: number): void {
@@ -239,7 +241,7 @@ export class SequentialWorkflow extends LightweightWorkflow {
       this.state.requirementIds = value.requirements.map((_, index) => `req-${index + 1}`);
       this.clearRequirementAcceptance();
       this.state.intent = value.intent;
-      if (value.intent === "change") this.state.broaderPolicy = "required";
+      if (value.intent === "change" && this.state.behaviorPolicyVersion === 1) this.state.broaderPolicy = "required";
       this.move("repository_recon", "已记录需求；探索相关文件、入口和测试");
       return;
     }
@@ -271,6 +273,7 @@ export class SequentialWorkflow extends LightweightWorkflow {
       this.commitPlan(value.steps, value.integration, value.mode);
       sequence.selectionPolicy = value.selectionPolicy ?? (value.mode === "adaptive" ? "autonomous" : "manual");
       if (selected) {
+        this.state.intent = "change";
         const step = this.sequence.steps.find(item => item.id === selected.id)!;
         if (step.status === "pending") { step.status = "in_progress"; step.check = pending(); }
         sequence.activeStepId = step.id;
@@ -313,6 +316,7 @@ export class SequentialWorkflow extends LightweightWorkflow {
     else if (sequence.mode === "ordered" && this.activeStep?.status === "in_progress" && this.activeStep.id !== value.stepId) throw new Error("The current step must pass verification first.");
     else if (sequence.steps[index]!.status === "verified") throw new Error("Use reopen_step with a reason to change a verified step.");
     const step = sequence.steps[index]!;
+    this.state.intent = "change";
     delete sequence.patchRecovery;
     sequence.activeStepId = step.id;
     step.status = "in_progress";
@@ -334,8 +338,10 @@ export class SequentialWorkflow extends LightweightWorkflow {
     const risk = tool.assessRisk?.(call.input) ?? tool.contract.risk;
     if (risk === "read" && call.name !== "delegate") return;
     if (call.name === "terminal" && call.input.stdin === undefined && /^(git status --short|git diff --no-ext-diff|git log -5 --oneline|git rev-parse --show-toplevel)$/.test(String(call.input.command).trim())) return;
-    // An attempted mutation establishes change intent even if the gate blocks it.
-    this.state.intent = "change";
+    // Risk and permission are checked independently. A blocked attempt is not a write.
+    if (this.state.behaviorPolicyVersion === 2 && (call.name === "terminal" || call.name === "probe")) return;
+    if (!this.graphRequired) return;
+    if (this.state.behaviorPolicyVersion === 1) this.state.intent = "change";
     this.state.broaderPolicy = "required";
     if (!this.prepared || !this.sequence.steps.length) return "workflow_preparation_required: " + this.nextAction();
     if (this.activeStep?.status !== "in_progress" && this.sequence.selectionPolicy === "autonomous" && this.availableTaskSteps().length) this.selectNext();
@@ -343,7 +349,7 @@ export class SequentialWorkflow extends LightweightWorkflow {
   }
 
   verificationGate(stage: "local" | "broader"): string | undefined {
-    if (!this.needsChange) return;
+    if (!this.needsChange || !this.graphRequired) return;
     if (!this.prepared || !this.sequence.steps.length) return "workflow_preparation_required: " + this.nextAction();
     if (this.sequence.taskExecutions.some(task => task.status === "running" || task.status === "awaiting_integration")) return "Wait for running graph tasks and integrate their results before recording parent verification.";
     if (stage === "local" && !this.activeStep) return "Start or reopen a step before local verification.";
@@ -372,7 +378,7 @@ export class SequentialWorkflow extends LightweightWorkflow {
         active.status = "in_progress";
       }
       if (active) active.check = pending();
-      if (this.needsChange) this.state.broaderPolicy = "required";
+      if (this.needsChange && this.graphRequired) this.state.broaderPolicy = "required";
     }
   }
 
@@ -406,6 +412,7 @@ export class SequentialWorkflow extends LightweightWorkflow {
   }
 
   override recordVerification(run: VerificationRun): void {
+    if (!this.graphRequired) { super.recordVerification(run); return; }
     if (run.epoch !== this.state.epoch || run.revision !== this.state.revision) return;
     const stage = run.stage ?? "local";
     const gate = this.verificationGate(stage);
@@ -433,11 +440,20 @@ export class SequentialWorkflow extends LightweightWorkflow {
   }
 
   override checksCurrent(): boolean {
-    if (!this.needsChange) return super.checksCurrent();
+    if (!this.needsChange || !this.graphRequired) return super.checksCurrent();
     return this.prepared && !this.sequence.taskExecutions.some(task => ["blocked", "queued", "running", "awaiting_integration"].includes(task.status)) && this.sequence.steps.length > 0 && this.sequence.steps.every(step => step.status === "verified" && step.check.status === "passed" && step.check.epoch === this.state.epoch && step.check.revision === this.state.revision) && this.sequence.integration.length > 0 && super.checksCurrent();
   }
 
   nextAction(): string {
+    if (this.state.effect === "unknown") return "Inspect the unconfirmed execution effect with complete current workspace_diff; unknown effects cannot be reported as unchanged.";
+    if (!this.graphRequired) {
+      if (!this.needsChange && this.state.explicitRequirementAcceptance && this.state.requirementsRevision !== this.state.revision) return "Correct check_requirements using complete current observations for the read-only request; tests and diff are optional.";
+      if (!this.needsChange) return "Answer the user's question using relevant evidence. Tools, tests, repository exploration and a graph are needed only when the question requires them.";
+      if (!this.checksCurrent()) return "Run relevant persisted project checks with run_verification; fix failures. High-impact changes also require broader verification. Use advance_workflow configure only when dependencies justify a graph.";
+      if (this.state.diffRevision !== this.state.revision) return "Inspect complete current workspace_diff; for documents review content, links and format.";
+      if (this.state.requirementsRevision !== this.state.revision) return "Use check_requirements with current observations and diffObservationId for every requirement; include actual verificationIds for code/config changes. Plain documentation uses content and diff evidence.";
+      return "Deliver the result with relevant evidence and material limitations.";
+    }
     if (!this.needsChange) return this.state.requirementsRevision === this.state.revision ? "Provide the final read-only report using accepted current observations." : "Inspect the relevant repository scope, then check_requirements with complete current observationIds; read-only acceptance does not require tests or a diff.";
     if (!this.sequence.understanding) return "Use advance_workflow understand with a requirement summary and acceptance requirements, then explore the repository.";
     if (!this.prepared) return "Read/search relevant repository files, then advance_workflow architecture with a summary and fresh evidenceIds.";
@@ -467,7 +483,7 @@ export class SequentialWorkflow extends LightweightWorkflow {
     const suggestedActions: Array<{ action: string; reason: string; stepId?: string }> = [];
     if (this.state.effect === "unknown") { completionBlockers.push("Execution effect is unconfirmed."); suggestedActions.push({ action: "workspace_diff", reason: "Confirm repository contents before using evidence." }); }
     if (this.needsChange) {
-      if (!this.prepared || !this.sequence.steps.length) { completionBlockers.push("Current repository evidence and an implementation plan are required."); suggestedActions.push({ action: "configure", reason: "Atomically record understanding, architecture, steps and real test suites." }); }
+      if (this.graphRequired && (!this.prepared || !this.sequence.steps.length)) { completionBlockers.push("Current repository evidence and an implementation plan are required."); suggestedActions.push({ action: "configure", reason: "Atomically record understanding, architecture, steps and real test suites." }); }
       for (const step of this.sequence.steps) if (step.status !== "verified") completionBlockers.push(`Step ${step.id} lacks passing runtime verification.`);
       for (const stepId of availableSteps) suggestedActions.push({ action: "start_step", stepId, reason: "Its prerequisites are verified; it can be selected or combined with independent work." });
       if (availableSteps.length) suggestedActions.push({ action: "select_next", reason: "Choose any eligible node, or omit stepId to select by priority and critical path." });
@@ -478,10 +494,10 @@ export class SequentialWorkflow extends LightweightWorkflow {
         suggestedActions.push({ action: "run_verification:broader", reason: "Inspect integration behavior; completion still requires all current step and test receipts." });
         suggestedActions.push({ action: "update_plan", reason: "Adjust affected steps while preserving unchanged verification contracts." });
       }
-      if (!this.checksCurrent()) completionBlockers.push("Current local and integration test receipts are required.");
+      if (!this.checksCurrent()) { completionBlockers.push("Current relevant verification receipts are required."); if (!this.graphRequired) suggestedActions.push({ action: "run_verification", reason: "Run checks relevant to the actual change; high-impact changes require broader verification." }); }
       if (this.state.diffRevision !== this.state.revision) { completionBlockers.push("A complete current diff is required."); suggestedActions.push({ action: "workspace_diff", reason: "Collect code evidence reusable when the runtime fingerprint stays unchanged." }); }
     }
-    if (this.state.requirementsRevision !== this.state.revision) { completionBlockers.push("Every acceptance requirement needs current evidence."); suggestedActions.push({ action: "check_requirements", reason: this.needsChange ? "Cite actual current tests and complete diff evidence after prerequisites pass." : "Cite complete current reads or probes; tests and diff are optional." }); }
+    if ((this.needsChange || this.state.explicitRequirementAcceptance) && this.state.requirementsRevision !== this.state.revision) { completionBlockers.push("Every acceptance requirement needs current evidence."); suggestedActions.push({ action: "check_requirements", reason: this.needsChange ? "Cite actual current tests and complete diff evidence after prerequisites pass." : "Cite complete current reads or probes; tests and diff are optional." }); }
     if (!completionBlockers.length) suggestedActions.push({ action: "final_report", reason: "Runtime evidence is current; submit one final report." });
     const checks = (items: z.infer<typeof StepVerificationSchema>[]) => items.map(item => ({ command: item.command.slice(0, 300), cwd: item.cwd.slice(0, 200), hasStdin: item.stdin !== undefined }));
     return { ...super.projection(), sequential: {

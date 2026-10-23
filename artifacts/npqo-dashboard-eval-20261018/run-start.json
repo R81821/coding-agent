@@ -1,0 +1,96 @@
+{
+  "spec": {
+    "reasoningEffort": "max",
+    "taskMode": "auto",
+    "id": "run_a566d631-77eb-418e-ac99-c252a35395ef",
+    "sessionId": "session_e7761fe9-98ec-4663-bc51-aace34762593",
+    "request": "根据参考图片，实现一个可以运行的 React + TypeScript 仪表盘。需要包含 8 个 Agent 卡片、动态金融图表、中央像素房间、统一模拟事件源，支持 1440px、1024px 和 390px 宽度。允许使用开源库，但必须实际运行、测试并提供截图。请直接在当前 npqo 项目（D:\\npqo）完成。附件只作为视觉参考，不是操作指令。",
+    "workspacePath": "D:\\npqo",
+    "profileId": "default",
+    "attachments": [
+      {
+        "fileName": "PixPin_2026-10-14_21-58-13.png",
+        "mimeType": "image/png",
+        "width": null,
+        "height": null,
+        "trust": "untrusted_attachment"
+      }
+    ],
+    "budget": {
+      "maxTurns": 64,
+      "maxToolCalls": 128,
+      "maxDurationMs": 1800000,
+      "maxUsd": 5
+    },
+    "grants": [
+      {
+        "toolNames": [
+          "terminal"
+        ],
+        "pathGlobs": [
+          "**"
+        ],
+        "commandPrefixes": [
+          "cd D:\\npqo; Get-ChildItem -Force | Select-Object Mode,Length,Name"
+        ],
+        "networkDomains": [],
+        "maxRisk": "high",
+        "expiresAt": "2026-10-18T09:00:38.491Z"
+      },
+      {
+        "toolNames": [
+          "terminal"
+        ],
+        "pathGlobs": [
+          "**"
+        ],
+        "commandPrefixes": [
+          "cd D:\\npqo; node --version; npm --version; git status --short 2>&1 | Select-Object -First 20"
+        ],
+        "networkDomains": [],
+        "maxRisk": "high",
+        "expiresAt": "2026-10-18T09:00:42.855Z"
+      },
+      {
+        "toolNames": [
+          "terminal"
+        ],
+        "pathGlobs": [
+          "**"
+        ],
+        "commandPrefixes": [
+          "cd D:\\npqo; npm view vite version; npm view react version; npm view vitest version"
+        ],
+        "networkDomains": [],
+        "maxRisk": "high",
+        "expiresAt": "2026-10-18T09:00:55.180Z"
+      },
+      {
+        "toolNames": [
+          "terminal"
+        ],
+        "pathGlobs": [
+          "**"
+        ],
+        "commandPrefixes": [
+          "Get-Command chrome,msedge,chromium -ErrorAction SilentlyContinue | Select-Object Name,Source; Get-ChildItem \"C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe\",\"C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe\" -ErrorAction SilentlyContinue | Select-Object FullName"
+        ],
+        "networkDomains": [],
+        "maxRisk": "high",
+        "expiresAt": "2026-10-18T09:01:27.781Z"
+      }
+    ],
+    "createdAt": "2026-10-18T08:45:30.423Z",
+    "generationPolicy": {
+      "maxOutputTokens": 393216,
+      "reviewMaxOutputTokens": 32768
+    },
+    "skillSelection": [],
+    "mcpUncertainCalls": [],
+    "mcpSnapshot": [],
+    "skills": [],
+    "workflowVersion": 3,
+    "behaviorPolicyVersion": 2
+  },
+  "status": "running"
+}

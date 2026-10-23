@@ -1,0 +1,17 @@
+{
+  "before": {
+    "tick": "0000",
+    "tooltip": "DAY 11 / TICK 0-27$71,914.80",
+    "value": "$71,914.80",
+    "markerY": "64.28090810753804"
+  },
+  "after": {
+    "tick": "0002",
+    "tooltip": "DAY 11 / TICK 0-25$71,914.80",
+    "value": "$71,914.80",
+    "markerY": "74.93877475562368"
+  },
+  "tickAdvanced": true,
+  "markerMoved": true,
+  "amountStayedStale": true
+}

@@ -341,12 +341,15 @@ describe("durable steering lifecycle", { timeout: 15_000 }, () => {
       pendingNonIdempotentToolCalls: [uncertain] });
     const done = nextResult(h.engine, h.spec.id);
     expect(await h.engine.steerAndResume(h.spec.id, "Cancel the write plan; give me an explanation.", h.profile)).toMatchObject({ accepted: true, resumed: true });
-    expect((await done).status).toBe("completed");
+    // Cancelling the plan does not prove that the interrupted write never happened.
+    const result = await done;
+    expect(result.status, JSON.stringify(result)).toBe("review");
     await h.engine.waitForSettlement(h.spec.id);
     expect(steeringParts(h.requests[0]!)[0]?.content).toEqual([{ type: "text", text: "Cancel the write plan; give me an explanation.", trust: "user_request" }]);
     expect(h.requests[0]!.messages.some(message => message.role === "tool" && message.content.some(part => part.type === "tool_result" && part.toolCallId === uncertain.id))).toBe(true);
     expect(h.database.listEvents(h.spec.id).some(event => event.type === "tool_started" && event.call.id === uncertain.id)).toBe(false);
     expect(h.database.getRun(h.spec.id)?.spec.grants).toEqual([]);
+    expect(h.database.getLatestCheckpoint(h.spec.id)?.workflow?.effect).toBe("unknown");
   });
 
   it("preserves existing budgets when automatically resuming after a new user message", async () => {

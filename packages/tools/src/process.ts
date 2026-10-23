@@ -1,4 +1,6 @@
 import { spawn, type ChildProcess } from "node:child_process";
+import { assertSpawnCommandLineLength } from "./windows-command-line.js";
+export * from "./windows-command-line.js";
 
 export interface ProcessResult {
   exitCode: number;
@@ -13,6 +15,7 @@ export async function runProcess(
   args: string[],
   options: { cwd: string; signal: AbortSignal; timeoutMs: number; stdin?: string; maxOutputBytes?: number }
 ): Promise<ProcessResult> {
+  assertSpawnCommandLineLength(executable, args);
   const maxOutputBytes = options.maxOutputBytes ?? 1_000_000;
   return new Promise((resolve, reject) => {
     const child = spawn(executable, args, { cwd: options.cwd, windowsHide: true, stdio: "pipe", detached: process.platform !== "win32" });

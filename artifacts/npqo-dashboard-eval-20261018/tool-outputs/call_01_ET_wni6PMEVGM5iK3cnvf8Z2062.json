@@ -1,0 +1,12 @@
+{
+  "capturedAt": "2026-10-18T08:46:53.636Z",
+  "callId": "call_01_ET_wni6PMEVGM5iK3cnvf8Z2062",
+  "tool": "terminal",
+  "input": {
+    "command": "cd D:\\npqo; node --version; npm --version; git status --short 2>&1 | Select-Object -First 20"
+  },
+  "isError": true,
+  "durationMs": 1199,
+  "text": "{\n  \"exitCode\": 1,\n  \"stdout\": \"v24.18.0\\r\\n12.0.2\\n\",\n  \"stderr\": \"git : fatal: not a git repository (or any of the parent directories): .git\\r\\n����λ�� ��:1 �ַ�: 44\\r\\n+ ... \\\\npqo; node --version; npm --version; git status --short 2>&1 | Selec ...\\r\\n+                                           ~~~~~~~~~~~~~~~~~~~~~~~\\r\\n    + CategoryInfo          : NotSpecified: (fatal: not a gi...ectories): .git:String) [], RemoteException\\r\\n    + FullyQualifiedErrorId : NativeCommandError\\r\\n \\r\\n\",\n  \"truncated\": false,\n  \"timedOut\": false\n}",
+  "truncated": false
+}

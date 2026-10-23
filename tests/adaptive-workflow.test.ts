@@ -169,7 +169,7 @@ describe("adaptive workflow configuration and planning", () => {
     const unplanned = projection(workflow);
     expect(unplanned.availableSteps).toEqual([]);
     expect(unplanned.completionBlockers.length).toBeGreaterThan(0);
-    expect(unplanned.suggestedActions.some(item => ["understand", "configure"].includes(item.action))).toBe(true);
+    expect(unplanned.suggestedActions.some(item => item.action === "run_verification")).toBe(true);
     workflow.acceptFinalReport("Everything is complete without an implementation plan");
     expect(workflow.canFinish()).toBe(false);
     configure(workflow, [step("service"), step("caller", ["service"]), step("docs")]);

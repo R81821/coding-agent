@@ -83,7 +83,7 @@ export async function connectMcp(raw: McpServerConfig, workspacePath: string, si
   const requestHandlers = callbacks.requestHandlers;
   const reverseRequests = new Map<RequestId, AbortController>();
   const source: McpRequestSource = { serverId: config.id, serverName: config.name, workspacePath: project };
-  const client = new Client({ name: "harness-agent", version: "1.4.51" }, { capabilities: {
+  const client = new Client({ name: "harness-agent", version: "1.4.52" }, { capabilities: {
     roots: { listChanged: true },
     ...(requestHandlers?.onSampling ? { sampling: {} } : {}),
     ...(requestHandlers?.onElicitation ? { elicitation: { form: {}, url: {} } } : {}),

@@ -1,0 +1,12 @@
+{
+  "capturedAt": "2026-10-18T08:46:53.639Z",
+  "callId": "call_01_6LTLHLyIVHKpBv6olVHP5109",
+  "tool": "terminal",
+  "input": {
+    "command": "Get-Command chrome,msedge,chromium -ErrorAction SilentlyContinue | Select-Object Name,Source; Get-ChildItem \"C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe\",\"C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe\" -ErrorAction SilentlyContinue | Select-Object FullName"
+  },
+  "isError": false,
+  "durationMs": 982,
+  "text": "{\n  \"exitCode\": 0,\n  \"stdout\": \"\\r\\nFullName                                                    \\r\\n--------                                                    \\r\\nC:\\\\Program Files\\\\Google\\\\Chrome\\\\Application\\\\chrome.exe       \\r\\nC:\\\\Program Files (x86)\\\\Microsoft\\\\Edge\\\\Application\\\\msedge.exe\\r\\n\\r\\n\\r\\n\",\n  \"stderr\": \"\",\n  \"truncated\": false,\n  \"timedOut\": false\n}",
+  "truncated": false
+}

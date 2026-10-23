@@ -1,0 +1,13 @@
+{
+  "capturedAt": "2026-10-18T09:01:54.419Z",
+  "callId": "call_00_juDLggc23Je6GiLpMv1n7975",
+  "tool": "terminal",
+  "input": {
+    "command": "cd D:\\npqo\n$p = 'src\\components\\EquityPanel.tsx'\n$t = Get-Content -Raw $p\n$old = @'\n    const ratio = Math.min(1, Math.max(0, (event.clientX - rect.left) / rect.width));\n    const index = Math.round(ratio * (series.length - 1));\n    setHover({ index, value: series[index], day: Math.max(1, snapshot.day - Math.floor((series.length - 1 - index) / 30)) });\n'@\n$new = @'\n    const clientX = Number.isFinite(event.clientX) ? event.clientX : rect.left + rect.width / 2;\n    const ratio = Math.min(1, Math.max(0, (clientX - rect.left) / rect.width));\n    const rawIndex = Math.round(ratio * (series.length - 1));\n    const index = Number.isFinite(rawIndex) ? Math.min(series.length - 1, Math.max(0, rawIndex)) : 0;\n    setHover({\n      index,\n      value: series[index] ?? snapshot.balance,\n      day: Math.max(1, snapshot.day - Math.floor((series.length - 1 - index) / 30)),\n    });\n'@\n$t = $t.Replace($old, $new)\nSet-Content -Path $p -Value $t -NoNewline -Encoding ascii\n$p = 'src\\App.test.tsx'\n$t = Get-Content -Raw $p\n$t = $t.Replace('fireEvent.pointerMove(chart, { clientX: 330, clientY: 120 });', 'fireEvent(chart, new MouseEvent(\"pointermove\", { clientX: 330, clientY: 120, bubbles: true }));')\nSet-Content -Path $p -Value $t -NoNewline -Encoding ascii\nnpm test",
+    "timeoutMs": 180000
+  },
+  "isError": false,
+  "durationMs": 6166,
+  "text": "{\n  \"exitCode\": 0,\n  \"stdout\": \"\\n RUN  v3.2.7 D:/npqo\\n\\n ✓ src/data/eventEngine.test.ts (4 tests) 78ms\\n ✓ src/App.test.tsx (5 tests) 1107ms\\n   ✓ trading desk dashboard > renders exactly eight distinct agent cards, the pixel room and both financial charts  302ms\\n   ✓ trading desk dashboard > pauses, steps one tick while held, then resumes the single stream  375ms\\n\\n Test Files  2 passed (2)\\n      Tests  9 passed (9)\\n   Start at  17:01:23\\n   Duration  3.50s (transform 231ms, setup 429ms, collect 359ms, tests 1.19s, environment 1.30s, prepare 272ms)\\n\\n\",\n  \"stderr\": \"npm notice run npqo-desk@1.0.0 test\\nnpm notice run vitest run\\n\",\n  \"truncated\": false,\n  \"timedOut\": false\n}",
+  "truncated": false
+}

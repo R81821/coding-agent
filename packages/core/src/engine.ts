@@ -7,6 +7,7 @@ import type { ConversationTaskPatch } from "@harness/persistence";
 import type { ToolContext, ToolResult } from "@harness/tools";
 import { activeElapsedMs, reconcileTaskExecutions, reconcileTaskUsage, restoredElapsedMs, reusableVerificationResults, verificationItemFingerprint } from "./durable-recovery.js";
 import { analyzeVerificationDependencies, canReuseVerificationDependencies } from "./test-dependencies.js";
+import { compareVerificationWorkspace } from "./verification-artifacts.js";
 import { ReadEvidenceCache } from "./read-evidence-cache.js";
 import { BoundedExecutionPool, boundModelProvider, concurrencyLimit, SerialCommitQueue, type ExecutionConcurrency } from "./tool-concurrency.js";
 import { persistToolImages } from "./tool-images.js";
@@ -20,7 +21,7 @@ import { SequentialWorkflow } from "./sequential-workflow.js";
 import { runIsolatedProbe } from "./isolated-probe.js";
 import { snapshotWorkspace, compareWorkspace, workspaceFingerprint, type WorkspaceSnapshot } from "./workspace-impact.js";
 import { probeCommandScope, probeDirectory, probeInput, requirementAcceptanceTool, todoTool, validateProbeInput, validateVerificationInput, verificationInput } from "./runtime-tools.js";
-import { lightweightTools, runProcess } from "@harness/tools";
+import { captureExactPathInputs, lightweightTools, runProcess } from "@harness/tools";
 import type { ToolDefinition } from "@harness/tools";
 import { AGENT_VERSION, promptCacheKey, repositoryBaseSnapshot } from "./prompt-cache.js";
 import { EventEmitter } from "node:events";
@@ -58,14 +59,16 @@ import { ApprovalBroker } from "./approvals.js";
 import { McpInteractionBroker, redactMcpValue } from "./mcp-interactions.js";
 import { mcpSamplingMessages, sampleMcp } from "./mcp-sampling.js";
 import { estimateRequestInputTokens } from "./generation-policy.js";
-import { buildInitialMessages } from "./context.js";
+import { BEHAVIOR_POLICY_VERSION, buildInitialMessages } from "./context.js";
+import { createPromptSystem, type PromptSystem } from "./prompt-system.js";
 import { runWithPiAgent } from "./pi-agent-bridge.js";
 import { runtimeStopSummary, stripRuntimeSummaryMessages } from "./runtime-messages.js";
 import { buildSessionContext, normalizeSessionWorkspace, SESSION_CONTEXT_VERSION } from "./session-context.js";
 import { BudgetExceededError, budgetStopMessage, buildRunStop, pendingWork } from "./run-stop.js";
 import { RunProgress } from "./run-progress.js";
 import { CodingWorkflow, compactObservation } from "./coding-workflow.js";
-import { resolveMainOutputTokens, resolveReviewOutputLimit } from "./generation-policy.js";
+import { resolveCompactionOutputLimit, resolveMainOutputTokens, resolveReviewOutputLimit } from "./generation-policy.js";
+import { describeToolOperation, projectApprovedPlan, projectPermissionGrants } from "./authorization-context.js";
 import { PermissionEngine, summarizeToolRequest } from "./security.js";
 import type { ProjectTrustService } from "./project-trust.js";
 import type { RunReviewService } from "./run-review.js";
@@ -116,8 +119,8 @@ export interface EngineDependencies {
 function planStepFor(call: ToolCall, risk: "read" | "write" | "high" | "destructive", index: number): PlanSpec["steps"][number] {
   return {
     id: `step-${index}`,
-    title: `Execute ${call.name}`,
-    description: `Run ${call.name} with the normalized, visible parameters after plan and tool authorization.`,
+    title: describeToolOperation(call),
+    description: `Run ${call.name} with the normalized, visible parameters after scoped tool authorization.`,
     dependencies: index > 1 ? [`step-${index - 1}`] : [],
     executor: call.name === "delegate" ? "child" : "main",
     mode: call.name === "terminal" ? "verify" : risk === "read" ? "read" : "write",
@@ -190,6 +193,7 @@ interface ActiveRun {
   verifiedSnapshot?: WorkspaceSnapshot | undefined;
   plan: PlanSpec | undefined;
   pendingNonIdempotent: Map<string, ToolCall>;
+  suspendedApprovalIds: Set<string>;
   hadSideEffect: boolean;
   consecutiveToolErrors: number;
   repairAttemptsUsed: number;
@@ -231,7 +235,7 @@ export class HarnessEngine extends EventEmitter {
   private readonly withdrawals = new Map<string, { sessionId: string; workspacePath: string; root?: string; runIds: Set<string> }>();
   private readonly withdrawalSettlements = new Set<Promise<void>>();
   private closing: Promise<void> | undefined;
-  private readonly planDecisions = new Map<string, (decision: { approved: boolean; actor: string; feedback?: string }) => void>();
+  private readonly planDecisions = new Map<string, (decision: { approved: boolean; actor: string; feedback?: string; paused?: boolean }) => void>();
   private readonly tracer = trace.getTracer("harness-agent", "2.0.0");
   private readonly workspaceOperationGates = new Map<string, BoundedExecutionPool>();
 
@@ -297,7 +301,7 @@ export class HarnessEngine extends EventEmitter {
     // Freeze effort independently of routing; null keeps the provider's default effort.
     const reasoningEffort = spec.reasoningEffort !== undefined ? spec.reasoningEffort : parent ? parent.reasoningEffort ?? null : recovery ? null : session?.reasoningEffort ?? null;
     const generationPolicy = spec.generationPolicy ?? (spec.parentRunId ? this.active.get(spec.parentRunId)?.spec.generationPolicy : undefined) ?? profile.generationPolicy;
-    spec = { ...spec, reasoningEffort, generationPolicy: { maxOutputTokens: resolveMainOutputTokens(generationPolicy), reviewMaxOutputTokens: resolveReviewOutputLimit(generationPolicy) }, skillSelection: [...(spec.skillSelection ?? session?.skillSelection ?? profile.skillIds)] };
+    spec = { ...spec, reasoningEffort, generationPolicy: { maxOutputTokens: resolveMainOutputTokens(generationPolicy), reviewMaxOutputTokens: resolveReviewOutputLimit(generationPolicy), ...(generationPolicy?.compactionMaxOutputTokens === undefined ? {} : { compactionMaxOutputTokens: resolveCompactionOutputLimit(generationPolicy) }) }, skillSelection: [...(spec.skillSelection ?? session?.skillSelection ?? profile.skillIds)] };
     this.deps.database.saveRun(spec, "queued");
     if (session && !session.deletedAt) this.deps.database.touchSession(spec.sessionId, {
       profileId: spec.profileId,
@@ -321,6 +325,7 @@ export class HarnessEngine extends EventEmitter {
       transcript: [],
       plan: undefined,
       pendingNonIdempotent: new Map(),
+      suspendedApprovalIds: new Set(spec.id === recovery?.runId ? recovery.suspendedApprovalIds ?? [] : []),
       hadSideEffect: false,
       consecutiveToolErrors: 0,
       repairAttemptsUsed: 0,
@@ -393,11 +398,8 @@ export class HarnessEngine extends EventEmitter {
     })];
   }
 
-  /**
-   * A finished run leaves nothing to decide. Any plan still parked on approval is marked rejected,
-   * so the UI stops offering a dialog whose decision has nowhere to go.
-   */
-  private releasePlanDecisions(runId: string): void {
+  /** Release live waiters; a paused plan keeps its undecided identity for a later resume. */
+  private releasePlanDecisions(runId: string, paused = false): void {
     // The result event is emitted before callers finish their teardown. If the database is closed
     // immediately after that event, cleanup must not turn into an unhandled rejection from the
     // fire-and-forget execute().finally() chain.
@@ -405,10 +407,10 @@ export class HarnessEngine extends EventEmitter {
       for (const [planId, resolve] of this.planDecisions) {
         if (this.deps.database.getPlan(planId)?.runId !== runId) continue;
         this.planDecisions.delete(planId);
-        resolve({ approved: false, actor: "system:run-ended", feedback: "The run ended before the plan was approved" });
+        resolve(paused ? { approved: false, actor: "system:paused", paused: true } : { approved: false, actor: "system:run-ended", feedback: "The run ended before the plan was approved" });
       }
       const plan = this.deps.database.getPlanForRun(runId);
-      if (plan?.status === "awaiting_approval") this.deps.database.savePlan({ ...plan, status: "rejected", updatedAt: nowIso() });
+      if (!paused && plan?.status === "awaiting_approval") this.deps.database.savePlan({ ...plan, status: "rejected", updatedAt: nowIso() });
     } catch {
       // Storage teardown already owns the final state; there is nothing left to release safely.
     }
@@ -448,6 +450,7 @@ export class HarnessEngine extends EventEmitter {
       sessionContextVersion: checkpoint.sessionContextVersion,
       plan: this.deps.database.getPlanForRun(runId),
       pendingNonIdempotent: new Map(),
+      suspendedApprovalIds: new Set(checkpoint.suspendedApprovalIds ?? []),
       hadSideEffect: checkpoint.toolCalls > 0,
       consecutiveToolErrors: 0,
       repairAttemptsUsed: checkpoint.repairAttemptsUsed ?? this.deps.database.listEvents(runId).filter(event => event.type === "repair_started").length,
@@ -481,6 +484,7 @@ export class HarnessEngine extends EventEmitter {
         for (const run of this.active.values()) run.controller.abort(new Error("Runtime is shutting down"));
         this.mcpInteractions.close();
         const settled = await Promise.allSettled([...this.executions.values(), ...this.steeringResumptions.values(), ...this.steeringSubmissions.values(), ...this.withdrawalSettlements]);
+        this.approvals.close();
         const failures = settled.filter(result => result.status === "rejected");
         if (failures.length) throw new AggregateError(failures.map(result => result.reason), "Run shutdown failed");
       });
@@ -493,7 +497,17 @@ export class HarnessEngine extends EventEmitter {
     if (!plan) throw new Error(`Unknown plan: ${planId}`);
     if (plan.version !== version || plan.status !== "awaiting_approval") throw new Error("Plan version is stale or is not awaiting approval");
     const resolver = this.planDecisions.get(plan.id);
-    if (!resolver) throw new Error("Plan is not attached to an active run");
+    if (!resolver) {
+      const paused = this.active.get(plan.runId)?.pauseRequested || this.deps.database.getRun(plan.runId)?.status === "paused";
+      if (!paused) throw new Error("Plan is not attached to an active run");
+      const updated = !approved && feedback ? { ...plan, version: plan.version + 1, goal: `${plan.goal}\nRevision feedback: ${feedback}`, updatedAt: nowIso() }
+        : approved ? { ...plan, status: "approved" as const, approvedBy: actor, approvedAt: nowIso(), updatedAt: nowIso() }
+        : { ...plan, status: "rejected" as const, updatedAt: nowIso() };
+      this.deps.database.savePlan(updated);
+      const active = this.active.get(plan.runId);
+      if (active) active.plan = updated;
+      return updated;
+    }
     resolver({ approved, actor, ...(feedback ? { feedback } : {}) });
     return plan;
   }
@@ -516,12 +530,11 @@ export class HarnessEngine extends EventEmitter {
     run.pauseRequested = true;
     run.taskScheduler?.pause();
     this.mcpInteractions.cancelRun(runId);
-    this.approvals.denyRun(runId);
+    this.approvals.suspendRun(runId);
     for (const child of this.active.values()) if (child.spec.parentRunId === runId) this.pause(child.spec.id);
-    // A run parked on plan approval never reaches a turn boundary on its own, so the pending
-    // decision is released here. Declining it unblocks the loop, which then stops at the pause flag
-    // instead of hanging on a dialog the user has already dismissed.
-    this.releasePlanDecisions(runId);
+    // A parked approval cannot reach a turn boundary by itself. Release its current waiter without
+    // deciding the request; the resumed execution reattaches to the preserved plan and tool IDs.
+    this.releasePlanDecisions(runId, true);
     return true;
   }
 
@@ -864,15 +877,29 @@ export class HarnessEngine extends EventEmitter {
     const scheduler = this.active.get(runId)?.taskScheduler;
     scheduler?.pause();
     await scheduler?.settle();
+    let paused = this.active.get(runId)?.status === "paused";
     try {
-      const paused = this.deps.database.getRun(runId)?.status === "paused";
+      paused = this.deps.database.getRun(runId)?.status === "paused";
       if (!paused || !this.active.get(runId)?.pauseSnapshotFinalized)
         await this.deps.review?.finish(runId, paused);
     } catch (error) {
       process.stderr.write(`Review capture failed for ${runId}: ${error instanceof Error ? error.message : String(error)}\n`);
     } finally {
+      try {
+        const state = this.active.get(runId);
+        if (!paused && state) {
+          const actor = state.status === "cancelled" ? "system:cancelled" : "system:run-ended";
+          this.approvals.denyRun(runId, actor);
+          for (const id of state.suspendedApprovalIds) {
+            const approval = this.deps.database.getApproval(id);
+            if (approval?.runId === runId && approval.status === "pending") this.approvals.decideIfPending(id, false, actor);
+          }
+        }
+      } catch (error) {
+        process.stderr.write(`Approval cleanup failed for ${runId}: ${error instanceof Error ? error.message : String(error)}\n`);
+      }
       this.active.delete(runId);
-      this.releasePlanDecisions(runId);
+      this.releasePlanDecisions(runId, paused);
     }
   }
 
@@ -1143,6 +1170,7 @@ export class HarnessEngine extends EventEmitter {
   ): Promise<void> {
     let capabilities: RunCapabilityLease | undefined;
     let samplingRoute: RouteDecision | undefined;
+    let promptSystem: PromptSystem | undefined;
     try {
       await this.deps.review?.begin(spec, Boolean(recovery));
       if (recovery) {
@@ -1237,11 +1265,14 @@ export class HarnessEngine extends EventEmitter {
         spec.workflowVersion = recovery?.workflow ? recovery.workflow.schemaVersion >= 4 ? 3 : recovery.workflow.schemaVersion >= 3 ? 2 : 1 : 3;
         this.deps.database.saveRun(spec, state.status);
       }
+      spec.behaviorPolicyVersion ??= recovery ? recovery.workflow?.behaviorPolicyVersion ?? 1 : BEHAVIOR_POLICY_VERSION;
+      this.deps.database.saveRun(spec, state.status);
       const messages = buildInitialMessages({
         run: spec,
         profile,
         memories,
         trustedSkills,
+        ...(recovery?.workflow ? { workflow: recovery.workflow } : {}),
         ...(trustedProjectInstructions ? { trustedProjectInstructions } : {}),
       });
       if (capabilities?.diagnostics.length) {
@@ -1270,7 +1301,7 @@ export class HarnessEngine extends EventEmitter {
       const Workflow = sequential ? SequentialWorkflow : modern ? LightweightWorkflow : CodingWorkflow;
       const workflow = new Workflow(spec.request, (snapshot, detail) => {
         this.emitEvent(spec.id, state, { type: "workflow_updated", workflow: snapshot, detail });
-      }, recovery?.workflow, profile.verificationPolicy, spec.taskMode ?? "auto");
+      }, recovery?.workflow, profile.verificationPolicy, spec.taskMode ?? "auto", spec.behaviorPolicyVersion);
       state.workflow = workflow;
       state.workspaceDiff = new WorkspaceDiff(spec.workspacePath, this.deps.blobs, recovery?.workspaceBaseline, Boolean(recovery && !recovery.workspaceBaseline && (recovery.workflow?.revision ?? 0) > 0));
       if (recovery?.workflow) {
@@ -1278,7 +1309,7 @@ export class HarnessEngine extends EventEmitter {
         state.workspaceSnapshot = current;
         const reusable = current.complete && recovery.workspaceFingerprint === workspaceFingerprint(current) && !recovery.pendingNonIdempotentToolCalls.length;
         if (reusable) {
-          Object.assign(workflow.state, structuredClone(recovery.workflow));
+          Object.assign(workflow.state, structuredClone(recovery.workflow), { behaviorPolicyVersion: spec.behaviorPolicyVersion });
           if (workflow instanceof LightweightWorkflow) {
             workflow.restoreVerificationRuns(this.evidenceRunIds(spec).flatMap(id => this.deps.database.listVerificationRuns(id)));
           }
@@ -1286,6 +1317,7 @@ export class HarnessEngine extends EventEmitter {
           workflow.move(workflow.state.phase, "工作区指纹一致；保留原计划与有实际记录的有效测试，重新核对当前需求证据");
         } else workflow.move(workflow.state.phase, "工作区已变化或缺少可信指纹；保留计划，重新取得证据与验证");
       }
+      if (recovery?.pendingNonIdempotentToolCalls.length && workflow instanceof LightweightWorkflow) workflow.applyEffect({ kind: "unknown", changedFiles: [] });
       if (recovery?.pendingNonIdempotentToolCalls.length) workflow.fail("Execution state is unknown after restart. Inspect current repository state and diagnose before any new mutation or verification command.");
       const workflowTool = workflow.tool();
       const runtimeTools = new Map<string, ToolDefinition>();
@@ -1471,12 +1503,33 @@ export class HarnessEngine extends EventEmitter {
         estimatedOutputTokens: 8_192,
       };
       const route = await this.router.route(profile, requirements);
+      promptSystem = await createPromptSystem(route.provider.promptBackend);
+      const initialPolicySignature = JSON.stringify(messages.filter(message => message.role === "system" || message.role === "developer"));
+      const assembled = await promptSystem.assemble(messages, contracts, route.model);
+      messages.splice(0, messages.length, ...assembled.messages);
+      contracts.splice(0, contracts.length, ...assembled.tools);
+      let acceptedPolicy = messages.filter(message => message.role === "system" || message.role === "developer");
+      let acceptedPolicySignature = initialPolicySignature;
+      const currentPolicy = () => buildInitialMessages({ run: spec, profile, memories: [], workflow: workflow.state })
+        .filter(message => message.role === "system" || message.role === "developer");
+      const preparePolicyMessages = async () => {
+        const policy = currentPolicy();
+        const signature = JSON.stringify(policy);
+        if (signature === acceptedPolicySignature) return;
+        const next = await promptSystem!.assemble(policy, contracts, route.model);
+        acceptedPolicy = next.messages.filter(message => message.role === "system" || message.role === "developer");
+        acceptedPolicySignature = signature;
+      };
+      // The final backend can add instructions and reorder schemas. Account for that
+      // exact input before dispatch; history can still be compacted by the bridge.
+      const assembledInputTokens = estimateRequestInputTokens({ messages, tools: contracts });
+      route.estimatedUsd = route.provider.estimateCost(route.model, assembledInputTokens, requirements.estimatedOutputTokens);
       samplingRoute = route;
       this.emitEvent(spec.id, state, {
         type: "route",
         providerId: route.provider.id,
         modelId: route.model.modelId,
-        reason: route.reason,
+        reason: `${route.reason}; prompt=${promptSystem.backend}@${promptSystem.version}`,
         estimatedUsd: route.estimatedUsd,
       });
       if (!recovery) this.status(spec.id, state, "running");
@@ -1515,19 +1568,21 @@ export class HarnessEngine extends EventEmitter {
         this.emitEvent(spec.id, state, { type: "context_adjusted", adjustment: { kind: "policy_migration", policyVersion: profile.contextPolicyMigration.version,
           capacityTokens: capacity, triggerTokens: Math.floor(capacity * profile.contextPolicy.compactAtRatio), targetTokens: Math.floor(capacity * profile.contextPolicy.maxAfterCompactionRatio) } });
       }
-      const bridgeResult = await runWithPiAgent({
+      await this.restoreSuspendedApprovals(spec, state);
+      const bridgeResult = state.pauseRequested ? { transcript: state.transcript, errorMessage: undefined } : await runWithPiAgent({
         runId: spec.id,
         sessionId: spec.sessionId,
         provider: route.provider,
         model: route.model,
         initialMessages: messages,
-        promptCacheKey: promptCacheKey(AGENT_VERSION, repositorySnapshot.repoId),
+        promptCacheKey: promptCacheKey(AGENT_VERSION, repositorySnapshot.repoId + (promptSystem.backend === "dsh" ? `:${promptSystem.version}` : "")),
         responsesContinuation: profile.responsesContinuation !== false,
         ...(conversationHistory.length ? { conversationHistory } : {}),
         contracts,
         resolveTool: (name) => runtimeTools.get(name) ?? (name === "update_workflow" && !modern ? workflowTool : this.deps.tools.get(name)),
         externalSignal: state.controller.signal,
         maxOutputTokens: resolveMainOutputTokens(spec.generationPolicy),
+        compactionMaxOutputTokens: resolveCompactionOutputLimit(spec.generationPolicy),
         ...(spec.reasoningEffort != null ? { reasoningEffort: spec.reasoningEffort } : {}),
         parallelToolCalls: route.model.capabilities.parallelTools && concurrencyLimit(this.deps.concurrency?.tools, 4, "tool concurrency") > 1,
         maxConcurrentTools: concurrencyLimit(this.deps.concurrency?.tools, 4, "tool concurrency"),
@@ -1542,11 +1597,11 @@ export class HarnessEngine extends EventEmitter {
         onContextAdjustment: adjustment => { this.emitEvent(spec.id, state, { type: "context_adjusted", adjustment }); },
         onContextUsage: context => { this.emitEvent(spec.id, state, { type: "context_usage", context }); },
         drainSteering: () => this.drainSteering(state),
-        getPinnedContext: () => JSON.stringify({
+        getPinnedContext: () => promptSystem!.runtimeContext(JSON.stringify({
           ...(state.taskScheduler ? { conversationTasks: this.deps.database.listConversationTasks(spec.id).map(task => ({ taskId: task.taskId, stepId: task.stepId, executionState: task.executionState, blockedReason: task.blockedReason, summary: task.summary?.slice(0, 600), hasPatch: task.patch !== undefined, planGeneration: task.planGeneration, acceptanceState: task.acceptanceState })), taskQueueLimits: this.queueLimits() } : {}),
-          projectBaseSnapshot: repositorySnapshot,
-          approvedPlan: state.plan?.status === "approved" ? state.plan : undefined,
-          permissionSnapshot: spec.grants,
+          ...(workflow.needsChange || workflow.state.observations.some(item => ["read_file", "search_files", "repository_map", "list_files"].includes(item.tool)) ? { projectBaseSnapshot: repositorySnapshot } : {}),
+          approvedPlan: state.plan?.status === "approved" ? projectApprovedPlan(state.plan) : undefined,
+          permissionSnapshot: projectPermissionGrants(spec.grants),
           loadedSkills: skillRuntime.pinned(),
           workingMemory: { trust: "untrusted_tool", ...(workflow instanceof LightweightWorkflow ? workflow.projection() : workflow.snapshot()) },
           verificationPolicy: profile.verificationPolicy,
@@ -1561,7 +1616,7 @@ export class HarnessEngine extends EventEmitter {
           guidance: spec.budget.maxToolCalls - state.toolCalls <= Math.max(4, Math.ceil(spec.budget.maxToolCalls * 0.2))
             ? "Budget is nearly exhausted. Synthesize concrete findings now. Do not restart repository exploration; clearly state unresolved scope."
             : "Reuse observations already collected; avoid repeated reads without new evidence.",
-        }),
+        })),
         beforeCompactionRequest: () => {
           this.checkBudget(spec, state);
           if (state.turns >= spec.budget.maxTurns - 1) {
@@ -1571,6 +1626,8 @@ export class HarnessEngine extends EventEmitter {
           state.turns += 1;
           return true;
         },
+        getPolicyMessages: () => promptSystem!.backend === "dsh" ? acceptedPolicy : currentPolicy(),
+        ...(promptSystem.backend === "dsh" ? { preparePolicyMessages } : {}),
         onModelRequestFinished: timing => { this.emitEvent(spec.id, state, { type: "model_request_finished", ...timing }); },
         beforeModelRequest: () => {
           this.checkBudget(spec, state);
@@ -1720,7 +1777,11 @@ export class HarnessEngine extends EventEmitter {
                   // A probe that left the repository untouched is recorded as a probe, never as a read: the
                   // run must be able to tell an isolated experiment from an inspection. A probe that did
                   // change tracked content stays a repository write.
-                  workflow.applyEffect(modern && call.name === "probe" && effect.kind === "read" ? { kind: "probe", changedFiles: [] } : effect);
+                  const output = result.output as { timedOut?: boolean; result?: { timedOut?: boolean } } | undefined;
+                  const timedOut = output?.timedOut === true || output?.result?.timedOut === true;
+                  workflow.applyEffect(effect);
+                  if (timedOut && !tool.contract.idempotent) workflow.applyEffect({ kind: "unknown", changedFiles: [] });
+                  else if (modern && call.name === "probe" && effect.kind === "read") workflow.applyEffect({ kind: "probe", changedFiles: [] });
                   if (effect.kind === "repository_write" || effect.kind === "unknown") progress.invalidate();
                   if (["git_diff", "workspace_diff"].includes(call.name)) {
                     if (effect.kind === "read" && after.complete && !result.isError && !result.truncated) diffFingerprint = workspaceFingerprint(after);
@@ -1789,7 +1850,8 @@ export class HarnessEngine extends EventEmitter {
                     const after = await snapshotWorkspace(spec.workspacePath, signal);
                     state.workspaceSnapshot = after;
                     const effect = compareWorkspace(before, after);
-                    workflow.applyEffect(modern && call.name === "probe" && effect.kind === "read" ? { kind: "probe", changedFiles: [] } : effect);
+                    workflow.applyEffect(effect);
+                    if (!tool.contract.idempotent) workflow.applyEffect({ kind: "unknown", changedFiles: [] });
                   } catch {
                     // Cancellation can prevent a second snapshot. Preserve uncertainty and still
                     // publish the one terminal receipt for the tool that actually started.
@@ -2026,6 +2088,10 @@ export class HarnessEngine extends EventEmitter {
                   }
                 }
                 if (!workflow.needsChange && workflow.checksCurrent() && !workflow.state.explicitRequirementAcceptance && reportIsCurrent(reportCandidate)) return;
+                if (workflow.state.effect === "unknown" && !runtimeTools.has("workspace_diff")) {
+                  stop("review_incomplete", "执行影响尚未确认，当前工具配置没有工作区检查能力。请启用 read_file 或 git_diff 后继续检查；不能据此声称文件未修改。");
+                  return;
+                }
                 if (state.turns >= spec.budget.maxTurns || state.toolCalls >= spec.budget.maxToolCalls) {
                   const code = state.turns >= spec.budget.maxTurns ? "model_turn_limit" : "tool_call_limit";
                   stop(code, budgetStopMessage(code, workflow.snapshot(), reportIsCurrent(reportCandidate)));
@@ -2225,11 +2291,58 @@ export class HarnessEngine extends EventEmitter {
         status,
         ...(!cancelled ? { stop: buildRunStop(failure instanceof BudgetExceededError ? failure.code : "provider_error", failure instanceof Error ? failure.message : String(failure), spec, state, state.workflow?.snapshot()) } : {}),
       });
-    } finally { this.mcpInteractions.cancelRun(spec.id); await capabilities?.close(); }
+    } finally {
+      this.mcpInteractions.cancelRun(spec.id);
+      try { await capabilities?.close(); }
+      finally { await promptSystem?.dispose(); }
+    }
   }
 
   private restoreAfterApproval(spec: RunSpec, state: ActiveRun, previous: RunStatus): void {
     if (state.status === "waiting_approval" && !state.controller.signal.aborted) this.status(spec.id, state, previous === "verifying" ? "verifying" : "running");
+  }
+
+  /** Restore only decisions parked before dispatch; granting permission never replays a tool. */
+  private async restoreSuspendedApprovals(spec: RunSpec, state: ActiveRun): Promise<void> {
+    const plan = state.plan ?? this.deps.database.getPlanForRun(spec.id);
+    if (!state.pauseRequested && plan?.status === "awaiting_approval") {
+      const step = plan.steps.find(step => step.allowedTools.length > 0);
+      if (step) {
+        const approved = await this.ensurePlanApproved(spec, state, { id: `resume-plan:${plan.id}`, name: step.allowedTools[0]!, input: step.input }, plan.scope.maxRisk);
+        if (!approved && !state.pauseRequested) state.transcript.push({ role: "user", content: [{ type: "text", trust: "app_policy", text: `Runtime recovery: plan ${plan.id} was not approved. Its scope is not authorized; do not execute rejected operations.` }] });
+      }
+    }
+    for (const id of [...state.suspendedApprovalIds]) {
+      if (state.pauseRequested) break;
+      this.checkBudget(spec, state);
+      const stored = this.deps.database.getApproval(id);
+      if (!stored || stored.runId !== spec.id) { state.suspendedApprovalIds.delete(id); continue; }
+      const previous = state.status;
+      const { approval, decision } = this.approvals.reattach(id, state.controller.signal);
+      if (approval.status === "pending" && Date.parse(approval.expiresAt) > Date.now()) {
+        this.status(spec.id, state, "waiting_approval");
+        this.emitEvent(spec.id, state, { type: "approval_required", approvalId: id, summary: summarizeToolRequest({ id, name: approval.toolName, input: approval.normalizedInput }, approval.risk), risk: approval.risk });
+      }
+      const approved = await decision;
+      if (state.pauseRequested) { this.restoreAfterApproval(spec, state, previous); break; }
+      state.controller.signal.throwIfAborted();
+      state.suspendedApprovalIds.delete(id);
+      const settled = this.deps.database.getApproval(id) ?? approval;
+      const withinDeadline = Date.parse(settled.expiresAt) > Date.now() && (!settled.requestedGrant.expiresAt || Date.parse(settled.requestedGrant.expiresAt) > Date.now());
+      if (approved && settled.status === "approved" && withinDeadline) {
+        const grant = settled.requestedGrant;
+        if (!spec.grants.some(current => JSON.stringify(current) === JSON.stringify(grant))) spec.grants = [...spec.grants, grant];
+        if (state.workflow instanceof LightweightWorkflow && (settled.risk !== "read" || settled.toolName === "delegate")) {
+          this.recordAuthorizedOperation(spec, state, { id: `resumed-approval:${id}`, name: settled.toolName, input: settled.normalizedInput }, settled.risk, settled.decidedBy ?? "runtime:tool-approval", id);
+        }
+      } else {
+        const outcome = settled.status === "approved" && !withinDeadline ? "expired" : settled.status;
+        state.transcript.push({ role: "user", content: [{ type: "text", trust: "app_policy", text: `Runtime recovery: suspended approval ${id} for ${settled.toolName} is ${outcome}; no permission was granted. Respect an explicit denial. A still-needed operation with expired authorization requires a fresh approval.` }] });
+      }
+      this.restoreAfterApproval(spec, state, previous);
+      this.deps.database.saveRun(spec, state.status);
+      this.saveCheckpoint(spec.id, state, "manual");
+    }
   }
 
   private async authorizeTool(
@@ -2248,7 +2361,8 @@ export class HarnessEngine extends EventEmitter {
     if (!tool)
       return { block: true, reason: `Unknown or disabled tool: ${call.name}` };
     const risk = tool.assessRisk?.(call.input) ?? tool.contract.risk;
-    if ((risk !== "read" || call.name === "delegate") && !(await this.ensurePlanApproved(spec, state, call, risk))) {
+    const recordsAuthorizedOperations = state.workflow instanceof LightweightWorkflow;
+    if (!recordsAuthorizedOperations && (risk !== "read" || call.name === "delegate") && !(await this.ensurePlanApproved(spec, state, call, risk))) {
       return { block: true, reason: "The plan was rejected", terminate: true };
     }
     if (state.pauseRequested) return { block: true, reason: "Run paused before tool authorization" };
@@ -2269,8 +2383,10 @@ export class HarnessEngine extends EventEmitter {
       const requestedGrant = {
         toolNames: [call.name],
         pathGlobs: ["**"],
+        exactPathInputs: captureExactPathInputs(call.input),
         commandPrefixes:
-          options.commandPrefixes ?? (typeof call.input.command === "string" ? [call.input.command] : []),
+          options.commandPrefixes ?? [],
+        ...(options.commandPrefixes === undefined && typeof call.input.command === "string" ? { exactCommands: [call.input.command] } : {}),
         networkDomains:
           typeof call.input.url === "string"
             ? [new URL(call.input.url).hostname]
@@ -2290,6 +2406,8 @@ export class HarnessEngine extends EventEmitter {
         },
         state.controller.signal,
       );
+      state.suspendedApprovalIds.add(approval.id);
+      this.saveCheckpoint(spec.id, state, "manual");
       this.emitEvent(spec.id, state, {
         type: "approval_required",
         approvalId: approval.id,
@@ -2297,6 +2415,7 @@ export class HarnessEngine extends EventEmitter {
         risk,
       });
       const approved = await decision;
+      if (!state.pauseRequested) state.suspendedApprovalIds.delete(approval.id);
       if (!approved || state.pauseRequested) {
         this.restoreAfterApproval(spec, state, previous);
         return {
@@ -2305,23 +2424,40 @@ export class HarnessEngine extends EventEmitter {
         };
       }
       spec.grants = [...spec.grants, requestedGrant];
+      if (recordsAuthorizedOperations && (risk !== "read" || call.name === "delegate")) {
+        const decisionRecord = this.deps.database.getApproval(approval.id);
+        this.recordAuthorizedOperation(spec, state, call, risk, decisionRecord?.decidedBy ?? "runtime:tool-approval", approval.id);
+      }
       this.deps.database.saveRun(spec, state.status);
       this.saveCheckpoint(spec.id, state, "manual");
       this.restoreAfterApproval(spec, state, previous);
-    }
+    } else if (recordsAuthorizedOperations && (risk !== "read" || call.name === "delegate")) this.recordAuthorizedOperation(spec, state, call, risk, "runtime:scoped-grant");
     return {};
+  }
+
+  /** Permissions authorize execution; this plan only records that already-authorized scope. */
+  private recordAuthorizedOperation(spec: RunSpec, state: ActiveRun, call: ToolCall, risk: "read" | "write" | "high" | "destructive", actor: string, approvalId?: string): void {
+    const previous = state.plan ?? this.deps.database.getPlanForRun(spec.id);
+    if (previous?.status === "approved" && planCovers(previous, call, risk) && previous.steps.some(step => step.allowedTools.includes(call.name) && JSON.stringify(step.input) === JSON.stringify(call.input))) return;
+    const now = nowIso();
+    const plan: PlanSpec = {
+      id: previous?.id ?? newId("plan"), runId: spec.id, goal: spec.request,
+      version: (previous?.version ?? 0) + 1, status: "approved",
+      steps: [...(previous?.steps ?? []), planStepFor(call, risk, (previous?.steps.length ?? 0) + 1)],
+      scope: previous ? mergeScope(previous.scope, scopeFor(call, risk)) : scopeFor(call, risk),
+      ...(approvalId ? { approvalId } : {}), approvedBy: actor, approvedAt: now,
+      createdAt: previous?.createdAt ?? now, updatedAt: now,
+    };
+    this.deps.database.savePlan(plan);
+    state.plan = plan;
+    this.emitEvent(spec.id, state, previous ? { type: "plan_updated", plan } : { type: "plan_created", plan });
   }
 
   private async ensurePlanApproved(spec: RunSpec, state: ActiveRun, call: ToolCall, risk: "read" | "write" | "high" | "destructive"): Promise<boolean> {
     const previous = state.status;
     let plan = state.plan ?? this.deps.database.getPlanForRun(spec.id);
-    // A plan left awaiting approval by an earlier process has no pending decision behind it. Reusing
-    // it would park the run on a promise nothing can resolve, so it is retired and replaced instead.
-    if (plan?.status === "awaiting_approval" && !this.planDecisions.has(plan.id)) {
-      plan = { ...plan, status: "rejected", updatedAt: nowIso() };
-      this.deps.database.savePlan(plan);
-      state.plan = plan;
-    }
+    // Paused/recovered plans are rebound to a fresh waiter with the original identity and version.
+    const reusePending = plan?.status === "awaiting_approval" && planCovers(plan, call, risk);
     if (plan?.status === "approved" && planCovers(plan, call, risk)) return true;
     const now = nowIso();
     if (!plan) {
@@ -2337,7 +2473,7 @@ export class HarnessEngine extends EventEmitter {
         updatedAt: now,
       };
       this.emitEvent(spec.id, state, { type: "plan_created", plan });
-    } else {
+    } else if (!reusePending) {
       plan = {
         ...plan,
         version: plan.version + 1,
@@ -2355,9 +2491,8 @@ export class HarnessEngine extends EventEmitter {
       this.deps.database.savePlan(plan);
       state.plan = plan;
       this.status(spec.id, state, "waiting_approval");
-      this.emitEvent(spec.id, state, { type: "plan_approval_required", planId: plan.id, version: plan.version, summary: `${plan.goal}\n${plan.steps.map((step, index) => `${index + 1}. ${step.title}`).join("\n")}` });
-      const decision = await new Promise<{ approved: boolean; actor: string; feedback?: string }>((resolveDecision) => {
-        const finish = (value: { approved: boolean; actor: string; feedback?: string }) => {
+      const pendingDecision = new Promise<{ approved: boolean; actor: string; feedback?: string; paused?: boolean }>((resolveDecision) => {
+        const finish = (value: { approved: boolean; actor: string; feedback?: string; paused?: boolean }) => {
           clearTimeout(timer);
           state.controller.signal.removeEventListener("abort", abort);
           resolveDecision(value);
@@ -2367,9 +2502,17 @@ export class HarnessEngine extends EventEmitter {
         this.planDecisions.set(plan!.id, finish);
         state.controller.signal.addEventListener("abort", abort, { once: true });
         if (state.controller.signal.aborted) abort();
+        else if (state.pauseRequested) finish({ approved: false, actor: "system:paused", paused: true });
       });
+      this.emitEvent(spec.id, state, { type: "plan_approval_required", planId: plan.id, version: plan.version, summary: `${plan.goal}\n${plan.steps.map((step, index) => `${index + 1}. ${step.title}`).join("\n")}` });
+      const decision = await pendingDecision;
       this.planDecisions.delete(plan.id);
       if (state.controller.signal.aborted) return false;
+      if (decision.paused) {
+        state.plan = this.deps.database.getPlan(plan.id) ?? plan;
+        this.restoreAfterApproval(spec, state, previous);
+        return false;
+      }
       if (decision.approved) {
         plan = { ...plan, status: "approved", approvedBy: decision.actor, approvedAt: nowIso(), updatedAt: nowIso() };
         this.deps.database.savePlan(plan);
@@ -2480,12 +2623,12 @@ export class HarnessEngine extends EventEmitter {
     const codeBefore = modernWorkflow ? await snapshotWorkspace(spec.workspacePath, state.controller.signal) : undefined;
     if (codeBefore && state.workspaceSnapshot && modernWorkflow) modernWorkflow.applyEffect(compareWorkspace(state.workspaceSnapshot, codeBefore));
     if (codeBefore) state.workspaceSnapshot = codeBefore;
-    const codeFingerprint = codeBefore ? workspaceFingerprint(codeBefore) : undefined;
+    let codeFingerprint = codeBefore ? workspaceFingerprint(codeBefore) : undefined;
     const epoch = state.workflow?.state.epoch ?? "legacy";
     const revision = state.workflow?.state.revision ?? 0;
     const dependencies = codeBefore ? await analyzeVerificationDependencies(spec.workspacePath, items, codeBefore, state.controller.signal) : {};
     const restored = new Map(!force && codeBefore ? reusableVerificationResults(state.verificationProgress, { stage, epoch, revision, snapshot: codeBefore, items, workspacePath: spec.workspacePath }).map(result => [result.itemId, result]) : []);
-    const previousRuns = !force && modernWorkflow ? this.evidenceRunIds(spec).flatMap(id => this.deps.database.listVerificationRuns(id)).filter(run => run.stage === stage).sort((a, b) => Date.parse(b.finishedAt) - Date.parse(a.finishedAt)) : [];
+    const previousRuns = !force && modernWorkflow ? this.evidenceRunIds(spec).flatMap(id => this.deps.database.listVerificationRuns(id)).sort((a, b) => Date.parse(b.finishedAt) - Date.parse(a.finishedAt)) : [];
     const dependencyReceipt = (itemId: string) => {
       const dependency = dependencies[itemId];
       return dependency ? { dependencyPaths: dependency.paths, dependencyFingerprint: dependency.fingerprint, dependencyComplete: dependency.complete } : {};
@@ -2513,7 +2656,7 @@ export class HarnessEngine extends EventEmitter {
       const pathFromWorkspace = relative(resolve(spec.workspacePath), workspacePath);
       const outside = invalidDirectory || pathFromWorkspace === ".." || pathFromWorkspace.startsWith("..\\") || pathFromWorkspace.startsWith("../") || isAbsolute(pathFromWorkspace);
       const started = Date.now();
-      const suiteKey = JSON.stringify({ command: item.command, cwd: workspacePath, stdin: item.stdin, timeoutMs: item.timeoutMs, expectedExitCodes: item.expectedExitCodes });
+      const suiteKey = JSON.stringify({ command: item.command, cwd: workspacePath, stdin: item.stdin, timeoutMs: item.timeoutMs, expectedExitCodes: item.expectedExitCodes, generatedArtifactPaths: item.generatedArtifactPaths ?? [] });
       const reused = modernWorkflow && !outside ? suiteResults.get(suiteKey) : undefined;
       if (reused) {
         measure(item, "same_suite", "same_suite", reused.reusedFromRunId);
@@ -2546,12 +2689,12 @@ export class HarnessEngine extends EventEmitter {
       const dependency = dependencies[item.id];
       // A newer failure supersedes an older pass. Do not search past a failed receipt to make a
       // failing suite appear successful, even if a previous dependency fingerprint still matches.
-      const latest = previousRuns.flatMap(run => run.results.map(result => ({ run, result }))).find(({ result }) => result.itemId === item.id);
+      const latest = previousRuns.flatMap(run => run.results.map(result => ({ run, result }))).find(({ result }) => result.command === item.command && sameVerificationCwd(result.cwd, item.cwd));
       const cached = !force && dependency && latest && latest.result.command === item.command && sameVerificationCwd(latest.result.cwd, item.cwd) && latest.result.passed && !latest.result.timedOut && latest.result.exitCode !== null && item.expectedExitCodes.includes(latest.result.exitCode) && canReuseVerificationDependencies(latest.result.dependencyFingerprint ? { paths: latest.result.dependencyPaths ?? [], fingerprint: latest.result.dependencyFingerprint, complete: latest.result.dependencyComplete === true } : undefined, dependency) ? latest : undefined;
       const completed = restored.get(item.id) ?? (cached ? cached.result : undefined);
       if (completed && codeFingerprint) {
         measure(item, restored.has(item.id) ? "checkpoint" : "saved_run", restored.has(item.id) ? "checkpoint" : "saved_receipt", restored.has(item.id) ? completed.reusedFromRunId : cached?.run.id);
-        const receipt = { ...completed, ...dependencyReceipt(item.id), fingerprint: verificationItemFingerprint(codeFingerprint, item, spec.workspacePath), itemId: item.id, required: item.required, cwd: item.cwd, durationMs: 0, ...(cached && !restored.has(item.id) ? { reusedFromRunId: cached.run.id } : {}) };
+        const receipt = { ...completed, ...dependencyReceipt(item.id), fingerprint: verificationItemFingerprint(codeFingerprint, item, spec.workspacePath), itemId: item.id, required: item.required, cwd: item.cwd, durationMs: 0, ...(cached && !restored.has(item.id) ? { reusedFromRunId: cached.result.reusedFromRunId ?? cached.run.id, reusedFromItemId: cached.result.reusedFromItemId ?? cached.result.itemId } : {}) };
         results.push(receipt);
         suiteResults.set(suiteKey, receipt);
         saveProgress();
@@ -2587,7 +2730,7 @@ export class HarnessEngine extends EventEmitter {
         );
         const output = result.output as { exitCode?: number; stdout?: string; stderr?: string; timedOut?: boolean };
         const exitCode = typeof output.exitCode === "number" ? output.exitCode : null;
-        results.push({ fingerprint: verificationItemFingerprint(codeFingerprint ?? "legacy", item, spec.workspacePath), ...dependencyReceipt(item.id), itemId: item.id, command: item.command, cwd: item.cwd, exitCode, passed: result.isError !== true && output.timedOut !== true && exitCode !== null && item.expectedExitCodes.includes(exitCode), required: item.required, output: `${output.stdout ?? ""}\n${output.stderr ?? ""}`.trim().slice(0, 64_000), durationMs: Date.now() - started, timedOut: output.timedOut === true });
+        results.push({ executionId: verificationCall.id, fingerprint: verificationItemFingerprint(codeFingerprint ?? "legacy", item, spec.workspacePath), ...dependencyReceipt(item.id), itemId: item.id, command: item.command, cwd: item.cwd, exitCode, passed: result.isError !== true && output.timedOut !== true && exitCode !== null && item.expectedExitCodes.includes(exitCode), required: item.required, output: `${output.stdout ?? ""}\n${output.stderr ?? ""}`.trim().slice(0, 64_000), durationMs: Date.now() - started, timedOut: output.timedOut === true });
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         results.push({ itemId: item.id, command: item.command, cwd: item.cwd, exitCode: null, passed: false, required: item.required, output: message, durationMs: Date.now() - started, timedOut: /timed? out/i.test(message) });
@@ -2602,13 +2745,26 @@ export class HarnessEngine extends EventEmitter {
     if (codeBefore && modernWorkflow) {
       const after = await snapshotWorkspace(spec.workspacePath, state.controller.signal);
       state.workspaceSnapshot = after;
-      const effect = compareWorkspace(codeBefore, after);
+      const { effect, generatedArtifactPaths } = await compareVerificationWorkspace(spec.workspacePath, codeBefore, after, items, dependencies, state.controller.signal);
       modernWorkflow.applyEffect(effect);
       if (effect.kind !== "read") {
         for (const item of results) { item.passed = false; item.output += "\nVerification invalidated: repository changed during execution or coverage is incomplete."; }
         state.verifiedSnapshot = undefined;
         state.verificationProgress = undefined;
-      } else if (results.length && results.every(item => item.passed)) state.verifiedSnapshot = after;
+      } else if (results.length && results.every(item => item.passed)) {
+        state.verifiedSnapshot = after;
+        if (generatedArtifactPaths.length) {
+          // The receipt is bound to the actual post-check workspace, including delivered artifacts.
+          // Inputs did not change; dependency receipts were validated separately above.
+          const afterFingerprint = workspaceFingerprint(after);
+          codeFingerprint = afterFingerprint;
+          for (const result of results) {
+            const item = items.find(check => check.id === result.itemId)!;
+            result.fingerprint = verificationItemFingerprint(afterFingerprint, item, spec.workspacePath);
+            result.generatedArtifactPaths = generatedArtifactPaths;
+          }
+        }
+      }
     }
     const verification: VerificationRun = { ...(codeFingerprint ? { codeFingerprint } : {}), id: verificationRunId, runId: spec.id, attempt, stage, epoch: state.workflow?.state.epoch ?? "legacy", revision: state.workflow?.state.revision ?? 0, results, passed: results.length === items.length && results.every(result => result.passed) && (stage === "broader" || !state.workflow?.needsChange || results.some(result => result.required && result.passed)), startedAt, finishedAt: nowIso() };
     verification.outcome = verification.passed ? "passed" : state.pauseRequested ? "skipped" : "failed";
@@ -2670,6 +2826,7 @@ export class HarnessEngine extends EventEmitter {
       elapsedMs: Math.floor(activeElapsedMs(state)),
       ...(state.verificationProgress ? { verificationProgress: state.verificationProgress } : initial?.verificationProgress ? { verificationProgress: initial.verificationProgress } : {}),
       pendingNonIdempotentToolCalls: initial?.pendingNonIdempotentToolCalls ?? [...state.pendingNonIdempotent.values()],
+      suspendedApprovalIds: [...state.suspendedApprovalIds],
       pendingSteering: state.steering.filter(message => !retainedSteering.has(message.id)),
       ...(state.workflow ? { workflow: state.workflow.snapshot() } : initial?.workflow ? { workflow: initial.workflow } : {}),
       ...(state.workspaceSnapshot?.complete ? { workspaceFingerprint: workspaceFingerprint(state.workspaceSnapshot) } : initial?.workspaceFingerprint ? { workspaceFingerprint: initial.workspaceFingerprint } : {}),

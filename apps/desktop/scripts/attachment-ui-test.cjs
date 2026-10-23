@@ -17,13 +17,14 @@ app.disableHardwareAcceleration();
 const at = "2026-10-16T00:00:00.000Z";
 const profile = { id: "default", name: "Developer", allowedProviders: ["openai"], preferredModels: [], skillIds: [], pluginIds: [], toolNames: [], budget: { maxUsd: 5, maxTurns: 24, maxToolCalls: 128, maxDurationMs: 1800000 }, routeWeights: { quality: 1, cost: 1, latency: 1 }, contextPolicy: {}, verificationPolicy: { items: [] }, sandbox: "local", systemPrompt: "Fixture" };
 const model = { providerId: "openai", modelId: "gpt-6.1-sol", displayName: "OpenAI", capabilities: { vision: true, tools: true, parallelTools: true, structuredOutput: true, maxContextTokens: 128000, dataPolicy: "cloud", reasoningEfforts: ["low", "medium", "high", "xhigh", "max"] }, healthy: true };
-const sessions = new Map(["a", "b"].map(id => [id, { id, workspacePath: "D:/fixture-attachment-project", profileId: "default", title: `附件会话 ${id}`, createdAt: at, updatedAt: at, reasoningEffort: null }]));
+const sessions = new Map(["a", "b", "c"].map(id => [id, { id, workspacePath: "D:/fixture-attachment-project", profileId: "default", title: `附件会话 ${id}`, createdAt: at, updatedAt: at, reasoningEffort: null }]));
 const runs = new Map();
 const requests = [];
 let attachments;
 let files;
 let fileChooserError = false;
 const importedAttachments = [];
+const previewContents = new Map();
 function sessionRuns(id) { return [...runs.values()].filter(run => run.spec.sessionId === id); }
 async function fixtureRequest(request) {
   requests.push(request);
@@ -36,6 +37,16 @@ async function fixtureRequest(request) {
     case "sessions.list": return { items: [...sessions.values()].map(session => { const owned = sessionRuns(session.id); return { ...session, runCount: owned.length, ...(owned[0] ? { latestRunId: owned[0].spec.id, latestStatus: owned[0].status } : {}) }; }), hasMore: false };
     case "projects.list": return [{ id: "project", workspacePath: "D:/fixture-attachment-project", createdAt: at, updatedAt: at }];
     case "session.view": return { session: sessions.get(params.sessionId), runs: sessionRuns(params.sessionId), hasMore: false };
+    case "attachment.preview": {
+      const run = runs.get(params.runId);
+      if (!run) throw new Error("Attachment preview run not found");
+      const attachment = run.spec.attachments?.find(item => item.id === params.attachmentId);
+      if (!attachment) throw new Error("Attachment does not belong to this run");
+      if (!attachment.mimeType.startsWith("image/")) throw new Error("Attachment is not an image");
+      const preview = previewContents.get(attachment.id);
+      if (!preview || preview.mimeType !== attachment.mimeType) throw new Error("Attachment preview unavailable");
+      return preview;
+    }
     case "fixture.chooseImages": assert.deepEqual(params.allowedProviders, profile.allowedProviders); return attachments;
     case "fixture.chooseFiles":
       assert.deepEqual(params.allowedProviders, profile.allowedProviders);
@@ -48,6 +59,7 @@ async function fixtureRequest(request) {
       const id = `imported-${importedAttachments.length}`;
       const attachment = { id, sha256: "a".repeat(64), mimeType: params.mimeType || "text/plain", byteLength: Buffer.from(params.base64, "base64").length, encryptedPath: `fixture/${id}.enc`, source: params.source, trust: "untrusted_attachment", allowedProviders: params.allowedProviders, createdAt: at, ...(params.fileName ? { fileName: params.fileName } : {}) };
       const result = { attachment, previewDataUrl: params.mimeType?.startsWith("image/") ? `data:${params.mimeType};base64,${params.base64}` : "", ...(params.fileName ? { fileName: params.fileName } : {}) };
+      if (attachment.mimeType.startsWith("image/")) previewContents.set(id, { mimeType: attachment.mimeType, base64: params.base64 });
       importedAttachments.push(result);
       return result;
     }
@@ -74,6 +86,7 @@ fs.writeFileSync(preload, `const {contextBridge,ipcRenderer}=require('electron')
 let win;
 const checks = [];
 const rendererErrors = [];
+const sentLayoutMetrics = [];
 const evaluate = code => win.webContents.executeJavaScript(code).catch(error => { error.message += `\nEvaluating: ${code}`; throw error; });
 async function waitFor(code, label) {
   const deadline = Date.now() + 10000;
@@ -101,6 +114,33 @@ async function screenshot(name) {
   await new Promise(resolve => setTimeout(resolve, 180));
   fs.writeFileSync(path.join(scratch, name), (await win.webContents.capturePage()).toPNG());
 }
+async function waitForSentImages(ids, label) {
+  const selectors = ids.map(id => `.sent-attachment[data-attachment-id="${id}"] img.sent-attachment-image`);
+  await waitFor(`document.querySelectorAll('.sent-attachments .sent-attachment').length === ${ids.length} && ${JSON.stringify(selectors)}.every(selector=>{const img=document.querySelector(selector);return img?.complete && img.naturalWidth>0;})`, label);
+}
+async function assertSentImageLayout(label) {
+  const geometry = await evaluate(`(() => {
+    const group=document.querySelector('.sent-attachments'),content=group?.closest('.conversation-user-content'),bubble=content?.querySelector('.user-message');
+    const rect=element=>{if(!element)return null;const {left,right,top,bottom,width,height}=element.getBoundingClientRect();return {left,right,top,bottom,width,height};};
+    return { viewport:innerWidth, pageWidth:document.documentElement.scrollWidth, group:rect(group), bubble:rect(bubble), insideBubble:!!group?.closest('.user-message'), groupStyle:group?{wrap:getComputedStyle(group).flexWrap,justify:getComputedStyle(group).justifyContent,gap:getComputedStyle(group).gap}:null,
+      images:[...document.querySelectorAll('.sent-attachment-picture')].map(card=>{const button=card.querySelector('.sent-attachment-open'),img=card.querySelector('img.sent-attachment-image');return {card:rect(card),button:rect(button),image:rect(img),radius:button?getComputedStyle(button).borderRadius:null,fit:img?getComputedStyle(img).objectFit:null,title:card.getAttribute('title'),alt:img?.getAttribute('alt')};}),
+      visibleCaptions:[...document.querySelectorAll('.sent-attachment-picture figcaption')].filter(caption=>caption.getClientRects().length && getComputedStyle(caption).visibility!=='hidden').length };
+  })()`);
+  sentLayoutMetrics.push({ label, ...geometry });
+  assertCheck(!!geometry.group && !!geometry.bubble && !geometry.insideBubble, `${label}: sent thumbnails are separate from the text bubble`);
+  assertCheck(geometry.group.bottom < geometry.bubble.top && Math.abs(geometry.bubble.top - geometry.group.bottom - 12) < 1, `${label}: thumbnails sit 12 pixels above the text bubble`);
+  assertCheck(Math.abs(geometry.group.right - geometry.bubble.right) < 1 && geometry.groupStyle.wrap === "wrap" && geometry.groupStyle.justify === "flex-end", `${label}: thumbnail group aligns right and supports wrapping`);
+  const rowRightEdges = new Map();
+  for (const item of geometry.images) {
+    const row = Math.round(item.card.top);
+    rowRightEdges.set(row, Math.max(rowRightEdges.get(row) ?? -Infinity, item.card.right));
+  }
+  assertCheck([...rowRightEdges.values()].every(right => Math.abs(right - geometry.group.right) < 1), `${label}: every rendered thumbnail row shares the group's right edge`);
+  assertCheck(geometry.images.length > 0 && geometry.images.every(item => item.card && item.button && Math.abs(item.card.width - 120) < 1 && Math.abs(item.card.height - 120) < 1 && Math.abs(item.button.width - 120) < 1 && Math.abs(item.button.height - 120) < 1 && Math.abs(item.image.width - item.image.height) < 1 && item.fit === "cover" && item.radius === "14px"), `${label}: thumbnail cards are 120 pixel squares with cover crops and 14 pixel corners`);
+  assertCheck(geometry.visibleCaptions === 0 && geometry.images.every(item => item.title && item.alt), `${label}: image filenames remain in title and alt without visible captions`);
+  assertCheck(geometry.pageWidth <= geometry.viewport && geometry.images.every(item => item.card.left >= 0 && item.card.right <= geometry.viewport), `${label}: thumbnails do not overflow the viewport horizontally`);
+  return geometry;
+}
 function assertCheck(value, label) { assert.equal(value, true, label); checks.push(label); }
 const timer = setTimeout(() => { console.error("Attachment UI tests timed out"); app.exit(1); }, 90000);
 async function main() {
@@ -113,6 +153,7 @@ async function main() {
     previewDataUrl: index === 1 ? "" : thumbnail,
     ...(fileName ? { fileName } : {}),
   }));
+  for (const item of attachments) previewContents.set(item.attachment.id, { mimeType: "image/png", base64: thumbnail.split(",")[1] });
   files = [["项目需求.txt", "text/plain", 3072], ["message-renderer.tsx", "text/plain", 12288], ["sales-dashboard.pdf", "application/pdf", 65536]].map(([fileName, mimeType, byteLength], index) => ({
     attachment: { id: `file-${index}`, sha256: String(index + 6).repeat(64), mimeType, byteLength, encryptedPath: `fixture/file-${index}.enc`, source: "file", trust: "untrusted_attachment", allowedProviders: ["openai"], createdAt: at, fileName },
     previewDataUrl: "",
@@ -187,6 +228,19 @@ async function main() {
   assert.equal(submitted.request, "请参考这些图片调整界面");
   checks.push("submission retains exact AttachmentRef values without local filename or preview metadata");
   win.setSize(1324, 839);
+  const sentImageIds = submitted.attachments.map(item => item.id);
+  await waitForSentImages(sentImageIds, "successful image send displays every sent screenshot as a loaded image");
+  await assertSentImageLayout("sent multiple screenshots on desktop");
+  assertCheck(requests.some(request => request.method === "attachment.preview" && request.params.runId === submitted.id && request.params.attachmentId === "attachment-1"), "sent image with no draft preview is recovered through the run-scoped preview RPC");
+  await screenshot("sent-attachments.png");
+  await click('.sent-attachment[data-attachment-id="attachment-0"] .sent-attachment-open');
+  await waitFor("!!document.querySelector('dialog.sent-attachment-dialog[open]') && [...document.querySelectorAll('dialog.sent-attachment-dialog[open] img')].some(img=>img.complete && img.naturalWidth>0)", "clicking a sent screenshot opens a loaded large-image dialog");
+  await screenshot("sent-attachments-preview.png");
+  win.webContents.sendInputEvent({ type: "keyDown", keyCode: "Escape" });
+  win.webContents.sendInputEvent({ type: "keyUp", keyCode: "Escape" });
+  await waitFor("!document.querySelector('dialog.sent-attachment-dialog[open]')", "Escape closes the sent screenshot preview");
+  assertCheck(await evaluate(`window.harness.request({method:'attachment.preview',params:{runId:${JSON.stringify(submitted.id)},attachmentId:'file-0'}}).then(()=>false,error=>error.message.includes('does not belong'))`), "preview RPC refuses an attachment outside the requested run");
+  assertCheck(await evaluate("window.harness.request({method:'attachment.preview',params:{runId:'missing-run',attachmentId:'attachment-0'}}).then(()=>false,error=>error.message.includes('run not found'))"), "preview RPC refuses an unknown run");
   await openSession("b");
   await click(".prompt-add");
   await waitFor("document.querySelector('.prompt-add-panel [title=添加文件]')", "add menu exposes a separate generic file chooser");
@@ -204,6 +258,13 @@ async function main() {
   await screenshot("files-desktop.png");
   await openSession("a");
   await waitFor("!document.querySelector('[data-slot=attachment]')", "sent image session has an empty attachment draft");
+  await waitForSentImages(sentImageIds, "switching sessions restores sent image attachments independently of the empty draft");
+  win.setSize(760, 700);
+  await waitFor("innerWidth===760", "sent thumbnail narrow window applied");
+  const narrowSentGeometry = await assertSentImageLayout("sent multiple screenshots in a narrow window");
+  assertCheck(new Set(narrowSentGeometry.images.map(item => Math.round(item.card.top))).size > 1, "narrow sent screenshots wrap across multiple right-aligned rows");
+  await screenshot("sent-attachments-narrow-reference.png");
+  win.setSize(1324, 839);
   await openSession("b");
   await waitFor("document.querySelectorAll('[data-slot=attachment]').length === 3", "generic file drafts restore after switching sessions");
   fileChooserError = true;
@@ -227,8 +288,14 @@ async function main() {
   await waitFor("document.querySelectorAll('[data-slot=attachment]').length === 6 && !document.querySelector('.composer-upload-status')", "a pasted nonimage File is imported as an attachment");
   assert.equal(requests.filter(request => request.method === "fixture.putFile").at(-1).params.source, "clipboard");
   checks.push("pasted files retain clipboard source");
+  await evaluate(`(() => {const transfer=new DataTransfer();transfer.items.add(new File([Uint8Array.from(atob(${JSON.stringify(thumbnail.split(",")[1])}),c=>c.charCodeAt(0))],'pasted-screenshot.png',{type:'image/png'}));window.dispatchEvent(new ClipboardEvent('paste',{cancelable:true,clipboardData:transfer}));})()`);
+  await waitFor("document.querySelectorAll('[data-slot=attachment]').length === 7 && !document.querySelector('.composer-upload-status')", "a pasted screenshot is imported as an image attachment");
+  const pastedImage = importedAttachments.at(-1).attachment;
+  assert.equal(pastedImage.source, "clipboard");
+  assert.equal(pastedImage.mimeType, "image/png");
+  checks.push("pasted screenshot import retains image MIME and clipboard source");
   await click('[data-attachment-id="file-0"] [data-slot=attachment-action]');
-  await waitFor("document.querySelectorAll('[data-slot=attachment]').length === 5 && !document.querySelector('[data-attachment-id=file-0]')", "ordinary file remove action targets its own attachment");
+  await waitFor("document.querySelectorAll('[data-slot=attachment]').length === 6 && !document.querySelector('[data-attachment-id=file-0]')", "ordinary file remove action targets its own attachment");
   await screenshot("files-and-images-desktop.png");
   win.setSize(760, 700);
   await waitFor("innerWidth===760", "generic file narrow window applied");
@@ -241,14 +308,63 @@ async function main() {
   assert.deepEqual(mixed.attachments, [...files.slice(1).map(item => item.attachment), ...expectedImported]);
   assert.equal(mixed.request, "请分析代码和这些附件");
   checks.push("mixed file submission sends exact persisted refs for PDF, code, text and image without display metadata");
+  await waitFor("document.querySelectorAll('.sent-attachments .sent-attachment').length === 6 && document.querySelectorAll('.sent-attachments img.sent-attachment-image').length === 2 && [...document.querySelectorAll('.sent-attachments img.sent-attachment-image')].every(img=>img.complete && img.naturalWidth>0)", "a mixed sent message keeps ordinary files visible alongside dropped and pasted screenshots");
+  assertCheck(await evaluate(`(() => {const img=document.querySelector('.sent-attachment[data-attachment-id="${pastedImage.id}"] img.sent-attachment-image');return img?.complete && img.naturalWidth>0;})()`), "a pasted screenshot remains visible after send");
+  assertCheck(await evaluate("document.querySelector('.sent-attachment[data-attachment-id=file-1]')?.textContent.includes('message-renderer.tsx') && document.querySelector('.sent-attachment[data-attachment-id=file-2]')?.textContent.includes('sales-dashboard.pdf')"), "sent code and PDF attachments retain their persisted filenames");
+  assertCheck(await evaluate(`window.harness.request({method:'attachment.preview',params:{runId:${JSON.stringify(mixed.id)},attachmentId:'file-1'}}).then(()=>false,error=>error.message.includes('not an image'))`), "preview RPC refuses a nonimage owned by the run");
+  await screenshot("sent-attachments-mixed.png");
   await evaluate("(() => {const transfer=new DataTransfer();transfer.items.add(new File(['belongs to previous session'],'stale-file.txt',{type:'text/plain'}));document.querySelector('.app-shell').dispatchEvent(new DragEvent('drop',{bubbles:true,cancelable:true,dataTransfer:transfer}));})()");
   await waitFor("!!document.querySelector('.composer-upload-status')", "pending file import is visible before switching session");
   await openSession("a");
   await new Promise(resolve => setTimeout(resolve, 400));
   assertCheck(await evaluate("!document.querySelector('[data-slot=attachment]') && !document.querySelector('.composer-upload-status')"), "a stale file import cannot add an attachment to a different session");
+  win.setSize(1324, 839);
+  await waitForSentImages(sentImageIds, "returning after a mixed file send restores all earlier screenshot attachments");
+  await screenshot("history-attachments-session-return.png");
+  const previewRequestsBeforeReload = requests.filter(request => request.method === "attachment.preview").length;
+  const reloaded = new Promise(resolve => win.webContents.once("did-finish-load", resolve));
+  win.webContents.reload();
+  await reloaded;
+  await waitFor("document.querySelector('.prompt-add') && document.querySelector('.history-session')", "renderer reload restores the application shell");
+  await openSession("a");
+  await waitForSentImages(sentImageIds, "renderer reload restores historical screenshots from persisted AttachmentRef values");
+  assertCheck(requests.filter(request => request.method === "attachment.preview").length > previewRequestsBeforeReload, "historical image recovery requests persisted preview bytes after a full renderer reload");
+  await screenshot("history-attachments-reload.png");
+  await evaluate(`(() => {const transfer=new DataTransfer();transfer.items.add(new File([Uint8Array.from(atob(${JSON.stringify(thumbnail.split(",")[1])}),c=>c.charCodeAt(0))],'follow-up-screenshot.png',{type:'image/png'}));window.dispatchEvent(new ClipboardEvent('paste',{cancelable:true,clipboardData:transfer}));})()`);
+  await waitFor("document.querySelectorAll('[data-slot=attachment]').length === 1 && !document.querySelector('.composer-upload-status')", "a paused run accepts a screenshot into its follow-up draft");
+  await evaluate("(() => {const field=document.querySelector('.prompt-textarea');Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype,'value').set.call(field,'追加消息与截图');field.dispatchEvent(new Event('input',{bubbles:true}));})()");
+  const startRequestsBeforeFollowup = requests.filter(request => request.method === "run.start").length;
+  const steerRequestsBeforeFollowup = requests.filter(request => request.method === "run.steer").length;
+  await waitFor("!document.querySelector('[aria-label=发送]').disabled", "paused follow-up text and screenshot are ready to submit");
+  await click('[aria-label="发送"]');
+  await waitFor("document.querySelector('.composer-upload-error')?.textContent.includes('当前任务的追加消息暂不支持附件') && document.querySelectorAll('[data-slot=attachment]').length === 1 && document.querySelector('.prompt-textarea').value === '追加消息与截图'", "unsupported screenshot follow-up shows an explicit error and preserves the complete draft");
+  assert.equal(requests.filter(request => request.method === "run.start").length, startRequestsBeforeFollowup);
+  assert.equal(requests.filter(request => request.method === "run.steer").length, steerRequestsBeforeFollowup);
+  checks.push("an unsupported attachment follow-up cannot silently send only its text or start another run");
+  await screenshot("sent-attachments-followup-guard.png");
+  await click('[data-slot=attachment] [data-slot=attachment-action]');
+  await evaluate("(() => {const field=document.querySelector('.prompt-textarea');Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype,'value').set.call(field,'');field.dispatchEvent(new Event('input',{bubbles:true}));})()");
+  await waitFor("!document.querySelector('[data-slot=attachment]') && document.querySelector('.prompt-textarea').value === ''", "the guarded follow-up draft can be cleared without altering sent history");
+  await openSession("b");
+  await waitFor(`document.querySelectorAll('.sent-attachments .sent-attachment').length === 6 && document.querySelector('.sent-attachment[data-attachment-id=file-1]')?.textContent.includes('message-renderer.tsx') && (()=>{const img=document.querySelector('.sent-attachment[data-attachment-id="${pastedImage.id}"] img.sent-attachment-image');return img?.complete && img.naturalWidth>0;})() && [...document.querySelectorAll('.sent-attachments img.sent-attachment-image')].every(img=>img.complete && img.naturalWidth>0)`, "renderer reload also restores mixed files and the pasted screenshot from history");
+  await screenshot("history-attachments-mixed-reload.png");
+  await openSession("c");
+  await waitFor("!document.querySelector('[data-slot=attachment]') && !document.querySelector('.sent-attachments')", "single screenshot reference session starts with an empty composer and history");
+  await evaluate(`(() => {const transfer=new DataTransfer();transfer.items.add(new File([Uint8Array.from(atob(${JSON.stringify(thumbnail.split(",")[1])}),c=>c.charCodeAt(0))],'single-reference.png',{type:'image/png'}));window.dispatchEvent(new ClipboardEvent('paste',{cancelable:true,clipboardData:transfer}));})()`);
+  await waitFor("document.querySelectorAll('[data-slot=attachment]').length === 1 && !document.querySelector('.composer-upload-status')", "single screenshot reference draft is ready");
+  await evaluate("(() => {const field=document.querySelector('.prompt-textarea');Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype,'value').set.call(field,'已发送图片请像这张参考一样显示');field.dispatchEvent(new Event('input',{bubbles:true}));})()");
+  await waitFor("!document.querySelector('[aria-label=发送]').disabled", "single screenshot and reference text can be submitted");
+  await click('[aria-label="发送"]');
+  await waitFor("!document.querySelector('[data-slot=attachment]') && document.querySelector('.prompt-textarea').value === ''", "single screenshot reference send clears its draft");
+  const singleRun = requests.filter(request => request.method === "run.start").at(-1).params;
+  assert.equal(singleRun.sessionId, "c");
+  assert.equal(singleRun.attachments.length, 1);
+  await waitForSentImages(singleRun.attachments.map(item => item.id), "single sent screenshot loads above its reference text");
+  await assertSentImageLayout("single screenshot and text reference layout");
+  await screenshot("sent-attachment-single-reference.png");
   assert.equal(rendererErrors.length, 0, JSON.stringify(rendererErrors));
   checks.push("renderer has no runtime errors");
-  return { checks, rendererErrors, scratch };
+  return { checks, rendererErrors, scratch, sentRuns: [submitted.id, mixed.id, singleRun.id], historicalImageIds: sentImageIds, previewRequestCount: requests.filter(request => request.method === "attachment.preview").length, sentLayoutMetrics };
 }
 main().then(result => { fs.writeFileSync(path.join(scratch, "result.json"), JSON.stringify(result, null, 2)); console.log(JSON.stringify(result)); clearTimeout(timer); app.exit(0); }).catch(async error => {
   console.error(error);

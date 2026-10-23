@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from "react";
+import { resolvePromptBackend } from "@harness/protocol";
 import type { ProviderSettings as ProviderConfig } from "../../provider-settings.js";
 import { BuiButton } from "../../ui/button.js";
 import {
@@ -7,6 +8,11 @@ import {
   SettingsSection,
   useSettingsAction,
 } from "./SettingsSection.js";
+
+function promptBackendPreview(config: ProviderConfig): "harness" | "dsh" {
+  if (!config.openaiCompatibleBaseUrl.trim() || !config.openaiCompatibleModel.trim()) return "harness";
+  return resolvePromptBackend(config.openaiCompatibleBaseUrl, config.promptBackend);
+}
 
 export function ProviderSettings({ refresh }: { refresh: () => Promise<void> }) {
   const [config, setConfig] = useState<ProviderConfig>({
@@ -95,6 +101,26 @@ export function ProviderSettings({ refresh }: { refresh: () => Promise<void> }) 
             </select>
           </SettingsRow>
           <SettingsRow
+            title="提示词系统"
+            description="随模型配置保存并重载。自动模式为 DeepSeek 官方 API 使用 DeepSeek Harness；代理服务可手动选择。"
+          >
+            <select
+              aria-label="提示词系统"
+              value={config.promptBackend ?? "auto"}
+              onChange={(event) =>
+                setConfig((current) => ({
+                  ...current,
+                  promptBackend: event.target.value as "auto" | "harness" | "dsh",
+                }))
+              }
+            >
+              <option value="auto">自动选择</option>
+              <option value="harness">原有 Harness</option>
+              <option value="dsh">DeepSeek Harness</option>
+            </select>
+            <p role="status">保存后使用：{promptBackendPreview(config) === "dsh" ? "DeepSeek Harness" : "原有 Harness"}</p>
+          </SettingsRow>
+          <SettingsRow
             title="模型上下文容量"
             description="单位为 tokens。留空沿用默认 128000，请以服务商公布的模型规格为准。"
           >
@@ -111,6 +137,26 @@ export function ProviderSettings({ refresh }: { refresh: () => Promise<void> }) 
                   return event.target.value === ""
                     ? rest
                     : { ...rest, maxContextTokens: Number(event.target.value) };
+                })
+              }
+            />
+          </SettingsRow>
+          <SettingsRow
+            title="模型最大输出"
+            description="单位为 tokens，独立于上下文容量。请填写服务商支持的单次最大输出；留空使用运行时默认上限。"
+          >
+            <input
+              aria-label="模型最大输出"
+              type="number"
+              min={1}
+              step={1}
+              value={config.maxOutputTokens ?? ""}
+              onChange={(event) =>
+                setConfig((current) => {
+                  const { maxOutputTokens: _previous, ...rest } = current;
+                  return event.target.value === ""
+                    ? rest
+                    : { ...rest, maxOutputTokens: Number(event.target.value) };
                 })
               }
             />

@@ -43,7 +43,7 @@ const requirementAcceptanceInput = z.object({ evidence: z.array(RequirementEvide
 /** Acceptance can cite runtime evidence; it cannot create a test result or execute a reviewer. */
 export function requirementAcceptanceTool(workflow: LightweightWorkflow): ToolDefinition {
   return {
-    contract: { name: "check_requirements", description: "Submit evidence for every stable requirementId exactly once: passed=true, concrete summary and complete successful current observationIds. Read-only tasks can omit verificationIds and diffObservationId. Change tasks require current real passing local/integration verificationIds and a complete current diffObservationId; a runtime fingerprint matching the tests permits reusing an unchanged earlier diff. Model prose and todo status never create passing tests. Rejected explicit acceptance must be corrected before completion. This tool validates recorded evidence and does not run an independent model; then provide one final report.", inputSchema: z.toJSONSchema(requirementAcceptanceInput, { io: "input" }), risk: "read", idempotent: false, timeoutMs: 1000 },
+    contract: { name: "check_requirements", description: "Submit evidence for every stable requirementId exactly once: passed=true, concrete summary and complete successful current observationIds. Read-only tasks can omit verificationIds and diffObservationId. Code/config changes require current real passing local and required broader verificationIds and a complete current diffObservationId. Plain documentation without an explicit test contract needs content/link/format evidence and current diff, and may omit verificationIds; a runtime fingerprint matching the tests permits reusing an unchanged earlier diff. Model prose and todo status never create passing tests. Rejected explicit acceptance must be corrected before completion. This tool validates recorded evidence and does not run an independent model; then provide one final report.", inputSchema: z.toJSONSchema(requirementAcceptanceInput, { io: "input" }), risk: "read", idempotent: false, timeoutMs: 1000 },
     handlesInputValidation: true,
     async execute(input) {
       workflow.beginRequirementAcceptance();
@@ -65,7 +65,7 @@ export function requirementAcceptanceTool(workflow: LightweightWorkflow): ToolDe
     },
   };
 }
-export const verificationInput = z.object({ command: z.string().trim().min(1).max(10000), cwd: z.string().default("."), timeoutMs: z.number().int().min(1).max(3600000).default(120000), stdin: z.string().max(1_000_000).optional(), stage: z.enum(["local", "broader"]).default("local"), dependencyPaths: z.array(z.string().trim().min(1).max(500)).max(100).optional(), force: z.boolean().default(false) });
+export const verificationInput = z.object({ command: z.string().trim().min(1).max(10000), cwd: z.string().default("."), timeoutMs: z.number().int().min(1).max(3600000).default(120000), stdin: z.string().max(1_000_000).optional(), stage: z.enum(["local", "broader"]).default("local"), dependencyPaths: z.array(z.string().trim().min(1).max(500)).max(100).optional(), generatedArtifactPaths: z.array(z.string().trim().min(1).max(500)).max(100).optional(), force: z.boolean().default(false) });
 export function validateVerificationInput(input: Record<string, unknown>) {
   const parsed = verificationInput.parse(input);
   if (/\b(?:python(?:3|\.exe)?|node(?:\.exe)?|ruby|perl)\b[^\r\n]*\s-\s*$/.test(parsed.command) && !parsed.stdin?.trim()) throw new Error("verification_config_missing: interpreter reading stdin requires a nonempty script");

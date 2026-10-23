@@ -1,0 +1,13 @@
+{
+  "capturedAt": "2026-10-18T08:47:38.658Z",
+  "callId": "call_01_6gr25mdCld0ENwRgWVZJ2576",
+  "tool": "search_files",
+  "input": {
+    "glob": "*",
+    "mode": "name"
+  },
+  "isError": false,
+  "durationMs": 124,
+  "text": "{\n  \"matches\": [\n    \"AGENTS.md\"\n  ],\n  \"offset\": 0,\n  \"hasMore\": false,\n  \"truncated\": false\n}",
+  "truncated": false
+}

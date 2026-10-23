@@ -1,9 +1,11 @@
 {
   "name": "@harness/core",
-  "version": "1.4.51",
+  "version": "1.4.52",
   "type": "module",
   "exports": "./src/index.ts",
   "dependencies": {
+    "@deepseek-ai/cordis": "4.0.5",
+    "@deepseek-ai/dsh-system-prompt": "0.2.1-rc.2",
     "@earendil-works/pi-agent-core": "0.84.1",
     "@earendil-works/pi-ai": "0.84.1",
     "@harness/evals": "workspace:*",

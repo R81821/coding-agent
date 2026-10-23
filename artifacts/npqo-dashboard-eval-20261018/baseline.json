@@ -1,0 +1,25 @@
+{
+  "auditStartedAt": "2026-10-18T08:46:53.622Z",
+  "runId": "run_a566d631-77eb-418e-ac99-c252a35395ef",
+  "sessionId": "session_e7761fe9-98ec-4663-bc51-aace34762593",
+  "workspacePath": "D:\\npqo",
+  "baselineObservedAt": null,
+  "baselineSource": "Pre-submission read-only directory inventory by evaluator",
+  "baselineFiles": [
+    "AGENTS.md"
+  ],
+  "baselineGitRepository": false,
+  "baselinePackageJson": false,
+  "referenceImage": "C:\\Users\\13437\\OneDrive\\Desktop\\PixPin_2026-10-14_21-58-13.png",
+  "auditScope": "Only this run; named-pipe read-only RPC; no database reads, no target code writes, no builds or repairs by evaluator",
+  "pollIntervalMs": 45000,
+  "outputRedaction": "Common credential patterns are redacted before storage",
+  "baselineTimeNote": "Observed before run start; exact observation timestamp was not recorded",
+  "supportingAgentObservation": {
+    "at": "2026-10-18T08:45:40.870Z",
+    "sequence": 48,
+    "callId": "call_00_ET_q88AbZCGYzlAMEeNkG1p0532",
+    "outputFile": "tool-outputs/call_00_ET_q88AbZCGYzlAMEeNkG1p0532.json",
+    "result": "Get-ChildItem -Force listed only AGENTS.md before implementation writes"
+  }
+}

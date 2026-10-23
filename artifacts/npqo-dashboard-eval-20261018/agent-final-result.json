@@ -1,0 +1,46 @@
+{
+  "type": "result",
+  "text": "Provider HTTP 400: {\"error\":{\"message\":\"Invalid max_tokens value, the valid range of max_tokens is [1, 393216] (request_id: bd77c7b3-3830-4174-b41e-d09e0d4d5dcd)\",\"type\":\"invalid_request_error\",\"param\":null,\"code\":\"invalid_request_error\"}}",
+  "status": "failed",
+  "stop": {
+    "code": "provider_error",
+    "message": "Provider HTTP 400: {\"error\":{\"message\":\"Invalid max_tokens value, the valid range of max_tokens is [1, 393216] (request_id: bd77c7b3-3830-4174-b41e-d09e0d4d5dcd)\",\"type\":\"invalid_request_error\",\"param\":null,\"code\":\"invalid_request_error\"}}",
+    "phase": "requirements_check",
+    "usage": {
+      "toolCalls": {
+        "used": 78,
+        "limit": 128
+      },
+      "modelTurns": {
+        "used": 60,
+        "limit": 64
+      },
+      "repairs": {
+        "used": 0,
+        "limit": null
+      },
+      "usd": {
+        "used": 0,
+        "limit": 5,
+        "costKnown": false
+      },
+      "durationMs": {
+        "used": 1565395,
+        "limit": 1800000
+      }
+    },
+    "pending": [
+      "当前修改 diff 检查",
+      "逐项需求验收",
+      "当前版本的最终报告"
+    ],
+    "lastFailure": {
+      "message": "git_diff: {\"status\":\"\",\"diff\":\"\",\"stagedDiff\":\"\",\"newFiles\":[]}\n\nfatal: not a git repository (or any of the parent directories): .git\n\nwarning: Not a git repository. Use --no-index to compare two paths outside a working tree\nusage: git diff --no-index [<options>] <path> <path>\n\nDiff output format options\n    -p, --patch           generate patch\n   \n[output truncated; full output is in the event log]\n    --check               warn if changes introduce conflict markers or whitespace errors\n    --ws-error-highlight <kind>\n                          highlight whitespace errors in the 'context', 'old' or 'new' lines in the diff\n    --ignore-space-at-eol ignore changes in whitespace at EOL\n    --ignore-cr-at-eol    ignore carrier-return at the end of line\nerror: unknown option `cached'\n    --check  \n-object <object-id>\n                          look for differences that change the number of occurrences of the specified object\n    --diff-filter [(A|C|D|M|R|T|U|X|B)...[*]]\n                          select files by diff type\n    --output <file>       output to a specific file\n\n\nfatal: not a git repository (or any of the parent directories): .git\n",
+      "tool": "tool:git_diff:{}"
+    }
+  },
+  "id": "event_2b0a0e8f-ed6c-4038-ad24-4a5d2ffe0472",
+  "runId": "run_a566d631-77eb-418e-ac99-c252a35395ef",
+  "at": "2026-10-18T09:11:35.821Z",
+  "sequence": 2729
+}

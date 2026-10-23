@@ -1,0 +1,13 @@
+{
+  "capturedAt": "2026-10-18T08:58:54.050Z",
+  "callId": "call_00_78E1Bq7aEB6QsoKqZIXI7767",
+  "tool": "browser",
+  "input": {
+    "action": "snapshot",
+    "tabId": "17ae7fbb-e072-4ba2-b559-a528bf9c26ee"
+  },
+  "isError": false,
+  "durationMs": 26,
+  "text": "{\n  \"tabId\": \"17ae7fbb-e072-4ba2-b559-a528bf9c26ee\",\n  \"url\": \"http://127.0.0.1:5173/\",\n  \"title\": \"Harness Agent\",\n  \"elements\": [],\n  \"text\": \"\",\n  \"truncated\": false\n}",
+  "truncated": false
+}

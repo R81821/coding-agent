@@ -1,0 +1,14 @@
+{
+  "capturedAt": "2026-10-18T09:04:09.756Z",
+  "callId": "call_01_V3Rhc70WlhlH1HqMIfAN1559",
+  "tool": "search_files",
+  "input": {
+    "glob": "scripts/screenshots.mjs",
+    "mode": "content",
+    "query": "favicon.ico"
+  },
+  "isError": false,
+  "durationMs": 353,
+  "text": "{\n  \"matches\": [],\n  \"offset\": 0,\n  \"hasMore\": false,\n  \"truncated\": false\n}",
+  "truncated": false
+}

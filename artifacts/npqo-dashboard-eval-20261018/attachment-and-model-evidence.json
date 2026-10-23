@@ -1,0 +1,78 @@
+{
+  "runId": "run_a566d631-77eb-418e-ac99-c252a35395ef",
+  "attachmentCount": 1,
+  "attachments": [
+    {
+      "fileName": "PixPin_2026-10-14_21-58-13.png",
+      "mimeType": "image/png",
+      "width": null,
+      "height": null,
+      "trust": "untrusted_attachment"
+    }
+  ],
+  "configuredReasoningEffort": "max",
+  "uiLabelReportedByEvaluator": "Ultra",
+  "modelRequests": [
+    {
+      "at": "2026-10-18T08:45:33.961Z",
+      "succeeded": true,
+      "protocol": "responses",
+      "providerId": "openai-compatible",
+      "modelId": "deepseek-flash",
+      "reasoningEffort": "max",
+      "attachmentCount": 1
+    },
+    {
+      "at": "2026-10-18T08:45:52.526Z",
+      "succeeded": true,
+      "protocol": "responses",
+      "providerId": "openai-compatible",
+      "modelId": "deepseek-flash",
+      "reasoningEffort": "max",
+      "attachmentCount": 1
+    },
+    {
+      "at": "2026-10-18T08:47:07.045Z",
+      "succeeded": true,
+      "protocol": "responses",
+      "providerId": "openai-compatible",
+      "modelId": "deepseek-flash",
+      "reasoningEffort": "max",
+      "attachmentCount": 1
+    },
+    {
+      "at": "2026-10-18T08:47:09.552Z",
+      "succeeded": true,
+      "protocol": "responses",
+      "providerId": "openai-compatible",
+      "modelId": "deepseek-flash",
+      "reasoningEffort": "max",
+      "attachmentCount": 1
+    },
+    {
+      "at": "2026-10-18T08:47:14.828Z",
+      "succeeded": true,
+      "protocol": "responses",
+      "providerId": "openai-compatible",
+      "modelId": "deepseek-flash",
+      "reasoningEffort": "max",
+      "attachmentCount": 1
+    },
+    {
+      "at": "2026-10-18T08:47:24.010Z",
+      "succeeded": true,
+      "protocol": "responses",
+      "providerId": "openai-compatible",
+      "modelId": "deepseek-flash",
+      "reasoningEffort": "max",
+      "attachmentCount": 1
+    }
+  ],
+  "conclusion": "One untrusted image attachment was present in the successful model request. This confirms transport acceptance, not visual understanding quality.",
+  "dimensionsNote": "AttachmentRef metadata did not contain width/height; no dimensions inferred.",
+  "originalReferenceDimensions": {
+    "width": 822,
+    "height": 1209,
+    "source": "Original local PNG header; ingested attachment dimensions were not present in run metadata"
+  }
+}

@@ -1,0 +1,515 @@
+{
+  "checks": [
+    "the waiting tool approval opens with its pause control",
+    "an in-flight approval poll holds a pending snapshot",
+    "pause sends one request despite immediate repeat clicks",
+    "the composer pause control shows the shared action lock instead of silently accepting a click",
+    "an approval action cannot race the pending pause action",
+    "a successful pause dismisses the obsolete approval dialog immediately",
+    "a late pending approval snapshot does not reopen the paused dialog",
+    "approval center shows the recorded operation",
+    "pause preserves the same pending approval after the late snapshot",
+    "the paused round exposes its explicit resume control",
+    "resume uses the same paused round exactly once",
+    "resume reopens the preserved approval for the same pending operation",
+    "the preserved approval accepts one decision after explicit resume",
+    "the resumed approval dialog closes after its decision",
+    "center fixture ready",
+    "approval center shows the recorded operation",
+    "approval center duplicate and opposite clicks submit once",
+    "both decision buttons are disabled while their shared request is pending",
+    "the returned denied record replaces stale pending controls",
+    "a stale approve response never changes an existing rejection into approval",
+    "failure fixture ready",
+    "approval center shows the recorded operation",
+    "a transport failure is displayed as a recoverable UI error",
+    "a failed request releases the decision lock for retry",
+    "retry settles the still-pending approval normally",
+    "plan fixture ready",
+    "the paused legacy plan remains available in the plan view",
+    "paused plan duplicate and opposite clicks submit one decision",
+    "all three plan decision controls are disabled during the pending request",
+    "the paused plan view refreshes its approved state without new run events",
+    "saving the original plan decision neither resumes the paused run nor adds events",
+    "plan-failure fixture ready",
+    "the paused legacy plan remains available in the plan view",
+    "the paused plan reports a transport failure inline without an unhandled rejection",
+    "a failed plan request releases all three decision controls for retry",
+    "retry approves the preserved paused plan and removes its obsolete decision controls"
+  ],
+  "scratch": "D:\\qweai\\.cache\\approval-race-ui-HDNg5n",
+  "requests": [
+    {
+      "method": "sessions.list",
+      "fixtureMode": "pause"
+    },
+    {
+      "method": "projects.list",
+      "fixtureMode": "pause"
+    },
+    {
+      "method": "skills.list",
+      "fixtureMode": "pause"
+    },
+    {
+      "method": "profiles.list",
+      "fixtureMode": "pause"
+    },
+    {
+      "method": "tasks.list",
+      "fixtureMode": "pause"
+    },
+    {
+      "method": "approvals.list",
+      "fixtureMode": "pause"
+    },
+    {
+      "method": "memory.list",
+      "fixtureMode": "pause"
+    },
+    {
+      "method": "plugins.list",
+      "fixtureMode": "pause"
+    },
+    {
+      "method": "skills.list",
+      "fixtureMode": "pause"
+    },
+    {
+      "method": "model.current",
+      "fixtureMode": "pause"
+    },
+    {
+      "method": "session.view",
+      "fixtureMode": "pause"
+    },
+    {
+      "method": "mcp.interactions.list",
+      "fixtureMode": "pause"
+    },
+    {
+      "method": "skills.list",
+      "fixtureMode": "pause"
+    },
+    {
+      "method": "run.eventPage",
+      "fixtureMode": "pause"
+    },
+    {
+      "method": "conversationTasks.list",
+      "fixtureMode": "pause"
+    },
+    {
+      "method": "plan.get",
+      "fixtureMode": "pause"
+    },
+    {
+      "method": "approvals.list",
+      "fixtureMode": "pause"
+    },
+    {
+      "method": "run.eventPage",
+      "fixtureMode": "pause"
+    },
+    {
+      "method": "plan.get",
+      "fixtureMode": "pause"
+    },
+    {
+      "method": "approvals.list",
+      "fixtureMode": "pause"
+    },
+    {
+      "method": "run.pause",
+      "fixtureMode": "pause"
+    },
+    {
+      "method": "approvals.list",
+      "fixtureMode": "pause"
+    },
+    {
+      "method": "mcp.interactions.list",
+      "fixtureMode": "pause"
+    },
+    {
+      "method": "run.eventPage",
+      "fixtureMode": "pause"
+    },
+    {
+      "method": "conversationTasks.list",
+      "fixtureMode": "pause"
+    },
+    {
+      "method": "run.resume",
+      "fixtureMode": "pause"
+    },
+    {
+      "method": "run.eventPage",
+      "fixtureMode": "pause"
+    },
+    {
+      "method": "plan.get",
+      "fixtureMode": "pause"
+    },
+    {
+      "method": "approvals.list",
+      "fixtureMode": "pause"
+    },
+    {
+      "method": "mcp.interactions.list",
+      "fixtureMode": "pause"
+    },
+    {
+      "method": "run.eventPage",
+      "fixtureMode": "pause"
+    },
+    {
+      "method": "approvals.list",
+      "fixtureMode": "pause"
+    },
+    {
+      "method": "approval.decide",
+      "fixtureMode": "pause",
+      "params": {
+        "approvalId": "approval-pause-race",
+        "approved": true,
+        "actor": "desktop:user"
+      }
+    },
+    {
+      "method": "sessions.list",
+      "fixtureMode": "center"
+    },
+    {
+      "method": "projects.list",
+      "fixtureMode": "center"
+    },
+    {
+      "method": "skills.list",
+      "fixtureMode": "center"
+    },
+    {
+      "method": "profiles.list",
+      "fixtureMode": "center"
+    },
+    {
+      "method": "tasks.list",
+      "fixtureMode": "center"
+    },
+    {
+      "method": "approvals.list",
+      "fixtureMode": "center"
+    },
+    {
+      "method": "memory.list",
+      "fixtureMode": "center"
+    },
+    {
+      "method": "plugins.list",
+      "fixtureMode": "center"
+    },
+    {
+      "method": "skills.list",
+      "fixtureMode": "center"
+    },
+    {
+      "method": "model.current",
+      "fixtureMode": "center"
+    },
+    {
+      "method": "session.view",
+      "fixtureMode": "center"
+    },
+    {
+      "method": "mcp.interactions.list",
+      "fixtureMode": "center"
+    },
+    {
+      "method": "skills.list",
+      "fixtureMode": "center"
+    },
+    {
+      "method": "conversationTasks.list",
+      "fixtureMode": "center"
+    },
+    {
+      "method": "run.review",
+      "fixtureMode": "center"
+    },
+    {
+      "method": "approvals.list",
+      "fixtureMode": "center"
+    },
+    {
+      "method": "approval.decide",
+      "fixtureMode": "center",
+      "params": {
+        "approvalId": "approval-pause-race",
+        "approved": true,
+        "actor": "desktop:user"
+      }
+    },
+    {
+      "method": "sessions.list",
+      "fixtureMode": "failure"
+    },
+    {
+      "method": "projects.list",
+      "fixtureMode": "failure"
+    },
+    {
+      "method": "skills.list",
+      "fixtureMode": "failure"
+    },
+    {
+      "method": "profiles.list",
+      "fixtureMode": "failure"
+    },
+    {
+      "method": "tasks.list",
+      "fixtureMode": "failure"
+    },
+    {
+      "method": "approvals.list",
+      "fixtureMode": "failure"
+    },
+    {
+      "method": "memory.list",
+      "fixtureMode": "failure"
+    },
+    {
+      "method": "plugins.list",
+      "fixtureMode": "failure"
+    },
+    {
+      "method": "skills.list",
+      "fixtureMode": "failure"
+    },
+    {
+      "method": "model.current",
+      "fixtureMode": "failure"
+    },
+    {
+      "method": "session.view",
+      "fixtureMode": "failure"
+    },
+    {
+      "method": "mcp.interactions.list",
+      "fixtureMode": "failure"
+    },
+    {
+      "method": "skills.list",
+      "fixtureMode": "failure"
+    },
+    {
+      "method": "conversationTasks.list",
+      "fixtureMode": "failure"
+    },
+    {
+      "method": "run.review",
+      "fixtureMode": "failure"
+    },
+    {
+      "method": "approvals.list",
+      "fixtureMode": "failure"
+    },
+    {
+      "method": "approval.decide",
+      "fixtureMode": "failure",
+      "params": {
+        "approvalId": "approval-pause-race",
+        "approved": true,
+        "actor": "desktop:user"
+      }
+    },
+    {
+      "method": "approvals.list",
+      "fixtureMode": "failure"
+    },
+    {
+      "method": "approval.decide",
+      "fixtureMode": "failure",
+      "params": {
+        "approvalId": "approval-pause-race",
+        "approved": true,
+        "actor": "desktop:user"
+      }
+    },
+    {
+      "method": "sessions.list",
+      "fixtureMode": "plan"
+    },
+    {
+      "method": "projects.list",
+      "fixtureMode": "plan"
+    },
+    {
+      "method": "skills.list",
+      "fixtureMode": "plan"
+    },
+    {
+      "method": "profiles.list",
+      "fixtureMode": "plan"
+    },
+    {
+      "method": "tasks.list",
+      "fixtureMode": "plan"
+    },
+    {
+      "method": "approvals.list",
+      "fixtureMode": "plan"
+    },
+    {
+      "method": "memory.list",
+      "fixtureMode": "plan"
+    },
+    {
+      "method": "plugins.list",
+      "fixtureMode": "plan"
+    },
+    {
+      "method": "skills.list",
+      "fixtureMode": "plan"
+    },
+    {
+      "method": "model.current",
+      "fixtureMode": "plan"
+    },
+    {
+      "method": "session.view",
+      "fixtureMode": "plan"
+    },
+    {
+      "method": "mcp.interactions.list",
+      "fixtureMode": "plan"
+    },
+    {
+      "method": "skills.list",
+      "fixtureMode": "plan"
+    },
+    {
+      "method": "conversationTasks.list",
+      "fixtureMode": "plan"
+    },
+    {
+      "method": "plan.get",
+      "fixtureMode": "plan"
+    },
+    {
+      "method": "checkpoints.get",
+      "fixtureMode": "plan"
+    },
+    {
+      "method": "plan.decide",
+      "fixtureMode": "plan",
+      "params": {
+        "planId": "approval-paused-plan",
+        "version": 1,
+        "approved": true,
+        "actor": "desktop:user"
+      }
+    },
+    {
+      "method": "plan.get",
+      "fixtureMode": "plan"
+    },
+    {
+      "method": "sessions.list",
+      "fixtureMode": "plan-failure"
+    },
+    {
+      "method": "projects.list",
+      "fixtureMode": "plan-failure"
+    },
+    {
+      "method": "skills.list",
+      "fixtureMode": "plan-failure"
+    },
+    {
+      "method": "profiles.list",
+      "fixtureMode": "plan-failure"
+    },
+    {
+      "method": "tasks.list",
+      "fixtureMode": "plan-failure"
+    },
+    {
+      "method": "approvals.list",
+      "fixtureMode": "plan-failure"
+    },
+    {
+      "method": "memory.list",
+      "fixtureMode": "plan-failure"
+    },
+    {
+      "method": "plugins.list",
+      "fixtureMode": "plan-failure"
+    },
+    {
+      "method": "skills.list",
+      "fixtureMode": "plan-failure"
+    },
+    {
+      "method": "model.current",
+      "fixtureMode": "plan-failure"
+    },
+    {
+      "method": "session.view",
+      "fixtureMode": "plan-failure"
+    },
+    {
+      "method": "mcp.interactions.list",
+      "fixtureMode": "plan-failure"
+    },
+    {
+      "method": "skills.list",
+      "fixtureMode": "plan-failure"
+    },
+    {
+      "method": "conversationTasks.list",
+      "fixtureMode": "plan-failure"
+    },
+    {
+      "method": "plan.get",
+      "fixtureMode": "plan-failure"
+    },
+    {
+      "method": "checkpoints.get",
+      "fixtureMode": "plan-failure"
+    },
+    {
+      "method": "plan.decide",
+      "fixtureMode": "plan-failure",
+      "params": {
+        "planId": "approval-paused-plan",
+        "version": 1,
+        "approved": true,
+        "actor": "desktop:user"
+      }
+    },
+    {
+      "method": "plan.decide",
+      "fixtureMode": "plan-failure",
+      "params": {
+        "planId": "approval-paused-plan",
+        "version": 1,
+        "approved": true,
+        "actor": "desktop:user"
+      }
+    },
+    {
+      "method": "plan.get",
+      "fixtureMode": "plan-failure"
+    }
+  ],
+  "screenshots": [
+    "approval-paused-no-stale-dialog.png",
+    "approval-resumed-same-operation.png",
+    "approval-stale-decision-synced.png",
+    "approval-network-error-retry.png",
+    "approval-retry-approved.png",
+    "approval-paused-plan-approved.png",
+    "approval-paused-plan-error-retry.png",
+    "approval-paused-plan-retry-approved.png"
+  ]
+}

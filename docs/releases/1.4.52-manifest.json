@@ -1,0 +1,56 @@
+{
+  "product": "Harness Agent",
+  "version": "1.4.52",
+  "target": "Windows x64 NSIS",
+  "sourceCommit": "5b0bef29ab2830a9f3e5bdd7d374f8016081b9e9",
+  "includesUncommittedChanges": true,
+  "builtAtUtc": "2026-10-17T12:38:29.5644592+00:00",
+  "installer": "Harness-Agent-1.4.52-x64.exe",
+  "installerPath": "apps/desktop/release/1.4.52/Harness-Agent-1.4.52-x64.exe",
+  "bytes": 142473676,
+  "sha256": "c644e97ffb3ab9f1a97b70ad0707501d33eb88e1b205151c264c2bc870c1d4d7",
+  "signatureStatus": "NotSigned",
+  "fileVersion": "1.4.52",
+  "productVersion": "1.4.52",
+  "electronArchiveSha256": "5447c50d196c2227e396716ea969869c1e5baa12b6af7fb33f75ae897a6853aa",
+  "changes": [
+    "Conversation traces, command rows, file-read groups and delayed hover cards",
+    "Image and file Attachment uploads, Markdown rendering and daemon lifecycle fixes",
+    "Default global memory, reviewed learning, conflict replacement and project knowledge synchronization"
+  ],
+  "validation": {
+    "typecheck": "passed",
+    "changedSourceLint": "passed",
+    "productionBuild": "passed",
+    "targetedTests": {
+      "files": 9,
+      "passed": 74,
+      "failed": 0,
+      "log": ".cache/release-1.4.52-tests.log"
+    },
+    "desktopStartupSmoke": "passed",
+    "packagedSmoke": {
+      "version": "1.4.52",
+      "electron": "41.10.6",
+      "node": "24.18.0",
+      "arch": "x64",
+      "packagedFiles": "passed",
+      "rendererVersion": "1.4.52",
+      "packagedBuildHashes": {
+        "daemonSha256": "3cdbf596a842e726164cd2670d8594b704e92ce2e6d8a7141d7b88ce19f9ba81",
+        "mainSha256": "9b57e01f66d7b9603037be705009734ad05afe73336f3be22968b58d07413211",
+        "preloadSha256": "f56af8d9f6da34b9a9ac8ab8498837face5a6661a19358837c24ce45df1caa33"
+      },
+      "sharpPngBytes": 95,
+      "sqliteRoundTrip": "passed",
+      "daemonHealth": {
+        "status": "ok",
+        "version": "1.4.52",
+        "providerIds": [],
+        "connectors": []
+      }
+    },
+    "nsisPackage": "passed",
+    "interactiveInstall": "not run"
+  }
+}

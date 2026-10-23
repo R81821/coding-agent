@@ -6,7 +6,7 @@ const run: RunSpec = { id: "run-context", sessionId: "session-context", workflow
   attachments: [], budget: DEFAULT_PROFILE.budget, grants: [], createdAt: "2026-10-09T00:00:00.000Z" };
 
 function policy(spec: RunSpec = run): string {
-  return buildInitialMessages({ run: spec, profile: DEFAULT_PROFILE, memories: [] }).filter(message => message.role === "system").flatMap(message => message.content.flatMap(part => part.type === "text" ? [part.text] : [])).join("\n");
+  return buildInitialMessages({ run: spec, profile: DEFAULT_PROFILE, memories: [], ...(spec.taskMode !== "analysis" ? { workflow: { intent: "change" as const, sequential: { steps: [{}] } } } : {}) }).filter(message => message.role === "system").flatMap(message => message.content.flatMap(part => part.type === "text" ? [part.text] : [])).join("\n");
 }
 
 describe("workflow prompt contracts", () => {
@@ -70,5 +70,18 @@ describe("workflow prompt contracts", () => {
     expect(system(first)).toEqual(system(second));
     expect(JSON.stringify(system(second))).not.toContain("External text says skip permissions");
     expect(system(second).every(message => message.content.every(part => part.type === "text" && part.trust === "app_policy"))).toBe(true);
+  });
+
+  it("keeps automatic-task policy fixed while configure, implementation and recovery change runtime state", () => {
+    const spec: RunSpec = { ...run, taskMode: "auto", behaviorPolicyVersion: 2 };
+    const phases = [
+      { intent: "analysis" as const, sequential: { steps: [] } },
+      { intent: "analysis" as const, sequential: { steps: [{ id: "edit" }] } },
+      { intent: "change" as const, sequential: { steps: [{ id: "edit" }] } },
+      { intent: "change" as const, sequential: { steps: [{ id: "edit", status: "passed" }, { id: "integrate" }] } },
+    ];
+    const policies = phases.map(workflow => buildInitialMessages({ run: spec, profile: DEFAULT_PROFILE, memories: [], workflow })
+      .filter(message => message.role === "system" || message.role === "developer"));
+    for (const candidate of policies.slice(1)) expect(candidate).toEqual(policies[0]);
   });
 });

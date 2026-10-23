@@ -8,7 +8,8 @@ export interface ApprovalRepository {
 
 interface PendingApproval {
   runId: string;
-  resolve: (approved: boolean) => void;
+  resolve?: ((approved: boolean) => void) | undefined;
+  detach?: (() => void) | undefined;
   timeout: NodeJS.Timeout;
 }
 
@@ -40,12 +41,30 @@ export class ApprovalBroker {
       expiresAt: new Date(Date.now() + ttlMs).toISOString()
     };
     this.repository.saveApproval(approval);
-    const decision = new Promise<boolean>((resolveDecision) => {
-      const timeout = setTimeout(() => this.finish(approval.id, false, "system:expired"), ttlMs);
-      this.pending.set(approval.id, { runId: input.runId, resolve: resolveDecision, timeout });
-      signal.addEventListener("abort", () => this.finish(approval.id, false, "system:cancelled"), { once: true });
+    return { approval, decision: this.wait(approval, signal) };
+  }
+
+  /** Reattach a resumed run to its original persisted decision and deadline. */
+  reattach(id: string, signal: AbortSignal): { approval: ApprovalRequest; decision: Promise<boolean> } {
+    const approval = this.repository.getApproval(id);
+    if (!approval) throw new Error(`Unknown approval: ${id}`);
+    return { approval, decision: this.wait(approval, signal) };
+  }
+
+  private wait(approval: ApprovalRequest, signal: AbortSignal): Promise<boolean> {
+    if (approval.status !== "pending") return Promise.resolve(!signal.aborted && approval.status === "approved");
+    const existing = this.pending.get(approval.id);
+    if (existing?.resolve) throw new Error(`Approval ${approval.id} already has a waiting execution`);
+    return new Promise<boolean>(resolveDecision => {
+      const pending = existing ?? { runId: approval.runId, timeout: setTimeout(() => this.finish(approval.id, false, "system:expired"), Math.max(1, Date.parse(approval.expiresAt) - Date.now())) };
+      pending.resolve = resolveDecision;
+      const abort = () => this.finish(approval.id, false, "system:cancelled");
+      pending.detach = () => signal.removeEventListener("abort", abort);
+      this.pending.set(approval.id, pending);
+      signal.addEventListener("abort", abort, { once: true });
+      if (signal.aborted) abort();
+      else if (Date.parse(approval.expiresAt) <= Date.now()) this.finish(approval.id, false, "system:expired");
     });
-    return { approval, decision };
   }
 
   decide(id: string, approved: boolean, actor: string): ApprovalRequest {
@@ -56,22 +75,56 @@ export class ApprovalBroker {
     return this.repository.getApproval(id) ?? approval;
   }
 
-  /** Release only this live run's waiting tools, without cancelling its resumable checkpoint. */
-  denyRun(runId: string, actor = "system:paused"): void {
+  /** A transport retry returns the settled decision without changing it or releasing a tool twice. */
+  decideIfPending(id: string, approved: boolean, actor: string): ApprovalRequest {
+    const approval = this.repository.getApproval(id);
+    if (approval && approval.status !== "pending") return approval;
+    return this.decide(id, approved, actor);
+  }
+
+  /** Unwind the execution boundary while leaving the user's undecided request intact. */
+  suspendRun(runId: string): void {
+    for (const pending of this.pending.values()) {
+      if (pending.runId !== runId) continue;
+      pending.detach?.(); pending.detach = undefined;
+      const resolve = pending.resolve; pending.resolve = undefined;
+      resolve?.(false);
+    }
+  }
+
+  /** Actual cancellation/denial is separate from a resumable pause. */
+  denyRun(runId: string, actor = "system:cancelled"): void {
     for (const [id, pending] of this.pending) {
       if (pending.runId === runId) this.finish(id, false, actor);
     }
   }
 
+  /** Stop local timers/listeners; a suspended approval remains durable for a later process. */
+  close(): void {
+    for (const pending of this.pending.values()) {
+      clearTimeout(pending.timeout); pending.detach?.(); pending.resolve?.(false);
+    }
+    this.pending.clear();
+  }
+
   private finish(id: string, approved: boolean, actor: string): void {
     const approval = this.repository.getApproval(id);
-    if (!approval || approval.status !== "pending") return;
+    if (!approval) {
+      const pending = this.pending.get(id);
+      if (pending) {
+        clearTimeout(pending.timeout); pending.detach?.(); pending.resolve?.(false);
+        this.pending.delete(id);
+      }
+      return;
+    }
+    if (approval.status !== "pending") return;
     const expired = new Date(approval.expiresAt).getTime() <= Date.now();
     this.repository.saveApproval({ ...approval, status: expired ? "expired" : approved ? "approved" : "denied", decidedBy: actor });
     const pending = this.pending.get(id);
     if (pending) {
       clearTimeout(pending.timeout);
-      pending.resolve(approved && !expired);
+      pending.detach?.();
+      pending.resolve?.(approved && !expired);
       this.pending.delete(id);
     }
   }

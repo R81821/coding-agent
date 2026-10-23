@@ -1,0 +1,13 @@
+{
+  "capturedAt": "2026-10-18T08:46:53.638Z",
+  "callId": "call_00_SwAsvkkOaUtcwAxcCuRz9131",
+  "tool": "terminal",
+  "input": {
+    "command": "cd D:\\npqo; npm view vite version; npm view react version; npm view vitest version",
+    "timeoutMs": 120000
+  },
+  "isError": false,
+  "durationMs": 28911,
+  "text": "{\n  \"exitCode\": 0,\n  \"stdout\": \"8.3.4\\n19.3.1\\n5.0.5\\n\",\n  \"stderr\": \"\",\n  \"truncated\": false,\n  \"timedOut\": false\n}",
+  "truncated": false
+}

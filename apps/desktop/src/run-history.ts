@@ -1,4 +1,4 @@
-import type { AgentEvent, ProjectRecord, RunHistoryItem, RunHistoryPage, RunStatus, SessionDetail, SessionPage, SessionSummary } from "@harness/protocol";
+import type { AgentEvent, AttachmentRef, ProjectRecord, RunHistoryItem, RunHistoryPage, RunStatus, SessionDetail, SessionPage, SessionSummary } from "@harness/protocol";
 
 export interface ProjectHistoryGroup {
   key: string;
@@ -21,6 +21,7 @@ export interface SessionTurn {
   chainUsage?: TurnUsage;
   runId: string;
   request: string;
+  attachments?: AttachmentRef[];
   status: RunStatus;
   events: AgentEvent[];
 }
@@ -135,7 +136,8 @@ export function sessionTurns(detail: SessionDetail | undefined): SessionTurn[] {
     .slice()
     .sort(compareRunSpec)
     .map((run) => {
-      if (run.view && !run.view.eventsComplete) return { runId: run.spec.id, request: run.spec.request, status: run.status, events: run.events, view: run.view, ...(run.spec.parentRunId !== undefined ? { parentRunId: run.spec.parentRunId } : {}), ...(run.spec.continuation ? { continuation: run.spec.continuation } : {}) };
+      const attachments = run.spec.attachments?.length ? { attachments: run.spec.attachments } : {};
+      if (run.view && !run.view.eventsComplete) return { runId: run.spec.id, request: run.spec.request, ...attachments, status: run.status, events: run.events, view: run.view, ...(run.spec.parentRunId !== undefined ? { parentRunId: run.spec.parentRunId } : {}), ...(run.spec.continuation ? { continuation: run.spec.continuation } : {}) };
       const usage = runUsage(run);
       const chainUsage = { ...usage };
       const seen = new Set([run.spec.id]);
@@ -149,7 +151,7 @@ export function sessionTurns(detail: SessionDetail | undefined): SessionTurn[] {
         chainUsage.costKnown &&= previous.costKnown;
         parent = prior.spec.continuation?.runId;
       }
-      return { runId: run.spec.id, request: run.spec.request, status: run.status, events: run.events, ...(run.view ? { view: run.view } : {}), ...(run.view && !run.view.eventsComplete ? {} : { usage, chainUsage }), ...(run.spec.parentRunId !== undefined ? { parentRunId: run.spec.parentRunId } : {}), ...(run.spec.continuation ? { continuation: run.spec.continuation } : {}) };
+      return { runId: run.spec.id, request: run.spec.request, ...attachments, status: run.status, events: run.events, ...(run.view ? { view: run.view } : {}), ...(run.view && !run.view.eventsComplete ? {} : { usage, chainUsage }), ...(run.spec.parentRunId !== undefined ? { parentRunId: run.spec.parentRunId } : {}), ...(run.spec.continuation ? { continuation: run.spec.continuation } : {}) };
     });
 }
 
@@ -159,7 +161,7 @@ export function createSessionTurnSelector() {
   return (detail: SessionDetail | undefined): SessionTurn[] => {
     const turns = sessionTurns(detail).map(turn => {
       const old = previous.get(turn.runId);
-      return old && old.events === turn.events && old.status === turn.status && old.request === turn.request && old.view === turn.view && old.continuation === turn.continuation && old.parentRunId === turn.parentRunId &&
+      return old && old.events === turn.events && old.status === turn.status && old.request === turn.request && old.attachments === turn.attachments && old.view === turn.view && old.continuation === turn.continuation && old.parentRunId === turn.parentRunId &&
         sameUsage(old.usage, turn.usage) && sameUsage(old.chainUsage, turn.chainUsage) ? old : turn;
     });
     previous = new Map(turns.map(turn => [turn.runId, turn]));

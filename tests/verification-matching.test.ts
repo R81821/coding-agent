@@ -5,6 +5,13 @@ const local = { id: "unit", stage: "local", command: "pnpm test -- test/service.
 const broader = { id: "integration", stage: "broader", command: "pnpm test -- test/integration.test.ts", cwd: "." };
 
 describe("verification comparison and bounded repair feedback", () => {
+  it("does not let a verification call widen the planned output contract", () => {
+    const check = { ...local, generatedArtifactPaths: ["screenshots/desktop.png", "screenshots/mobile.png"] };
+    expect(matchesVerificationCheck(check, { ...check, generatedArtifactPaths: [...check.generatedArtifactPaths].reverse() })).toBe(true);
+    expect(matchesVerificationCheck(check, { ...local, generatedArtifactPaths: ["screenshots/*.png"] })).toBe(false);
+    expect(verificationPlanMismatch([check], { ...local }).mismatch).toEqual(["generatedArtifactPaths"]);
+    expect(verificationPlanMismatch([check], { ...local }).expected[0]?.generatedArtifactPaths).toEqual(check.generatedArtifactPaths);
+  });
   it.each([
     ["./src", "src"], ["src/", "src"], ["", "."], ["./", "."], ["src//", "src"],
   ])("recognizes equivalent cwd %j and %j without requiring execution", (a, b) => {

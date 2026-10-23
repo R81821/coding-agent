@@ -4,6 +4,7 @@ import type { ModelProvider } from "@harness/providers";
 import type { McpRequestHandlers } from "@harness/extensions";
 import { estimateRequestInputTokens, resolveRequestOutputTokens } from "./generation-policy.js";
 import { timedProviderStream, type RequestTiming } from "./model-request.js";
+import { preparePromptRequest } from "./prompt-system.js";
 
 export type McpSamplingParams = Parameters<NonNullable<McpRequestHandlers["onSampling"]>>[0];
 type SamplingResult = Awaited<ReturnType<NonNullable<McpRequestHandlers["onSampling"]>>>;
@@ -38,7 +39,11 @@ export async function sampleMcp(options: {
 }): Promise<SamplingResult> {
   if (options.signal.aborted) throw new Error("MCP sampling cancelled");
   if (options.messages.some(message => message.content.some(part => part.type === "image")) && !options.model.capabilities.vision) throw new Error("Selected model does not support MCP sampling images");
-  const input = { messages: options.messages, tools: [] };
+  const assembled = await preparePromptRequest(options.provider, {
+    messages: options.messages, tools: [], runId: options.runId, model: options.model,
+    maxOutputTokens: options.params.maxTokens, parallelToolCalls: false, store: false, purpose: "sampling",
+  });
+  const input = { messages: assembled.messages, tools: assembled.tools };
   const maxOutputTokens = resolveRequestOutputTokens({ model: options.model, maxOutputTokens: options.params.maxTokens, estimatedInputTokens: estimateRequestInputTokens(input) });
   const request: ModelRequest = { ...input, runId: options.runId, model: options.model, maxOutputTokens, parallelToolCalls: false, store: false, purpose: "sampling" };
   options.beforeRequest();

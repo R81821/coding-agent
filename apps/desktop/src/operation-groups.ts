@@ -3,6 +3,7 @@ import type { ToolGroupEntry } from "./conversation-stream.js";
 import { getToolTraceState, type ToolTraceState } from "./conversation-trace.js";
 import { groupReadTools, localReadPath, type ReadToolGroupItem } from "./read-tool-groups.js";
 import { toolActivity } from "./tool-summary.js";
+import { isLocalFileEdit } from "./code-changes.js";
 
 type ApprovalRequiredEvent = Extract<AgentEvent, { type: "approval_required" }>;
 
@@ -36,14 +37,18 @@ function entryId(entry: ToolGroupEntry): string {
   return entry.kind === "tool" ? entry.tool.started.id : entry.event.approvalId;
 }
 
-/** Compress adjacent reads first, then every remaining run of commands, file edits and the
- * approvals that gate them into one collapsible row. Every original call and approval is
- * retained in order for the expanded view. */
+/** Compress adjacent reads and command/approval groups. Local file edits keep their own
+ * visible row so their confirmed changes can be inspected directly. */
 export function groupToolEntries(entries: ToolGroupEntry[]): ToolGroupRow[] {
   const rows: ToolGroupRow[] = [];
   let index = 0;
   while (index < entries.length) {
     const first = entries[index]!;
+    if (first.kind === "tool" && isLocalFileEdit(first.tool.started)) {
+      rows.push({ kind: "tool", tool: first.tool });
+      index++;
+      continue;
+    }
     if (first.kind === "tool" && localReadPath(first.tool) !== undefined) {
       let end = index + 1;
       while (end < entries.length) {
@@ -59,7 +64,7 @@ export function groupToolEntries(entries: ToolGroupEntry[]): ToolGroupRow[] {
     let end = index;
     while (end < entries.length) {
       const entry = entries[end]!;
-      if (entry.kind === "tool" && localReadPath(entry.tool) !== undefined) break;
+      if (entry.kind === "tool" && (localReadPath(entry.tool) !== undefined || isLocalFileEdit(entry.tool.started))) break;
       end++;
     }
     const run = entries.slice(index, end);

@@ -23,6 +23,21 @@ it("preserves parent-run metadata in full and preview session turns", () => {
   }
 });
 
+it("keeps sent screenshots in both preview and complete history rows and refreshes changed attachments", () => {
+  const image = { id: "screenshot", mimeType: "image/png", sha256: "a".repeat(64), fileName: "截图.png" };
+  for (const eventsComplete of [true, false]) {
+    const detail = { runs: [{ spec: { id: "run", request: "查看截图", createdAt: "2026-10-20T00:00:00.000Z", attachments: [image] },
+      status: "completed", events: [], view: { lastSequence: 0, eventsComplete } }] } as unknown as SessionDetail;
+    const select = createSessionTurnSelector();
+    const original = select(detail)[0]!;
+    expect(original.attachments).toBe(detail.runs[0]!.spec.attachments);
+    expect(select(detail)[0]).toBe(original);
+    const updated = select({ ...detail, runs: detail.runs.map(run => ({ ...run, spec: { ...run.spec, attachments: [] } })) })[0]!;
+    expect(updated).not.toBe(original);
+    expect(updated.attachments).toBeUndefined();
+  }
+});
+
 it("refreshes a cached session turn if its parent-run metadata changes", () => {
   const select = createSessionTurnSelector();
   const detail = { runs: [{

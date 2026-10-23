@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parseDiff, changeSnapshots } from "./code-changes.js";
+import { parseDiff, changeSnapshots, appliedToolChanges } from "./code-changes.js";
 import { approvalFields } from "./approval-content.js";
 import type { AgentEvent } from "@harness/protocol";
 const patch = 'diff --git a/src/a.ts b/src/a.ts\n--- a/src/a.ts\n+++ b/src/a.ts\n@@ -2,2 +2,3 @@\n same\n-old\n+new\n+extra\n';
@@ -56,4 +56,47 @@ it("preserves a metadata-only rename and reports bounded previews",()=>{
  const file=parseDiff('--- a/a\n+++ b/a\n@@ -0,0 +1,13000 @@\n'+'+x\n'.repeat(13000))[0]!;
  expect(file.lines.at(-1)?.text).toContain('预览已截断');
  expect(file.added).toBeLessThan(13000);
+});
+
+it("prefers normalized successful patch output and does not invent old normalized receipts", () => {
+ const start = { type: "tool_started", id: "s", runId: "r", at: "2026-10-20T00:00:00Z", sequence: 0, call: { id: "c", name: "patch", input: { patch: "invalid original hunk counts" } } } as Extract<AgentEvent, {type: "tool_started"}>;
+ const finish = { type: "tool_finished", id: "f", runId: "r", at: start.at, sequence: 1, callId: "c", output: { applied: true, normalizedHunkCounts: true, paths: ["src/a.ts"], diff: patch }, durationMs: 1 } as Extract<AgentEvent, {type: "tool_finished"}>;
+ expect(appliedToolChanges(start, finish)?.files[0]).toMatchObject({ path: "src/a.ts", added: 2, deleted: 1 });
+ const old = appliedToolChanges(start, { ...finish, output: { applied: true, normalizedHunkCounts: true, paths: ["src/a.ts"] } });
+ expect(old?.files[0]).toMatchObject({ countsComplete: false, truncated: true });
+ expect(old?.files[0]?.lines[0]?.text).toContain("缺少规范化");
+});
+
+it("records successful write receipts in the code-changes view without counting truncated previews as complete", () => {
+ const start = { type: "tool_started", id: "s", runId: "r", at: "2026-10-20T00:00:00Z", sequence: 0, call: { id: "c", name: "write_file", input: { path: "src/a.ts", content: "proposed content must not be used as a receipt" } } } as Extract<AgentEvent, {type: "tool_started"}>;
+ const finish = { type: "tool_finished", id: "f", runId: "r", at: start.at, sequence: 1, callId: "c", output: { written: true, path: "src/a.ts", byteLength: 123, diff: patch, diffTruncated: true }, durationMs: 1 } as Extract<AgentEvent, {type: "tool_finished"}>;
+ expect(changeSnapshots([start, finish])[0]).toMatchObject({ label: expect.stringContaining("已写入文件"), files: [expect.objectContaining({ path: "src/a.ts", byteLength: 123, countsComplete: false, truncated: true })] });
+ expect(appliedToolChanges(start, { ...finish, output: { written: false } })).toBeUndefined();
+ expect(appliedToolChanges({ ...start, origin: { serverId: "remote", serverName: "Remote", toolName: "write_file", revision: 1 } }, finish)).toBeUndefined();
+});
+
+it("retains every changed path when a multi-file receipt is truncated inside its first file", () => {
+ const start = { type: "tool_started", id: "s", runId: "r", at: "2026-10-21T00:00:00Z", sequence: 0, call: { id: "c", name: "apply_patch", input: { patch: "original patch" } } } as Extract<AgentEvent, {type: "tool_started"}>;
+ const finish = { type: "tool_finished", id: "f", runId: "r", at: start.at, sequence: 1, callId: "c", output: { applied: true, paths: ["src/a.ts", "src/b.ts"], diff: patch, diffTruncated: true }, durationMs: 1 } as Extract<AgentEvent, {type: "tool_finished"}>;
+ const changes = appliedToolChanges(start, finish)!;
+ expect(changes.files.map(file => file.path)).toEqual(["src/a.ts", "src/b.ts"]);
+ expect(changes.files.every(file => file.truncated && file.countsComplete === false)).toBe(true);
+ expect(changes.files[1]?.lines).toEqual([{ kind: "meta", text: "差异超过预览预算，无法完整展示。" }]);
+ expect(changeSnapshots([start, finish])[0]?.files).toEqual(changes.files);
+});
+
+it("recognizes JSON text receipts loaded through run.output without using proposed content", () => {
+ const start = { type: "tool_started", id: "s", runId: "r", at: "2026-10-21T00:00:00Z", sequence: 0, call: { id: "c", name: "write_file", input: { path: "server/marketData.ts", content: "proposed content is not proof" } } } as Extract<AgentEvent, {type: "tool_started"}>;
+ const receipt = { written: true, path: "server/marketData.ts", byteLength: 9830, created: true, changed: true, diff: patch, diffTruncated: false, added: 2, deleted: 1 };
+ const finish = { type: "tool_finished", id: "f", runId: "r", at: start.at, sequence: 1, callId: "c", output: receipt, isError: false, durationMs: 1 } as Extract<AgentEvent, {type: "tool_finished"}>;
+ const hydrated = { ...finish, output: JSON.stringify(receipt, null, 2) };
+ expect(appliedToolChanges(start, hydrated)).toEqual(appliedToolChanges(start, finish));
+ expect(changeSnapshots([start, hydrated])).toEqual(changeSnapshots([start, finish]));
+ const patchStart = { ...start, call: { ...start.call, name: "apply_patch", input: { patch: "stale input" } } };
+ const patchReceipt = { applied: true, paths: ["src/a.ts"], diff: patch, normalizedHunkCounts: true };
+ expect(appliedToolChanges(patchStart, { ...finish, output: JSON.stringify(patchReceipt) })?.files[0]).toMatchObject({ path: "src/a.ts", added: 2, deleted: 1 });
+ for (const output of ["not JSON", "null", "[]", "true", JSON.stringify({ deferred: true, runId: "r", callId: "c" }), JSON.stringify({ written: false, error: "write rejected" }), JSON.stringify({ result: receipt })]) {
+  expect(appliedToolChanges(start, { ...finish, output })).toBeUndefined();
+ }
+ expect(appliedToolChanges(start, { ...hydrated, isError: true })).toBeUndefined();
 });

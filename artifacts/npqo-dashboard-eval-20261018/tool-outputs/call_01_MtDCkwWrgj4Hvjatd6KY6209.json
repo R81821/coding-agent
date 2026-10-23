@@ -1,0 +1,13 @@
+{
+  "capturedAt": "2026-10-18T09:10:55.324Z",
+  "callId": "call_01_MtDCkwWrgj4Hvjatd6KY6209",
+  "tool": "read_file",
+  "input": {
+    "limit": 70,
+    "path": "src/data/AgentStream.tsx"
+  },
+  "isError": false,
+  "durationMs": 52,
+  "text": "{\n  \"path\": \"src/data/AgentStream.tsx\",\n  \"offset\": 1,\n  \"returnedLines\": 70,\n  \"content\": \"1: import {\\n2:   createContext,\\n3:   useCallback,\\n4:   useContext,\\n5:   useEffect,\\n6:   useMemo,\\n7:   useRef,\\n8:   useState,\\n9:   type ReactNode,\\n10: } from \\\"react\\\";\\n11: import { createMarketEngine, type MarketEngine } from \\\"./eventEngine\\\";\\n12: import type { DashboardSnapshot } from \\\"./types\\\";\\n13: \\n14: export interface AgentStreamValue {\\n15:   snapshot: DashboardSnapshot;\\n16:   paused: boolean;\\n17:   intervalMs: number;\\n18:   togglePause: () => void;\\n19:   advance: (count?: number) => void;\\n20: }\\n21: \\n22: const AgentStreamContext = createContext<AgentStreamValue | null>(null);\\n23: \\n24: export interface AgentStreamProviderProps {\\n25:   children: ReactNode;\\n26:   seed?: number;\\n27:   tickMs?: number;\\n28:   autoStart?: boolean;\\n29:   engine?: MarketEngine;\\n30: }\\n31: \\n32: export function AgentStreamProvider({\\n33:   children,\\n34:   seed = 0x5eed1e,\\n35:   tickMs = 1800,\\n36:   autoStart = true,\\n37:   engine: injectedEngine,\\n38: }: AgentStreamProviderProps) {\\n39:   const engineRef = useRef<MarketEngine | null>(injectedEngine ?? null);\\n40:   if (!engineRef.current) {\\n41:     engineRef.current = createMarketEngine({ seed, tickMs });\\n42:   }\\n43:   const engine = engineRef.current;\\n44:   const [snapshot, setSnapshot] = useState<DashboardSnapshot>(() => engine.latest);\\n45:   const [paused, setPaused] = useState(!autoStart);\\n46: \\n47:   const advance = useCallback(\\n48:     (count = 1) => {\\n49:       let next = engine.latest;\\n50:       const steps = Math.max(1, Math.floor(count));\\n51:       for (let i = 0; i < steps; i += 1) next = engine.tick();\\n52:       setSnapshot(next);\\n53:     },\\n54:     [engine],\\n55:   );\\n56: \\n57:   useEffect(() => {\\n58:     if (paused) return;\\n59:     const handle = window.setInterval(() => {\\n60:       setSnapshot(engine.tick());\\n61:     }, tickMs);\\n62:     return () => window.clearInterval(handle);\\n63:   }, [engine, paused, tickMs]);\\n64: \\n65:   const togglePause = useCallback(() => {\\n66:     setPaused((value) => !value);\\n67:   }, []);\\n68: \\n69:   const value = useMemo<AgentStreamValue>(\\n70:     () => ({ snapshot, paused, intervalMs: tickMs, togglePause, advance }),\",\n  \"hasMore\": true,\n  \"truncated\": false,\n  \"nextOffset\": 71\n}",
+  "truncated": false
+}

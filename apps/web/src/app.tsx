@@ -61,6 +61,7 @@ import { Conversation, Welcome } from "./components/conversation";
 const WorkspacePanels = lazy(() => import("./components/workspace-panels").then(module => ({ default: module.WorkspacePanels })));
 
 type Inspection = {
+  migration?: { fromSha256: string; content: string };
   files: Array<{ path: string; sha256: string; content: string }>;
   trusted: boolean;
   changed: boolean;
@@ -242,7 +243,7 @@ export default function App() {
         method: "project.inspect",
         params: { workspacePath: pathInput.trim() },
       });
-      if (checked.files.length && (!checked.trusted || checked.changed))
+      if (checked.files.length && (!checked.trusted || checked.changed || checked.migration))
         setInspection(checked);
       else acceptProject();
     });
@@ -700,6 +701,14 @@ export default function App() {
                     .map((f) => `${f.path}\n${f.content}`)
                     .join("\n\n")}
                 </pre>
+                {inspection.migration && <details className="rounded-xl border p-3 text-sm">
+                  <summary>旧版自动规范可升级：查看更新内容</summary>
+                  <pre className="max-h-64 overflow-auto whitespace-pre-wrap text-xs">{inspection.migration.content}</pre>
+                  <Button disabled={pending} onClick={() => void action(async () => {
+                    await work.request({ method: "project.migrate", params: { workspacePath: pathInput.trim(), expectedSha256: inspection.migration!.fromSha256 } });
+                    setInspection(await work.request<Inspection>({ method: "project.inspect", params: { workspacePath: pathInput.trim() } }));
+                  })}>应用更新并重新审阅</Button>
+                </details>}
                 <div className="flex justify-end gap-2">
                   <Button
                     variant="outline"

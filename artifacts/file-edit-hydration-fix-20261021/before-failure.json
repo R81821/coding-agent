@@ -1,0 +1,809 @@
+{
+  "error": "Error: a successful new file exposes its compact code change panel by default: timed out\nH\nHarness\n文件\n编辑\n视图\n窗口\n帮助\nHarness\n新建任务\n会话\n任务板\n代码变更\n审批\n插件\n项目\nfixture-trace-project\n当前\n执行过程界面测试\n工作台工具\n设置\nv1.4.52\n本地运行时已解锁\n开发会话\n经典深色\nKelo 玻璃\n跟随系统\nDeveloper\n本地加密\n创建 HTML 探针并展示每次文件写入的真实代码差异。\n思考摘要\n未返回摘要\n写入记录 ·\n_probe.html\n\n此记录没有可确认的代码变更回执。\n\n查看参数和回执\n写入记录 ·\n_probe.html\n编辑记录 ·\n_probe.html\n写入失败 ·\n_probe.html\n已运行 echo FILE_FIXTURE_DONE\n\n已创建并更新 _probe.html；旧指纹覆盖请求被拒绝，保留当前文件。\n\n复制 Markdown\n查看原文\n回放\n用时 8秒\nfixture-trace-project\n本地\nDeveloper\nfixture-model\n推理\nAuto",
+  "checks": [
+    "production renderer ready",
+    "completed conversation loaded",
+    "completed tool summaries remain directly visible with details collapsed and merged runs leave no duplicate row",
+    "consecutive file reads form two marker groups",
+    "collapsed read marker counts unique files and previews names without mounting child calls",
+    "collapsed failed read marker exposes its failure count in red",
+    "terminal, narration and human reply boundaries keep singleton reads separate",
+    "desktop collapsed read marker 1 keeps its arrow beside visible text",
+    "desktop collapsed read marker 2 keeps its arrow beside visible text",
+    "passing over a read marker for 350ms never mounts a hover card",
+    "leaving a brief hover cancels its pending preview beyond the one-second delay",
+    "read marker opens a shadcn hover card from real pointer input stays absent during a brief half-second hover",
+    "read marker opens a shadcn hover card from real pointer input appears after sustained hover",
+    "read marker opens a shadcn hover card from real pointer input",
+    "read hover card escapes the conversation clip and fits inside the desktop viewport",
+    "moving the pointer from a read trigger into its hover card keeps the file details available",
+    "switching from an open read card to a command card stays absent during a brief half-second hover",
+    "switching from an open read card to a command card appears after sustained hover",
+    "switching from an open read card to a command card",
+    "leaving the read trigger and hover card dismisses the preview",
+    "the read hover card can reopen after pointer dismissal",
+    "read marker expands into its three original calls",
+    "clicking a hover-enabled read marker preserves expansion and its card can dismiss",
+    "desktop expanded read marker keeps its arrow beside visible text",
+    "nested range read exposes its real line parameters and output",
+    "expanded read output is fully revealed by the marker panel",
+    "keyboard focus opens the read hover card",
+    "Escape dismisses a keyboard-focused hover card without expanding its read group",
+    "failed read marker expands into both original calls",
+    "Enter retains the read marker's expansion action after dismissing its keyboard preview",
+    "blurring the keyboard read trigger clears any remaining preview",
+    "desktop expanded failed read marker keeps its arrow beside visible text",
+    "nested failed read keeps its actionable error output",
+    "failed read output is fully revealed by the marker panel",
+    "completed conversation retains both process messages",
+    "process messages remain visible as multi-paragraph Markdown without an expansion action",
+    "process narration stays before and between its corresponding tool calls",
+    "final answer is separate from the process narration",
+    "reasoning summary expands to the recorded text",
+    "terminal commands and arrows share light gray text while only the failure icon is red",
+    "each terminal call stays on one unboxed line with its arrow beside the command and timing in details",
+    "a real pointer opens the failed command hover card",
+    "the full multiline command fits in a desktop hover card without displaying execution output",
+    "Escape dismisses the command hover card",
+    "the dismissed command preview stays closed after the pointer leaves",
+    "command details expose the complete original multiline input, timing, stdout and stderr",
+    "successful command keeps its full input, timing, stdout and stderr inspectable",
+    "an approval-gated run collapses into one operation row",
+    "a gated run collapses to one line and keeps its raw command payload out of the rendered transcript",
+    "desktop collapsed operation marker keeps its arrow beside its short label",
+    "the operation summary opens its hover card without expanding the group",
+    "the operation hover card closes without changing its collapsed state",
+    "arrow geometry rejects the former full-width layout with its far-right chevron",
+    "the operation row expands into its approval and call rows",
+    "desktop expanded operation marker keeps its arrow beside its short label",
+    "probe displays its real command on the same gray single line as terminal, with a red failure icon and hidden stdin/timing",
+    "complete and truncated probe approval records use compact gray request titles, retain risk, and make no approval-success claim",
+    "Approval hover trigger is visible inside its operation panel",
+    "the probe approval summary opens a compact hover card",
+    "switching from an open approval card to a probe command card stays absent during a brief half-second hover",
+    "switching from an open approval card to a probe command card appears after sustained hover",
+    "switching from an open approval card to a probe command card",
+    "leaving the approval hover card keeps its recorded details collapsed",
+    "Probe hover trigger is visible inside its operation panel",
+    "the probe command uses the same hover card as terminal",
+    "probe hover dismissal preserves the collapsed command details",
+    "Probe command rows is visible inside its operation panel",
+    "approval-probe-fail retains its exact recorded approval payload",
+    "Expanded approval request is visible inside its operation panel",
+    "approval-probe-ok retains its exact recorded approval payload",
+    "call-probe-fail exposes its full command, stdin, real result envelope and timing",
+    "Expanded failed probe is visible inside its operation panel",
+    "call-probe-ok exposes its full command, stdin, real result envelope and timing",
+    "probe and approval details preserve recorded payloads without pushing raw stdin into their collapsed headers",
+    "the operation row collapses back to one line",
+    "every approval and call keeps its own expandable row inside the merged operation row",
+    "source summary counts unique safe URLs",
+    "source details show the unique result links",
+    "source links display their complete URL in a hover card",
+    "leaving the source preview keeps its link available for opening",
+    "source links use openExternal and unsafe URLs are never executable",
+    "long commands and read markers fit the narrow conversation without horizontal page overflow",
+    "narrow collapsed read marker 1 keeps its arrow beside visible content",
+    "narrow collapsed read marker 2 keeps its arrow beside visible content",
+    "narrow collapsed operation marker keeps its arrow beside its short label",
+    "long file previews truncate with an ellipsis without horizontal page overflow",
+    "read hover details remain available beside a truncated narrow preview",
+    "the read hover card stays inside the narrow viewport without clipping or horizontal overflow",
+    "the narrow read hover card dismisses after the pointer leaves",
+    "read marker 1 opens at narrow width",
+    "narrow expanded read marker 1 keeps its arrow beside visible content",
+    "read marker 2 opens at narrow width",
+    "narrow expanded read marker 2 keeps its arrow beside visible content",
+    "probe and approval rows remain available at narrow width",
+    "narrow expanded operation marker keeps its arrow beside its short label",
+    "Narrow probe rows is visible inside its operation panel",
+    "probe command and approval rows keep a single line without horizontal overflow at narrow width",
+    "read-only replay is offered for the completed turn",
+    "replay exposes a stop or finish control",
+    "stopping replay restores the original final answer exactly once",
+    "replay can be started again after stopping",
+    "recorded process messages stay visible during replay",
+    "replay naturally finishes and restores the full conversation",
+    "replay preserves the complete user, reasoning, process, tool, source and final records",
+    "read group 1 reopens after replay",
+    "read group 2 reopens after replay",
+    "replay retains nested read outputs behind the markers",
+    "replay preserves the grouped probe and approval records",
+    "replay preserves the recorded truncated approval payload exactly",
+    "replay preserves the probe input and failure result behind expansion",
+    "replay is local and read-only without starting or resuming a run",
+    "file edit fixture reloads the production renderer",
+    "file edit history loads without starting a real run",
+    "write, overwrite, patch and failed write keep separate visible timeline rows",
+    "file edit rows are not hidden inside a collapsed command group",
+    "deferred file output stays pending without claiming an applied change"
+  ],
+  "errors": [],
+  "openedUrls": [
+    "https://pnpm.io/cli/install"
+  ],
+  "requests": [
+    {
+      "method": "sessions.list",
+      "params": {
+        "deleted": false,
+        "limit": 50,
+        "offset": 0
+      }
+    },
+    {
+      "method": "projects.list",
+      "params": {
+        "deleted": false
+      }
+    },
+    {
+      "method": "skills.list"
+    },
+    {
+      "method": "profiles.list"
+    },
+    {
+      "method": "tasks.list"
+    },
+    {
+      "method": "approvals.list"
+    },
+    {
+      "method": "memory.list"
+    },
+    {
+      "method": "plugins.list"
+    },
+    {
+      "method": "skills.list"
+    },
+    {
+      "method": "model.current",
+      "params": {
+        "profileId": "default",
+        "needsVision": false
+      }
+    },
+    {
+      "method": "session.view",
+      "params": {
+        "limit": 20,
+        "sessionId": "trace-fixture"
+      }
+    },
+    {
+      "method": "mcp.interactions.list",
+      "params": {
+        "workspacePath": "D:/fixture-trace-project"
+      }
+    },
+    {
+      "method": "skills.list",
+      "params": {
+        "workspacePath": "D:/fixture-trace-project"
+      }
+    },
+    {
+      "method": "conversationTasks.list",
+      "params": {
+        "sessionId": "trace-fixture"
+      }
+    },
+    {
+      "method": "run.review",
+      "params": {
+        "runId": "run-trace-fixture"
+      }
+    },
+    {
+      "method": "mcp.interactions.list",
+      "params": {
+        "workspacePath": "D:/fixture-trace-project"
+      }
+    },
+    {
+      "method": "conversationTasks.list",
+      "params": {
+        "sessionId": "trace-fixture"
+      }
+    },
+    {
+      "method": "mcp.interactions.list",
+      "params": {
+        "workspacePath": "D:/fixture-trace-project"
+      }
+    },
+    {
+      "method": "mcp.interactions.list",
+      "params": {
+        "workspacePath": "D:/fixture-trace-project"
+      }
+    },
+    {
+      "method": "conversationTasks.list",
+      "params": {
+        "sessionId": "trace-fixture"
+      }
+    },
+    {
+      "method": "mcp.interactions.list",
+      "params": {
+        "workspacePath": "D:/fixture-trace-project"
+      }
+    },
+    {
+      "method": "conversationTasks.list",
+      "params": {
+        "sessionId": "trace-fixture"
+      }
+    },
+    {
+      "method": "mcp.interactions.list",
+      "params": {
+        "workspacePath": "D:/fixture-trace-project"
+      }
+    },
+    {
+      "method": "mcp.interactions.list",
+      "params": {
+        "workspacePath": "D:/fixture-trace-project"
+      }
+    },
+    {
+      "method": "conversationTasks.list",
+      "params": {
+        "sessionId": "trace-fixture"
+      }
+    },
+    {
+      "method": "mcp.interactions.list",
+      "params": {
+        "workspacePath": "D:/fixture-trace-project"
+      }
+    },
+    {
+      "method": "conversationTasks.list",
+      "params": {
+        "sessionId": "trace-fixture"
+      }
+    },
+    {
+      "method": "mcp.interactions.list",
+      "params": {
+        "workspacePath": "D:/fixture-trace-project"
+      }
+    },
+    {
+      "method": "mcp.interactions.list",
+      "params": {
+        "workspacePath": "D:/fixture-trace-project"
+      }
+    },
+    {
+      "method": "conversationTasks.list",
+      "params": {
+        "sessionId": "trace-fixture"
+      }
+    },
+    {
+      "method": "mcp.interactions.list",
+      "params": {
+        "workspacePath": "D:/fixture-trace-project"
+      }
+    },
+    {
+      "method": "conversationTasks.list",
+      "params": {
+        "sessionId": "trace-fixture"
+      }
+    },
+    {
+      "method": "mcp.interactions.list",
+      "params": {
+        "workspacePath": "D:/fixture-trace-project"
+      }
+    },
+    {
+      "method": "mcp.interactions.list",
+      "params": {
+        "workspacePath": "D:/fixture-trace-project"
+      }
+    },
+    {
+      "method": "conversationTasks.list",
+      "params": {
+        "sessionId": "trace-fixture"
+      }
+    },
+    {
+      "method": "mcp.interactions.list",
+      "params": {
+        "workspacePath": "D:/fixture-trace-project"
+      }
+    },
+    {
+      "method": "conversationTasks.list",
+      "params": {
+        "sessionId": "trace-fixture"
+      }
+    },
+    {
+      "method": "mcp.interactions.list",
+      "params": {
+        "workspacePath": "D:/fixture-trace-project"
+      }
+    },
+    {
+      "method": "mcp.interactions.list",
+      "params": {
+        "workspacePath": "D:/fixture-trace-project"
+      }
+    },
+    {
+      "method": "conversationTasks.list",
+      "params": {
+        "sessionId": "trace-fixture"
+      }
+    },
+    {
+      "method": "mcp.interactions.list",
+      "params": {
+        "workspacePath": "D:/fixture-trace-project"
+      }
+    },
+    {
+      "method": "conversationTasks.list",
+      "params": {
+        "sessionId": "trace-fixture"
+      }
+    },
+    {
+      "method": "mcp.interactions.list",
+      "params": {
+        "workspacePath": "D:/fixture-trace-project"
+      }
+    },
+    {
+      "method": "mcp.interactions.list",
+      "params": {
+        "workspacePath": "D:/fixture-trace-project"
+      }
+    },
+    {
+      "method": "conversationTasks.list",
+      "params": {
+        "sessionId": "trace-fixture"
+      }
+    },
+    {
+      "method": "mcp.interactions.list",
+      "params": {
+        "workspacePath": "D:/fixture-trace-project"
+      }
+    },
+    {
+      "method": "conversationTasks.list",
+      "params": {
+        "sessionId": "trace-fixture"
+      }
+    },
+    {
+      "method": "mcp.interactions.list",
+      "params": {
+        "workspacePath": "D:/fixture-trace-project"
+      }
+    },
+    {
+      "method": "mcp.interactions.list",
+      "params": {
+        "workspacePath": "D:/fixture-trace-project"
+      }
+    },
+    {
+      "method": "conversationTasks.list",
+      "params": {
+        "sessionId": "trace-fixture"
+      }
+    },
+    {
+      "method": "mcp.interactions.list",
+      "params": {
+        "workspacePath": "D:/fixture-trace-project"
+      }
+    },
+    {
+      "method": "conversationTasks.list",
+      "params": {
+        "sessionId": "trace-fixture"
+      }
+    },
+    {
+      "method": "mcp.interactions.list",
+      "params": {
+        "workspacePath": "D:/fixture-trace-project"
+      }
+    },
+    {
+      "method": "mcp.interactions.list",
+      "params": {
+        "workspacePath": "D:/fixture-trace-project"
+      }
+    },
+    {
+      "method": "conversationTasks.list",
+      "params": {
+        "sessionId": "trace-fixture"
+      }
+    },
+    {
+      "method": "mcp.interactions.list",
+      "params": {
+        "workspacePath": "D:/fixture-trace-project"
+      }
+    },
+    {
+      "method": "conversationTasks.list",
+      "params": {
+        "sessionId": "trace-fixture"
+      }
+    },
+    {
+      "method": "mcp.interactions.list",
+      "params": {
+        "workspacePath": "D:/fixture-trace-project"
+      }
+    },
+    {
+      "method": "mcp.interactions.list",
+      "params": {
+        "workspacePath": "D:/fixture-trace-project"
+      }
+    },
+    {
+      "method": "conversationTasks.list",
+      "params": {
+        "sessionId": "trace-fixture"
+      }
+    },
+    {
+      "method": "mcp.interactions.list",
+      "params": {
+        "workspacePath": "D:/fixture-trace-project"
+      }
+    },
+    {
+      "method": "conversationTasks.list",
+      "params": {
+        "sessionId": "trace-fixture"
+      }
+    },
+    {
+      "method": "mcp.interactions.list",
+      "params": {
+        "workspacePath": "D:/fixture-trace-project"
+      }
+    },
+    {
+      "method": "mcp.interactions.list",
+      "params": {
+        "workspacePath": "D:/fixture-trace-project"
+      }
+    },
+    {
+      "method": "conversationTasks.list",
+      "params": {
+        "sessionId": "trace-fixture"
+      }
+    },
+    {
+      "method": "mcp.interactions.list",
+      "params": {
+        "workspacePath": "D:/fixture-trace-project"
+      }
+    },
+    {
+      "method": "conversationTasks.list",
+      "params": {
+        "sessionId": "trace-fixture"
+      }
+    },
+    {
+      "method": "mcp.interactions.list",
+      "params": {
+        "workspacePath": "D:/fixture-trace-project"
+      }
+    },
+    {
+      "method": "mcp.interactions.list",
+      "params": {
+        "workspacePath": "D:/fixture-trace-project"
+      }
+    },
+    {
+      "method": "conversationTasks.list",
+      "params": {
+        "sessionId": "trace-fixture"
+      }
+    },
+    {
+      "method": "mcp.interactions.list",
+      "params": {
+        "workspacePath": "D:/fixture-trace-project"
+      }
+    },
+    {
+      "method": "conversationTasks.list",
+      "params": {
+        "sessionId": "trace-fixture"
+      }
+    },
+    {
+      "method": "mcp.interactions.list",
+      "params": {
+        "workspacePath": "D:/fixture-trace-project"
+      }
+    },
+    {
+      "method": "mcp.interactions.list",
+      "params": {
+        "workspacePath": "D:/fixture-trace-project"
+      }
+    },
+    {
+      "method": "conversationTasks.list",
+      "params": {
+        "sessionId": "trace-fixture"
+      }
+    },
+    {
+      "method": "sessions.list",
+      "params": {
+        "deleted": false,
+        "limit": 50,
+        "offset": 0
+      }
+    },
+    {
+      "method": "projects.list",
+      "params": {
+        "deleted": false
+      }
+    },
+    {
+      "method": "skills.list"
+    },
+    {
+      "method": "profiles.list"
+    },
+    {
+      "method": "tasks.list"
+    },
+    {
+      "method": "approvals.list"
+    },
+    {
+      "method": "memory.list"
+    },
+    {
+      "method": "plugins.list"
+    },
+    {
+      "method": "skills.list"
+    },
+    {
+      "method": "model.current",
+      "params": {
+        "profileId": "default",
+        "needsVision": false
+      }
+    },
+    {
+      "method": "session.view",
+      "params": {
+        "limit": 20,
+        "sessionId": "trace-fixture"
+      }
+    },
+    {
+      "method": "mcp.interactions.list",
+      "params": {
+        "workspacePath": "D:/fixture-trace-project"
+      }
+    },
+    {
+      "method": "skills.list",
+      "params": {
+        "workspacePath": "D:/fixture-trace-project"
+      }
+    },
+    {
+      "method": "conversationTasks.list",
+      "params": {
+        "sessionId": "trace-fixture"
+      }
+    },
+    {
+      "method": "run.eventPage",
+      "params": {
+        "runId": "run-file-edit-fixture",
+        "afterSequence": -1,
+        "limit": 200
+      }
+    },
+    {
+      "method": "run.review",
+      "params": {
+        "runId": "run-file-edit-fixture"
+      }
+    },
+    {
+      "method": "run.output",
+      "params": {
+        "runId": "run-file-edit-fixture",
+        "callId": "call-file-create",
+        "offset": 0,
+        "limit": 64000
+      }
+    },
+    {
+      "method": "run.output",
+      "params": {
+        "runId": "run-file-edit-fixture",
+        "callId": "call-file-overwrite",
+        "offset": 0,
+        "limit": 64000
+      }
+    },
+    {
+      "method": "run.output",
+      "params": {
+        "runId": "run-file-edit-fixture",
+        "callId": "call-file-create",
+        "offset": 512,
+        "limit": 64000
+      }
+    },
+    {
+      "method": "run.output",
+      "params": {
+        "runId": "run-file-edit-fixture",
+        "callId": "call-file-patch",
+        "offset": 0,
+        "limit": 64000
+      }
+    },
+    {
+      "method": "run.output",
+      "params": {
+        "runId": "run-file-edit-fixture",
+        "callId": "call-file-create",
+        "offset": 1024,
+        "limit": 64000
+      }
+    },
+    {
+      "method": "run.output",
+      "params": {
+        "runId": "run-file-edit-fixture",
+        "callId": "call-file-conflict",
+        "offset": 0,
+        "limit": 64000
+      }
+    },
+    {
+      "method": "run.output",
+      "params": {
+        "runId": "run-file-edit-fixture",
+        "callId": "call-file-create",
+        "offset": 1536,
+        "limit": 64000
+      }
+    },
+    {
+      "method": "run.output",
+      "params": {
+        "runId": "run-file-edit-fixture",
+        "callId": "call-file-terminal",
+        "offset": 0,
+        "limit": 64000
+      }
+    },
+    {
+      "method": "mcp.interactions.list",
+      "params": {
+        "workspacePath": "D:/fixture-trace-project"
+      }
+    },
+    {
+      "method": "conversationTasks.list",
+      "params": {
+        "sessionId": "trace-fixture"
+      }
+    },
+    {
+      "method": "mcp.interactions.list",
+      "params": {
+        "workspacePath": "D:/fixture-trace-project"
+      }
+    },
+    {
+      "method": "mcp.interactions.list",
+      "params": {
+        "workspacePath": "D:/fixture-trace-project"
+      }
+    },
+    {
+      "method": "conversationTasks.list",
+      "params": {
+        "sessionId": "trace-fixture"
+      }
+    },
+    {
+      "method": "mcp.interactions.list",
+      "params": {
+        "workspacePath": "D:/fixture-trace-project"
+      }
+    },
+    {
+      "method": "conversationTasks.list",
+      "params": {
+        "sessionId": "trace-fixture"
+      }
+    },
+    {
+      "method": "mcp.interactions.list",
+      "params": {
+        "workspacePath": "D:/fixture-trace-project"
+      }
+    },
+    {
+      "method": "mcp.interactions.list",
+      "params": {
+        "workspacePath": "D:/fixture-trace-project"
+      }
+    },
+    {
+      "method": "conversationTasks.list",
+      "params": {
+        "sessionId": "trace-fixture"
+      }
+    },
+    {
+      "method": "mcp.interactions.list",
+      "params": {
+        "workspacePath": "D:/fixture-trace-project"
+      }
+    },
+    {
+      "method": "conversationTasks.list",
+      "params": {
+        "sessionId": "trace-fixture"
+      }
+    },
+    {
+      "method": "mcp.interactions.list",
+      "params": {
+        "workspacePath": "D:/fixture-trace-project"
+      }
+    },
+    {
+      "method": "mcp.interactions.list",
+      "params": {
+        "workspacePath": "D:/fixture-trace-project"
+      }
+    },
+    {
+      "method": "conversationTasks.list",
+      "params": {
+        "sessionId": "trace-fixture"
+      }
+    },
+    {
+      "method": "mcp.interactions.list",
+      "params": {
+        "workspacePath": "D:/fixture-trace-project"
+      }
+    }
+  ]
+}

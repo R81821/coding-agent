@@ -1,0 +1,14 @@
+{
+  "capturedAt": "2026-10-18T09:04:54.843Z",
+  "callId": "call_00_LzMOnT348jW46Y9mbOxC4135",
+  "tool": "browser",
+  "input": {
+    "action": "navigate",
+    "tabId": "17ae7fbb-e072-4ba2-b559-a528bf9c26ee",
+    "url": "file:///D:/npqo/screenshots/dashboard-1440.png"
+  },
+  "isError": false,
+  "durationMs": 337,
+  "text": "{\n  \"tabId\": \"17ae7fbb-e072-4ba2-b559-a528bf9c26ee\",\n  \"url\": \"file:///D:/npqo/screenshots/dashboard-1440.png\",\n  \"title\": \"dashboard-1440.png (1440×2039)\",\n  \"success\": true\n}",
+  "truncated": false
+}

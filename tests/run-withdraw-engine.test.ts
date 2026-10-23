@@ -136,7 +136,8 @@ describe("latest paused conversation withdrawal", { timeout: 20_000 }, () => {
       expect(h.engine.pause(run.id)).toBe(true);
       expect((await result).status).toBe("paused");
       await h.engine.waitForSettlement(run.id);
-      expect(h.database.getApproval(approvalId)).toMatchObject({ status: "denied", decidedBy: "system:paused" });
+      expect(h.database.getApproval(approvalId)).toMatchObject({ status: "pending" });
+      expect(h.database.getApproval(approvalId)?.decidedBy).toBeUndefined();
       expect(execute).not.toHaveBeenCalled();
       expect(h.database.getRun(run.id)?.spec.grants).toEqual([]);
       await h.engine.withdraw(run.id);

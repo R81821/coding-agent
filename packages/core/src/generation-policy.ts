@@ -2,6 +2,7 @@ import type { GenerationPolicy, ModelDescriptor, ModelMessage, ModelRequest } fr
 
 export const DEFAULT_MAX_OUTPUT_TOKENS = 393_216;
 export const DEFAULT_REVIEW_MAX_OUTPUT_TOKENS = 32_768;
+export const DEFAULT_COMPACTION_MAX_OUTPUT_TOKENS = 32_768;
 
 export function resolveMainOutputTokens(policy?: GenerationPolicy): number {
   return policy?.maxOutputTokens ?? DEFAULT_MAX_OUTPUT_TOKENS;
@@ -9,6 +10,10 @@ export function resolveMainOutputTokens(policy?: GenerationPolicy): number {
 
 export function resolveReviewOutputLimit(policy?: GenerationPolicy): number {
   return policy?.reviewMaxOutputTokens ?? DEFAULT_REVIEW_MAX_OUTPUT_TOKENS;
+}
+
+export function resolveCompactionOutputLimit(policy?: GenerationPolicy): number {
+  return policy?.compactionMaxOutputTokens ?? DEFAULT_COMPACTION_MAX_OUTPUT_TOKENS;
 }
 
 export function initialReviewOutputTokens(requirementCount: number, hardLimit = DEFAULT_REVIEW_MAX_OUTPUT_TOKENS): number {
@@ -44,5 +49,11 @@ export function resolveRequestOutputTokens(input: {
   const overhead = Math.min(1024, Math.floor(context / 16));
   const available = Math.floor(context - input.estimatedInputTokens - overhead);
   if (available < 1) throw Object.assign(new Error("context_budget_exceeded: input and tool schemas exceed the model context budget"), { code: "context_budget_exceeded" });
-  return Math.min(input.maxOutputTokens, input.model.capabilities.maxOutputTokens ?? Infinity, available);
+  // Context capacity bounds input + output; it is never evidence of output
+  // support. A missing capability still needs a finite ceiling, including when
+  // an internal caller asks for all available output with Infinity.
+  const outputLimit = input.model.capabilities.maxOutputTokens ?? DEFAULT_MAX_OUTPUT_TOKENS;
+  const resolved = Math.floor(Math.min(input.maxOutputTokens, outputLimit, available));
+  if (!Number.isSafeInteger(resolved) || resolved < 1) throw Object.assign(new Error("output_budget_invalid: output allowance must be a positive finite integer"), { code: "output_budget_invalid" });
+  return resolved;
 }

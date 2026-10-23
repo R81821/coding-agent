@@ -1,0 +1,98 @@
+[
+  {
+    "Path": "D:\\npqo\\src\\App.test.tsx",
+    "Hash": "366CB11115511BAA02E72B46F546C24257B25BC7FDB691220D0B4EB363BF9BE7"
+  },
+  {
+    "Path": "D:\\npqo\\src\\App.tsx",
+    "Hash": "8C78707FC12D4CCE392971948E8D44D8D5DCFE84E7DCF1E0F4CD3CE5BBA45C12"
+  },
+  {
+    "Path": "D:\\npqo\\src\\main.tsx",
+    "Hash": "0CFC74C3DE63DB2222D7B1F1F736B3B4FC5117A98543B0F2E10899F5B5CB3349"
+  },
+  {
+    "Path": "D:\\npqo\\src\\styles.css",
+    "Hash": "285BB6E0233228B2917E9D58F7DFA281BBE8B7B7EA4E4AEE222CEB61F59BDF43"
+  },
+  {
+    "Path": "D:\\npqo\\src\\components\\AgentCard.tsx",
+    "Hash": "9AD57BF88F67C3BDAD0A0316561B1B2DA308B2E4B38A213383825D0027A949D1"
+  },
+  {
+    "Path": "D:\\npqo\\src\\components\\AgentGrid.tsx",
+    "Hash": "24E3BA9FFF3F4192A63D93F306ACDCE24DF334EED634E10E3D9A1D7CBD607BD7"
+  },
+  {
+    "Path": "D:\\npqo\\src\\components\\AnalysisPanel.tsx",
+    "Hash": "2421EA9596A0AA908BF9FC7608E7CFFA62A022D13D835A3A1D3788C68FD92DD0"
+  },
+  {
+    "Path": "D:\\npqo\\src\\components\\CandleChart.tsx",
+    "Hash": "E3485AFE8013C38E98342D9799879F9481E5411B62EC1AC1CA555F83C3AB3862"
+  },
+  {
+    "Path": "D:\\npqo\\src\\components\\EquityPanel.tsx",
+    "Hash": "693946E628B4AE654AAD5A4A1375E707FF6546029A1E68ECDAFA6A12462106AB"
+  },
+  {
+    "Path": "D:\\npqo\\src\\components\\PixelRoom.tsx",
+    "Hash": "B3816064B66BBDD1CC3A171F5CCC560A6DE46A02E552E067DF7A9966F15EC814"
+  },
+  {
+    "Path": "D:\\npqo\\src\\components\\ThresholdPanel.tsx",
+    "Hash": "226AF8B13D106B081188E7C07C878E774E7016156D87CE70F29508BF072369C5"
+  },
+  {
+    "Path": "D:\\npqo\\src\\components\\TopBar.tsx",
+    "Hash": "6EFB0BA116612FD050BD9E98CD90873F094F35CFC269BB5184D5F4A42A4CA38C"
+  },
+  {
+    "Path": "D:\\npqo\\src\\data\\AgentStream.tsx",
+    "Hash": "5DD0B7D80DD7679EF6EB625E463C0919BB6C3B8FFBD46D25582A73A481870A48"
+  },
+  {
+    "Path": "D:\\npqo\\src\\data\\eventEngine.test.ts",
+    "Hash": "609F0EFC0CDE279485C50896DF28BB6853A6F2A89E47E92A48FB31D8A1A6C930"
+  },
+  {
+    "Path": "D:\\npqo\\src\\data\\eventEngine.ts",
+    "Hash": "9FF239D68CDDED52B66FF6C23EF54C9E1CFFAC14D256E9AFCFAFF45182EE240C"
+  },
+  {
+    "Path": "D:\\npqo\\src\\data\\types.ts",
+    "Hash": "AFB657305730410DA5670D12B76506448D151DDB63F9F6102D3E12FF94D5C0B2"
+  },
+  {
+    "Path": "D:\\npqo\\src\\test\\setup.ts",
+    "Hash": "0BBFD9FF5C73D1027C018C9EF0DA607CFB0F4DD9E4FEBF3C7018022D07CC4DB8"
+  },
+  {
+    "Path": "D:\\npqo\\scripts\\screenshots.mjs",
+    "Hash": "08E9B3EE584915F69C75613F95A71A0A66F816128C3B9EA53BDFAE3092A33D3D"
+  },
+  {
+    "Path": "D:\\npqo\\public\\favicon.svg",
+    "Hash": "5359B73E7EE7860DA8840CDF377EC416524875F2E9310D6999FC143215502728"
+  },
+  {
+    "Path": "D:\\npqo\\package.json",
+    "Hash": "8B86935D31753A3E6A0771407213A150D2995DC56593CDA8F3DE4DD0096085AB"
+  },
+  {
+    "Path": "D:\\npqo\\package-lock.json",
+    "Hash": "5A71BF2E5C06C5AA10C91606CB5A48BB28C0D78EDF4BCD4ECE094EE0C2231C96"
+  },
+  {
+    "Path": "D:\\npqo\\tsconfig.json",
+    "Hash": "3166466702CC688E4345C98277D063B4D3EAF29D30AD9D8480A628543B0CCE84"
+  },
+  {
+    "Path": "D:\\npqo\\vite.config.ts",
+    "Hash": "3D0C98D332126F34A482DDB67ABE23A04B26AD817B7F98BAC8B4C0A569B0C224"
+  },
+  {
+    "Path": "D:\\npqo\\index.html",
+    "Hash": "F6AF0AD81367D0DCB65BE52171ED0075BC27EDD58995667C262B74838D8C389B"
+  }
+]

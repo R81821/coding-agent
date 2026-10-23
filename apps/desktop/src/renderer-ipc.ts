@@ -87,8 +87,10 @@ const RENDERER_ALLOWED_METHODS: ReadonlySet<DaemonRequest["method"]> = new Set([
   "project.inspect",
   "project.trust",
   "project.scaffold",
+  "project.migrate",
   "connectors.pairing",
   "attachment.put",
+  "attachment.preview",
 ]);
 
 /**

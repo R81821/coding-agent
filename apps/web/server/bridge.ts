@@ -16,6 +16,7 @@ const allowed = new Set([
   "project.inspect",
   "project.trust",
   "project.scaffold",
+  "project.migrate",
   "sessions.list",
   "sessions.create",
   "session.get",

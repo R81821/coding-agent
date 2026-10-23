@@ -9,7 +9,7 @@ import { HarnessDatabase, VaultCrypto } from "@harness/persistence";
 import { descriptor, type ModelProvider, type ProviderStreamEvent } from "@harness/providers";
 import { DEFAULT_PROFILE, newId, nowIso, type AgentEvent, type ModelRequest, type PlanSpec } from "@harness/protocol";
 import { createDefaultToolRegistry, ToolRegistry } from "@harness/tools";
-import { sequentialPrelude } from "./sequential-fixture.js";
+import { workflowCall } from "./workflow-fixture.js";
 import { runtimeStopSummary } from "../packages/core/src/runtime-messages.js";
 
 const temporary: string[] = [];
@@ -144,6 +144,14 @@ function makeGate() {
   };
 }
 
+/** These cases exercise the legacy plan dialog, which modern workflows no longer open. */
+function legacyPlanPrelude(turn: number): ProviderStreamEvent[] {
+  if (turn === 1) return [workflowCall("legacy-understand", "update_workflow", { action: "understand", intent: "change", requirements: ["Write the requested note"] })];
+  if (turn === 2) return [workflowCall("legacy-plan-read", "read_file", { path: "a.txt" })];
+  if (turn === 3) return [workflowCall("legacy-plan", "update_workflow", { action: "plan", context: "The inspected workspace contains a.txt and the requested note remains to be written", steps: ["Write the requested note"], cause: "The user requested a new note", evidenceIds: ["legacy-plan-read"] })];
+  return [];
+}
+
 describe("run control", { timeout: 20_000 }, () => {
   it.each(["resume", "continue"] as const)("expires an old stop summary on %s and resumes real tool work", async mode => {
     const stale = runtimeStopSummary("legacy verification configuration missing");
@@ -191,8 +199,10 @@ describe("run control", { timeout: 20_000 }, () => {
   it("pauses at a turn boundary, keeps the checkpoint, and resumes the same task", async () => {
     const seen: string[] = [];
     const gate = makeGate();
+    const resumeGate = makeGate();
+    let resuming = false;
     // Three turns run, then the run parks inside its fourth model request until the gate opens.
-    const h = await harness(gated(seen, 1_000, () => gate.wait(), 3));
+    const h = await harness(gated(seen, 1_000, () => resuming ? resumeGate.wait() : gate.wait(), 3));
     const first = waitForResult(h.engine, h.spec.id);
     h.engine.start(h.spec, h.profile);
     await waitUntil(() => seen.length >= 4);
@@ -211,13 +221,18 @@ describe("run control", { timeout: 20_000 }, () => {
     await settle();
     const turnsBefore = seen.length;
     const second = waitForResult(h.engine, h.spec.id);
+    resuming = true;
     h.engine.resume(h.spec.id, h.profile);
-    await new Promise((resolve) => setTimeout(resolve, 300));
+    // Observe a real resumed dispatch and keep it parked until cancellation.
+    // A fixed sleep lets this fast fake run into compaction, which it does not implement.
+    await waitUntil(() => seen.length > turnsBefore);
     expect(seen.length).toBeGreaterThan(turnsBefore);
+    expect(h.engine.isActive(h.spec.id)).toBe(true);
     expect(h.database.listEvents(h.spec.id)).toContainEqual(expect.objectContaining({ type: "context_adjusted", adjustment: { kind: "resume_rebuild" } }));
     h.engine.cancel(h.spec.id);
+    resumeGate.open();
     const resumed = await second;
-    expect(resumed.status).toBe("cancelled");
+    expect(resumed.status, JSON.stringify({ result: resumed, errors: h.database.listEvents(h.spec.id).filter(event => event.type === "error") })).toBe("cancelled");
   });
 
   it("delivers a steering message to the model without discarding the run", async () => {
@@ -310,17 +325,19 @@ describe("run control", { timeout: 20_000 }, () => {
       execute: async (input) => ({ output: { written: String((input as { text?: unknown }).text ?? "") } }),
     });
     const h = await harnessWith(async function* (_request: ModelRequest, callIndex: number) {
-      if (callIndex === 1) yield* sequentialPrelude("fixture-verify", "a.txt");
+      if (callIndex <= 3) { yield* legacyPlanPrelude(callIndex); return; }
       yield { type: "tool_call", toolCall: { id: `call-${callIndex}`, name: "write_note", input: { text: "note" } } };
       yield { type: "usage", usage: { inputTokens: 10, outputTokens: 5, estimatedUsd: 0 } };
     }, registry);
-    const spec = { ...h.spec, request: "write a note and keep going" };
+    const spec = { ...h.spec, workflowVersion: 1 as const, request: "write a note and keep going" };
     const profile = { ...h.profile, toolNames: ["read_file", "write_note"], verificationPolicy: { items: [], maxRepairAttempts: null, broaderPolicy: "optional" as const } };
 
     const done = waitForResult(h.engine, spec.id);
     h.engine.start(spec, profile);
     await waitUntil(() => h.database.getRun(spec.id)?.status === "waiting_approval");
     expect(h.database.getRun(spec.id)?.status).toBe("waiting_approval");
+    expect(h.database.getPlanForRun(spec.id)?.status).toBe("awaiting_approval");
+    expect(h.database.listEvents(spec.id).some(event => event.type === "plan_approval_required")).toBe(true);
     expect(h.engine.pause(spec.id)).toBe(true);
 
     const result = await done;
@@ -346,17 +363,18 @@ describe("run control", { timeout: 20_000 }, () => {
       execute: async () => ({ output: { written: true } }),
     });
     const h = await harnessWith(async function* (_request: ModelRequest, callIndex: number) {
-      if (callIndex === 1) yield* sequentialPrelude("fixture-verify", "a.txt");
+      if (callIndex <= 3) { yield* legacyPlanPrelude(callIndex); return; }
       yield { type: "tool_call", toolCall: { id: `call-${callIndex}`, name: "write_note", input: { text: "note" } } };
       yield { type: "usage", usage: { inputTokens: 10, outputTokens: 5, estimatedUsd: 0 } };
     }, registry);
-    const spec = { ...h.spec, request: "write a note" };
+    const spec = { ...h.spec, workflowVersion: 1 as const, request: "write a note" };
     const profile = { ...h.profile, toolNames: ["read_file", "write_note"], verificationPolicy: { items: [], maxRepairAttempts: null, broaderPolicy: "optional" as const } };
 
     const done = waitForResult(h.engine, spec.id);
     h.engine.start(spec, profile);
     await waitUntil(() => h.database.getRun(spec.id)?.status === "waiting_approval");
     expect(h.database.getPlanForRun(spec.id)?.status).toBe("awaiting_approval");
+    expect(h.database.listEvents(spec.id).some(event => event.type === "plan_approval_required")).toBe(true);
 
     h.engine.cancel(spec.id);
     await done;
@@ -374,11 +392,11 @@ describe("run control", { timeout: 20_000 }, () => {
       execute: async () => ({ output: { written: true } }),
     });
     const h = await harnessWith(async function* (_request: ModelRequest, callIndex: number) {
-      if (callIndex === 1) yield* sequentialPrelude("fixture-verify", "a.txt");
+      if (callIndex <= 3) { yield* legacyPlanPrelude(callIndex); return; }
       yield { type: "tool_call", toolCall: { id: `call-${callIndex}`, name: "write_note", input: { text: "note" } } };
       yield { type: "usage", usage: { inputTokens: 10, outputTokens: 5, estimatedUsd: 0 } };
     }, registry);
-    const spec = { ...h.spec, request: "write a note" };
+    const spec = { ...h.spec, workflowVersion: 1 as const, request: "write a note" };
     const profile = { ...h.profile, toolNames: ["read_file", "write_note"], verificationPolicy: { items: [], maxRepairAttempts: null, broaderPolicy: "optional" as const } };
     const now = nowIso();
     h.database.savePlan({
@@ -395,6 +413,7 @@ describe("run control", { timeout: 20_000 }, () => {
     expect(fresh.id).toBe("plan-stale");
     expect(fresh.version).toBeGreaterThanOrEqual(2);
     expect(fresh.status).toBe("awaiting_approval");
+    expect(h.database.listEvents(spec.id).some(event => event.type === "plan_approval_required" && event.planId === fresh.id && event.version === fresh.version)).toBe(true);
     // The decisive part: the new version has a live decision behind it, so approving it resolves
     // instead of throwing "Plan is not attached to an active run".
     let decided: PlanSpec | undefined;

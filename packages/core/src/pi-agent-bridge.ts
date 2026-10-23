@@ -83,6 +83,7 @@ export interface PiAgentBridgeOptions {
   resolveTool(name: string): ToolDefinition | undefined;
   externalSignal: AbortSignal;
   maxOutputTokens: number;
+  compactionMaxOutputTokens?: number;
   reasoningEffort?: ReasoningEffort;
   parallelToolCalls: boolean;
   maxConcurrentTools?: number;
@@ -107,6 +108,9 @@ export interface PiAgentBridgeOptions {
    * empty array means the run continues uninterrupted.
    */
   drainSteering?(): Array<string | { id: string; text: string }>;
+  getPolicyMessages?(): ModelMessage[];
+  /** Prepare one accepted policy snapshot before context measurement and model dispatch. */
+  preparePolicyMessages?(): Promise<void>;
   beforeModelRequest?(): void;
   onModelRequestFinished?(timing: RequestTiming): void;
   beforeCompactionRequest?(): boolean;
@@ -215,7 +219,7 @@ export async function runWithPiAgent(
   const recoveredSteering = options.resumeTranscript !== undefined ? options.drainSteering?.() ?? [] : [];
 
   const transcript = () => toHarnessMessages({ systemPrompt: agent.state.systemPrompt,
-    messages: contextTracker.current(agent.state.messages).filter(message => !isStopSummary(message)) }, attachmentParts(options.initialMessages));
+    messages: contextTracker.current(agent.state.messages).filter(message => !isStopSummary(message)) }, attachmentParts(options.initialMessages), options.getPolicyMessages?.() ?? options.initialMessages);
   const unsubscribe = agent.subscribe((event) => {
     // pi emits results in original call order. Save only a complete paired batch: a checkpoint
     // between two tool results could otherwise place an image/user message before an orphan.
@@ -343,7 +347,13 @@ function createPiTools(options: PiAgentBridgeOptions, pool: BoundedExecutionPool
             result = await options.executeTool(call, tool, executionSignal);
           } finally { release(); }
           const serialized = serializeOutput(result.output);
-          const bounded = result.trustedInstruction !== true && contract.name !== "read_evidence" && options.contracts.some(tool => tool.name === "read_evidence") && serialized.length > 8000;
+          const diffPage = result.output as { source?: string; summary?: { coveredParts?: number; pagesRead?: number } } | null;
+          // workspace_diff already pages all text under a hard byte budget. Cutting its pages a
+          // second time would let runtime coverage advance while hiding the diff from the model.
+          const completeDiffPage = contract.name === "workspace_diff" && diffPage?.source === "workspace_baseline"
+            && typeof diffPage.summary?.coveredParts === "number" && typeof diffPage.summary.pagesRead === "number"
+            && Buffer.byteLength(serialized, "utf8") <= 80_000;
+          const bounded = result.trustedInstruction !== true && !completeDiffPage && contract.name !== "read_evidence" && options.contracts.some(tool => tool.name === "read_evidence") && serialized.length > 8000;
           const modelResult = bounded ? { ...result, output: { evidenceId: toolCallId, truncated: true, preview: compactObservation(result.output, 7600), originalCharacters: serialized.length, instruction: "Use read_evidence or a bounded file range for the rest." } } : result;
           if (bounded) options.onContextAdjustment?.({ kind: "tool_result_bound", beforeCharacters: serialized.length, afterCharacters: serializeOutput(modelResult.output).length });
           return {
@@ -402,7 +412,7 @@ async function streamProvider(
       // it again. Dropping it after the first request left later turns reasoning about a picture they
       // could no longer see.
       messages: imagesForModel(normalizeToolMessageSequence(
-        toHarnessMessages(context, attachmentParts(options.initialMessages)),
+        toHarnessMessages(context, attachmentParts(options.initialMessages), options.getPolicyMessages?.() ?? options.initialMessages),
       ), options.model),
       tools: options.contracts.filter((contract) => context.tools?.some((tool) => tool.name === contract.name)),
       maxOutputTokens: options.maxOutputTokens,
@@ -680,9 +690,11 @@ function attachmentParts(messages: ModelMessage[]): AttachmentRef[] {
 export function toHarnessMessages(
   context: { systemPrompt?: string; messages: AgentMessage[] },
   attachments: AttachmentRef[],
+  policyMessages?: ModelMessage[],
 ): ModelMessage[] {
   const messages: ModelMessage[] = [];
-  if (context.systemPrompt) {
+  if (policyMessages) messages.push(...policyMessages.filter(message => message.role === "system" || message.role === "developer"));
+  else if (context.systemPrompt) {
     messages.push({
       role: "system",
       content: [
@@ -878,6 +890,8 @@ function createContextTransformer(options: PiAgentBridgeOptions) {
   // can change the answer — is a sound cache key.
   const measureCache = new WeakMap<AgentMessage[], Map<string, number>>();
   const measured = (messages: AgentMessage[], signature: string, compute: () => number): number => {
+    // Policy layers may change after implementation starts without changing this array identity.
+    signature += "|" + JSON.stringify(options.getPolicyMessages?.() ?? options.initialMessages.filter(message => message.role === "system" || message.role === "developer"));
     let entries = measureCache.get(messages);
     if (!entries) { entries = new Map(); measureCache.set(messages, entries); }
     const hit = entries.get(signature);
@@ -888,15 +902,16 @@ function createContextTransformer(options: PiAgentBridgeOptions) {
     entries.set(signature, value);
     return value;
   };
-  const wireTokens = (messages: AgentMessage[]) => measured(messages, `w${messages.length}`, () => Math.max(1, Math.ceil(JSON.stringify({ messages: toHarnessMessages({ systemPrompt: extractSystemPrompt(options.initialMessages), messages }, []), tools: options.contracts }).length / 4)));
+  const wireTokens = (messages: AgentMessage[]) => measured(messages, `w${messages.length}`, () => Math.max(1, Math.ceil(JSON.stringify({ messages: toHarnessMessages({ systemPrompt: extractSystemPrompt(options.initialMessages), messages }, [], options.getPolicyMessages?.() ?? options.initialMessages), tools: options.contracts }).length / 4)));
   // Compaction and dispatch must agree on input feasibility. Otherwise a long task
   // can pass the old compaction threshold and fail immediately at provider dispatch.
   const estimate = (messages: AgentMessage[]) => measured(messages, `e${messages.length}|${calibration}|${requestCalibration}`, () => Math.max(Math.ceil(wireTokens(messages) * calibration), estimatePayload({
-    messages: toHarnessMessages({ systemPrompt: extractSystemPrompt(options.initialMessages), messages }, attachmentParts(options.initialMessages)),
+    messages: toHarnessMessages({ systemPrompt: extractSystemPrompt(options.initialMessages), messages }, attachmentParts(options.initialMessages), options.getPolicyMessages?.() ?? options.initialMessages),
     tools: options.contracts,
   })));
   const current = (messages: AgentMessage[]) => history.length ? [...history, ...messages.slice(source.length)] : messages;
   const transform = async (messages: AgentMessage[], signal?: AbortSignal): Promise<AgentMessage[]> => {
+    if (options.preparePolicyMessages) await options.preparePolicyMessages();
     // Canonicalising every message on every request is the most expensive work here. Carried-over
     // messages keep their object identity, so reuse the stored fingerprint and only hash the ones
     // that were actually replaced.
@@ -1024,6 +1039,7 @@ async function summarizeOldContext(options: PiAgentBridgeOptions, messages: Agen
     .flatMap(part => part.type === "text" && ["user_request", "trusted_project", "user_profile"].includes(part.trust) ? [part.text] : []);
   const generated = await summarizeContext({
     runId: options.runId,
+    ...(options.compactionMaxOutputTokens === undefined ? {} : { maxOutputTokens: options.compactionMaxOutputTokens }),
     model: options.model,
     provider: options.provider,
     messages: toHarnessMessages({ systemPrompt: "", messages }, []),

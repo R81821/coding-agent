@@ -1,0 +1,13 @@
+{
+  "capturedAt": "2026-10-18T08:55:53.826Z",
+  "callId": "call_00_yXLlE2znl7r3k4IbUjMf0606",
+  "tool": "terminal",
+  "input": {
+    "command": "cd D:\\npqo; [Console]::In.ReadToEnd() | Set-Content -Encoding ascii src\\components\\_probe.ts; Get-ChildItem src\\components | Select-Object Name,Length",
+    "stdin": "export const probe = \"stdin-write-ok\";\n"
+  },
+  "isError": false,
+  "durationMs": 528,
+  "text": "{\n  \"exitCode\": 0,\n  \"stdout\": \"\\r\\nName               Length\\r\\n----               ------\\r\\nAgentCard.tsx        3450\\r\\nAgentGrid.tsx        3049\\r\\nAnalysisPanel.tsx    2850\\r\\nCandleChart.tsx      4097\\r\\nEquityPanel.tsx      7820\\r\\nThresholdPanel.tsx   1254\\r\\nTopBar.tsx           3332\\r\\n_probe.ts              41\\r\\n\\r\\n\\r\\n\",\n  \"stderr\": \"\",\n  \"truncated\": false,\n  \"timedOut\": false\n}",
+  "truncated": false
+}

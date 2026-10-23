@@ -55,6 +55,33 @@ function boundaryCapacity(inputTokens: number, outputTokens = 1): number {
 }
 
 describe("continuation summary request budgets", () => {
+  it("does not turn a smaller final compaction batch into an oversized output request", async () => {
+    const { options, requests } = fixture({ response: request => {
+      if (request.maxOutputTokens > 393_216) throw new Error("Invalid max_tokens value, the valid range of max_tokens is [1, 393216]");
+      return [{ type: "text_delta", delta: JSON.stringify(generated) }];
+    } });
+    options.messages = [message("First batch: " + "x".repeat(1_850_000)), message("Remaining batch: " + "y".repeat(120_000))];
+    await summarizeContext(options);
+    expect(requests).toHaveLength(2);
+    expect(requests.flatMap(request => payload(request).records)).toEqual(options.messages);
+    expect(estimateRequestInputTokens(requests[1]!)).toBeLessThan(estimateRequestInputTokens(requests[0]!));
+    expect(requests.map(request => request.maxOutputTokens)).toEqual([32_768, 32_768]);
+  });
+
+  it.each([
+    { modelOutput: undefined, configured: 8_192, expected: 8_192 },
+    { modelOutput: 4_096, configured: 8_192, expected: 4_096 },
+    { modelOutput: 65_536, configured: 60_000, expected: 60_000 },
+  ])("honors independent configured and model summary output limits ($modelOutput, $configured)", async ({ modelOutput, configured, expected }) => {
+    const { options, requests } = fixture(modelOutput === undefined ? {} : { output: modelOutput });
+    options.maxOutputTokens = configured;
+    const timings: unknown[] = [];
+    options.onModelRequestFinished = timing => { timings.push(timing); };
+    await summarizeContext(options);
+    expect(requests[0]!.maxOutputTokens).toBe(expected);
+    expect(timings).toEqual([expect.objectContaining({ purpose: "compaction", configuredMaxOutputTokens: configured, maxOutputTokens: expected, attempt: 1, succeeded: true })]);
+  });
+
   it.each([
     { label: "Unicode", body: "路径核验错误原因🧪".repeat(110) },
     { label: "nested JSON escaping", body: '"\\\n\t\u0000'.repeat(500) },

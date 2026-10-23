@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { DEFAULT_PROFILE, SessionContentLoader, mergeViewEvents, type AgentEvent, type DaemonRequestInput, type RunEventPage, type SessionView } from "@harness/protocol";
+import { appliedToolChanges } from "../apps/desktop/src/code-changes.js";
 
 const at = "2026-10-07T00:00:00.000Z";
 const makeRun = (id: string, sequence = 1): SessionView["runs"][number] => ({
@@ -27,6 +28,34 @@ function setup(initial: SessionView, handler: (input: DaemonRequestInput) => Pro
 }
 
 describe("automatic conversation hydration", () => {
+  it("restores confirmed file changes only after every JSON receipt page has loaded", async () => {
+    const started: Extract<AgentEvent, { type: "tool_started" }> = { id: "write-start", runId: "a", sequence: 0, at, type: "tool_started", call: { id: "write", name: "write_file", input: { path: "server/marketData.ts", content: "do not infer actual writes from this input" } } };
+    const receipt = { written: true, path: "server/marketData.ts", byteLength: 25, created: true, changed: true, diff: '--- /dev/null\n+++ b/server/marketData.ts\n@@ -0,0 +1 @@\n+export const 价格 = 1;\n', added: 1, deleted: 0, diffTruncated: false };
+    const saved: Extract<AgentEvent, { type: "tool_finished" }> = { id: "write-finish", runId: "a", sequence: 1, at, type: "tool_finished", callId: "write", durationMs: 1, isError: false, output: { deferred: true, runId: "a", callId: "write" } };
+    const text = JSON.stringify(receipt, null, 2);
+    let pages = 0;
+    const work = setup(makeView(["a"]), async input => {
+      if (input.method === "run.eventPage") return { events: [started, saved], nextSequence: 1, hasMore: false, status: "completed" };
+      if (input.method === "run.output") {
+        const pending = work.read().runs[0]!.events.find(event => event.type === "tool_finished") as typeof saved;
+        expect(appliedToolChanges(started, pending)).toBeUndefined();
+        pages++;
+        const offset = input.params.offset;
+        const nextOffset = Math.min(offset + 80, text.length);
+        return { text: text.slice(offset, nextOffset), nextOffset, hasMore: nextOffset < text.length };
+      }
+      throw Error(input.method);
+    });
+    work.loader.prioritize(["a"]);
+    await drain(30);
+    expect(pages).toBeGreaterThan(1);
+    const hydrated = work.read().runs[0]!.events[1] as typeof saved;
+    expect(hydrated.output).toBe(text);
+    expect(appliedToolChanges(started, hydrated)).toEqual(appliedToolChanges(started, { ...saved, output: receipt }));
+    expect(appliedToolChanges(started, hydrated)?.files[0]).toMatchObject({ path: "server/marketData.ts", added: 1, deleted: 0 });
+    expect(work.onError).not.toHaveBeenCalled();
+  });
+
   it("prioritizes visible rows, preloads every older row and drains full output without user clicks", async () => {
     const output = "工具输出".repeat(40000);
     const work = setup(makeView(["a", "b"], true), async input => {

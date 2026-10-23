@@ -11,8 +11,9 @@ import { desktopBrowserRequest } from "./browser-bridge.js";
 import { grantsAllow } from "./grants.js";
 import { confinedPath, validateWorkspaceGlob } from "./paths.js";
 import { PatchFormatError, prepareUnifiedPatch } from "./patch-validation.js";
-import { runProcess } from "./process.js";
+import { runProcess, WindowsCommandLineTooLongError } from "./process.js";
 import type { ToolDefinition } from "./types.js";
+import { boundedFileDiff } from "./write-file.js";
 
 const readFileInput = z.object({ path: z.string(), maxBytes: z.number().int().positive().max(5_000_000).default(16_384) });
 export const readFileTool: ToolDefinition = {
@@ -168,7 +169,7 @@ export const applyPatchTool: ToolDefinition = {
     }
     const applied = await runProcess("git", ["apply", ...flags], options);
     if (applied.exitCode !== 0) return failed("apply", applied);
-    return { output: { applied: true, paths: prepared.paths, normalizedHunkCounts: prepared.correctedHunks > 0 } };
+    return { output: { applied: true, paths: prepared.paths, normalizedHunkCounts: prepared.correctedHunks > 0, ...boundedFileDiff(prepared.patch) } };
   }
 };
 
@@ -178,7 +179,7 @@ export const terminalTool: ToolDefinition = {
   contract: {
     name: "terminal",
     description: process.platform === "win32"
-      ? "Run a command using Windows PowerShell 5.1 (powershell.exe). Use PowerShell syntax; &&, /dev/null, and Unix ls flags are not supported. For Python scripts use command e.g. & .venv/Scripts/python.exe -X utf8 - and put the full source in stdin. Do not embed quoted or multiline source in python -c; PowerShell 5.1 corrupts native argument quotes. Keep test scripts available until verification finishes. Prefer list_files, search_text and read_file for repository inspection."
+      ? "Run a command using Windows PowerShell 5.1 (powershell.exe). Use PowerShell syntax; &&, /dev/null, and Unix ls flags are not supported. Windows command lines must fit 32767 UTF-16 units after argument quoting; use apply_patch/write_file for source files and stdin for long scripts. For Python scripts use command e.g. & .venv/Scripts/python.exe -X utf8 - and put the full source in stdin. Do not embed quoted or multiline source in python -c; PowerShell 5.1 corrupts native argument quotes. Keep test scripts available until verification finishes. Prefer list_files, search_text and read_file for repository inspection."
       : "Run a command in the workspace using /bin/sh. Use stdin for script source with a command such as python -X utf8 -.",
     inputSchema: { type: "object", properties: { command: { type: "string" }, stdin: { type: "string", maxLength: 1000000, description: "UTF-8 standard input, passed without shell interpolation. Use a single interpreter command reading stdin, e.g. python -X utf8 -." }, timeoutMs: { type: "integer", maximum: 3600000 } }, required: ["command"], additionalProperties: false },
     risk: "high",
@@ -196,8 +197,13 @@ export const terminalTool: ToolDefinition = {
     if (denied) throw new Error(denied);
     const shell = process.platform === "win32" ? "powershell.exe" : "/bin/sh";
     const args = process.platform === "win32" ? ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", parsed.command] : ["-lc", parsed.command];
-    const result = await runProcess(shell, args, { cwd: context.workspacePath, signal: context.signal, timeoutMs: parsed.timeoutMs, ...(parsed.stdin !== undefined ? { stdin: parsed.stdin } : {}) });
-    return { output: result, truncated: result.truncated, isError: result.exitCode !== 0 || result.timedOut };
+    try {
+      const result = await runProcess(shell, args, { cwd: context.workspacePath, signal: context.signal, timeoutMs: parsed.timeoutMs, ...(parsed.stdin !== undefined ? { stdin: parsed.stdin } : {}) });
+      return { output: result, truncated: result.truncated, isError: result.exitCode !== 0 || result.timedOut };
+    } catch (error) {
+      if (!(error instanceof WindowsCommandLineTooLongError)) throw error;
+      return { isError: true, output: { ...error.toJSON(), exitCode: -1, stdout: "", stderr: error.message, truncated: false, timedOut: false } };
+    }
   }
 };
 

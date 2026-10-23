@@ -14,6 +14,7 @@ import { ProjectTrustService } from "./project-trust.js";
 import { configureTelemetry } from "./telemetry.js";
 import { HarnessEvalRunner } from "@harness/evals";
 import { loadProfilesWithBudgetMigration } from "./budget-migration.js";
+import { migrateFileToolsPolicy } from "./file-tools-policy.js";
 import { migrateMemoryPolicy } from "./memory-policy.js";
 import { learnFromRun } from "./memory-learning.js";
 import { ProjectMemoryService } from "./project-memory.js";
@@ -59,6 +60,7 @@ export async function createRuntime(options: { appDataPath?: string; passphrase:
     attachmentResolver: async (attachment) => ({ mimeType: attachment.mimeType, base64: (await blobs.read(attachment)).toString("base64") })
   });
   const profiles = loadProfilesWithBudgetMigration(database);
+  migrateFileToolsPolicy(profiles, database);
   migrateMemoryPolicy(profiles, database);
   const modelRouter = new ModelRouter(providers);
   const memory = new MemoryService(database);
@@ -248,7 +250,7 @@ export async function createRuntime(options: { appDataPath?: string; passphrase:
     const profile = profiles.get(task.run.profileId);
     if (!profile) throw new Error(`Unknown profile: ${task.run.profileId}`);
     const run = { ...task.run, id: `${task.run.id}-${Date.now()}`, createdAt: new Date().toISOString() };
-    const hasWriteGrant = run.grants.some((grant) => grant.toolNames.some((name) => ["apply_patch", "terminal", "browser", "delegate"].includes(name)));
+    const hasWriteGrant = run.grants.some((grant) => grant.toolNames.some((name) => ["apply_patch", "write_file", "terminal", "browser", "delegate"].includes(name)));
     if (hasWriteGrant && !task.approvedPlanTemplate) throw new Error("Scheduled write tasks require an approved plan template");
     if (task.approvedPlanTemplate) database.savePlan({ ...task.approvedPlanTemplate, id: newId("plan"), runId: run.id, version: 1, status: "approved", approvedBy: task.approvedPlanTemplate.approvedBy ?? "schedule-template", approvedAt: task.approvedPlanTemplate.approvedAt ?? nowIso(), createdAt: nowIso(), updatedAt: nowIso() });
     const completion = new Promise<Extract<"Done" | "Review" | "Failed" | "Cancelled", string>>((resolveCompletion) => {

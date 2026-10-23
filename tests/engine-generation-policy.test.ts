@@ -75,6 +75,17 @@ async function fixture(beforeRequest?: (request: ModelRequest, turn: number) => 
 }
 
 describe("engine generation policy", { timeout: 15_000 }, () => {
+  it("freezes an explicit independent compaction allowance in the run policy", async () => {
+    const h = await fixture();
+    try {
+      h.profile.generationPolicy = { maxOutputTokens: 6_144, reviewMaxOutputTokens: 8_192, compactionMaxOutputTokens: 12_000 };
+      const run = h.spec();
+      await h.finish(run);
+      expect(h.database.getRun(run.id)?.spec.generationPolicy).toEqual(h.profile.generationPolicy);
+      expect(h.requests.every(request => request.maxOutputTokens === 6_144)).toBe(true);
+    } finally { await h.close(); }
+  });
+
   it("sends the Profile main limit on real requests and freezes both limits in the new RunSpec", async () => {
     const h = await fixture();
     try {

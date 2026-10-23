@@ -3,12 +3,14 @@ import { descriptor, type ModelProvider } from "@harness/providers";
 import type { ModelRequest } from "@harness/protocol";
 import { runWithPiAgent } from "@harness/core";
 import type { RequestTiming } from "../packages/core/src/model-request.js";
-import { initialReviewOutputTokens, nextReviewOutputTokens, resolveMainOutputTokens, resolveRequestOutputTokens, resolveReviewOutputLimit } from "../packages/core/src/generation-policy.js";
+import { initialReviewOutputTokens, nextReviewOutputTokens, resolveCompactionOutputLimit, resolveMainOutputTokens, resolveRequestOutputTokens, resolveReviewOutputLimit } from "../packages/core/src/generation-policy.js";
 
 describe("generation allowances", () => {
   it("keeps legacy main defaults and independent automatic review headroom", () => {
     expect(resolveMainOutputTokens()).toBe(393_216);
     expect(resolveReviewOutputLimit()).toBe(32_768);
+    expect(resolveCompactionOutputLimit()).toBe(32_768);
+    expect(resolveCompactionOutputLimit({ maxOutputTokens: 200, compactionMaxOutputTokens: 12_000 })).toBe(12_000);
     expect(resolveMainOutputTokens({ maxOutputTokens: 4000, reviewMaxOutputTokens: 10_000 })).toBe(4000);
     expect(resolveReviewOutputLimit({ maxOutputTokens: 4000, reviewMaxOutputTokens: 10_000 })).toBe(10_000);
     expect(initialReviewOutputTokens(4)).toBe(8192);
@@ -49,5 +51,18 @@ describe("generation allowances", () => {
     expect(result.errorMessage).toBeUndefined();
     expect(requests[0]!.maxOutputTokens).toBe(2048);
     expect(timings[0]).toMatchObject({ purpose: "main", succeeded: true, maxOutputTokens: 2048, configuredMaxOutputTokens: 50_000, attempt: 1 });
+  });
+
+  it("keeps an unknown model's output finite even with a million-token context and an unbounded caller", () => {
+    const model = descriptor({ providerId: "fake", modelId: "unknown-output", displayName: "Unknown", maxContextTokens: 1_000_000 });
+    expect(resolveRequestOutputTokens({ model, maxOutputTokens: Infinity, estimatedInputTokens: 30_000 })).toBe(393_216);
+    expect(resolveRequestOutputTokens({ model, maxOutputTokens: 2_000, estimatedInputTokens: 30_000 })).toBe(2_000);
+    model.capabilities.maxOutputTokens = 600_000;
+    expect(resolveRequestOutputTokens({ model, maxOutputTokens: 500_000, estimatedInputTokens: 30_000 })).toBe(500_000);
+  });
+
+  it.each([NaN, 0, -1])("rejects invalid output budgets before provider dispatch (%s)", maxOutputTokens => {
+    const model = descriptor({ providerId: "fake", modelId: "budget", displayName: "Budget" });
+    expect(() => resolveRequestOutputTokens({ model, maxOutputTokens, estimatedInputTokens: 1_000 })).toThrow("output_budget_invalid");
   });
 });

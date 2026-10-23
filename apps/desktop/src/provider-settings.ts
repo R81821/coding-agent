@@ -1,17 +1,33 @@
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
+import { resolvePromptBackend, type PromptBackend, type PromptBackendSelection } from "@harness/protocol";
+
+export type { PromptBackend, PromptBackendSelection } from "@harness/protocol";
 
 export interface ProviderSettings {
   openaiCompatibleBaseUrl: string;
   openaiCompatibleModel: string;
   apiProtocol?: "auto" | "responses" | "chat_completions";
   maxContextTokens?: number;
+  maxOutputTokens?: number;
+  promptBackend?: PromptBackendSelection;
+  resolvedPromptBackend?: PromptBackend;
 }
 
 export const DEFAULT_PROVIDER_SETTINGS: ProviderSettings = {
   openaiCompatibleBaseUrl: "",
   openaiCompatibleModel: "",
+  promptBackend: "auto",
+  resolvedPromptBackend: "harness",
 };
+
+/** Resolve from the saved model configuration, never from a supplied cached result. */
+export function resolveProviderPromptBackend(
+  settings: Pick<ProviderSettings, "openaiCompatibleBaseUrl" | "openaiCompatibleModel" | "promptBackend">,
+): PromptBackend {
+  if (!settings.openaiCompatibleBaseUrl.trim() || !settings.openaiCompatibleModel.trim()) return "harness";
+  return resolvePromptBackend(settings.openaiCompatibleBaseUrl, settings.promptBackend);
+}
 
 export function normalizeProviderSettings(input: unknown): ProviderSettings {
   const value =
@@ -33,8 +49,12 @@ export function normalizeProviderSettings(input: unknown): ProviderSettings {
     throw new Error("Base URL 与模型名称必须同时填写，或同时留空以禁用");
   const protocol = value.apiProtocol;
   if (protocol !== undefined && !["auto", "responses", "chat_completions"].includes(String(protocol))) throw new Error("API 协议必须为 auto、responses 或 chat_completions");
+  const promptBackend = value.promptBackend === undefined ? "auto" : value.promptBackend;
+  if (promptBackend !== "auto" && promptBackend !== "harness" && promptBackend !== "dsh") throw new Error("提示词系统必须为 auto、harness 或 dsh");
   const capacity = value.maxContextTokens;
   if (capacity !== undefined && (typeof capacity !== "number" || !Number.isSafeInteger(capacity) || capacity <= 0)) throw new Error("上下文容量必须为正整数 tokens");
+  const output = value.maxOutputTokens;
+  if (output !== undefined && (typeof output !== "number" || !Number.isSafeInteger(output) || output <= 0)) throw new Error("模型最大输出必须为正整数 tokens");
   if (!rawBaseUrl) return DEFAULT_PROVIDER_SETTINGS;
   let url: URL;
   try {
@@ -48,11 +68,15 @@ export function normalizeProviderSettings(input: unknown): ProviderSettings {
     throw new Error("Base URL 不能包含用户名或密码");
   url.search = "";
   url.hash = "";
+  const baseUrl = url.toString().replace(/\/$/, "");
   return {
-    openaiCompatibleBaseUrl: url.toString().replace(/\/$/, ""),
+    openaiCompatibleBaseUrl: baseUrl,
     openaiCompatibleModel: model,
+    promptBackend,
+    resolvedPromptBackend: resolveProviderPromptBackend({ openaiCompatibleBaseUrl: baseUrl, openaiCompatibleModel: model, promptBackend }),
     ...(protocol === undefined ? {} : { apiProtocol: protocol as ProviderSettings["apiProtocol"] & string }),
     ...(capacity === undefined ? {} : { maxContextTokens: capacity as number }),
+    ...(output === undefined ? {} : { maxOutputTokens: output as number }),
   };
 }
 
@@ -86,11 +110,14 @@ export async function saveProviderSettings(
 export function providerSettingsEnvironment(
   settings: ProviderSettings,
 ): NodeJS.ProcessEnv {
-  if (!settings.openaiCompatibleBaseUrl) return {};
+  const promptEnvironment = { OPENAI_COMPATIBLE_PROMPT_BACKEND: resolveProviderPromptBackend(settings) };
+  if (!settings.openaiCompatibleBaseUrl) return promptEnvironment;
   return {
+    ...promptEnvironment,
     OPENAI_COMPATIBLE_BASE_URL: settings.openaiCompatibleBaseUrl,
     OPENAI_COMPATIBLE_MODEL: settings.openaiCompatibleModel,
     ...(settings.apiProtocol ? { OPENAI_COMPATIBLE_API_PROTOCOL: settings.apiProtocol } : {}),
     ...(settings.maxContextTokens ? { OPENAI_COMPATIBLE_MAX_CONTEXT_TOKENS: String(settings.maxContextTokens) } : {}),
+    ...(settings.maxOutputTokens ? { OPENAI_COMPATIBLE_MAX_OUTPUT_TOKENS: String(settings.maxOutputTokens) } : {}),
   };
 }

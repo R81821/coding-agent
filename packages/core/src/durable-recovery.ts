@@ -33,8 +33,10 @@ export function verificationItemFingerprint(codeFingerprint: string, item: Verif
     stdin: item.stdin,
     timeoutMs: item.timeoutMs,
     expectedExitCodes: item.expectedExitCodes,
+    generatedArtifactPaths: item.generatedArtifactPaths ?? [],
     platform: process.platform,
     node: process.version,
+    environment: Object.entries(process.env).sort(([a], [b]) => a.localeCompare(b)),
   })).digest("hex");
 }
 

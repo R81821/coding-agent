@@ -1,3 +1,5 @@
+export { behaviorCases, prepareBehaviorReview, summarizeBehaviorReview } from "./behavior.js";
+export type { BehaviorSample, BehaviorReview, BlindPair, ReviewKey } from "./behavior.js";
 import { newId, nowIso, type EvalCase, type EvalResult } from "@harness/protocol";
 import type { HarnessDatabase } from "@harness/persistence";
 import type { ModelProvider } from "@harness/providers";

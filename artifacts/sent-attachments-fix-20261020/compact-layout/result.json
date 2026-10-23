@@ -1,0 +1,558 @@
+{
+  "checks": [
+    "renderer ready",
+    "production IPC guard rejects unauthorized methods",
+    "opened session a",
+    "composer is editable",
+    "add menu exposes image chooser",
+    "image chooser populates six Attachment cards",
+    "image chooser receives profile provider scope exactly once",
+    "valid thumbnails load",
+    "image Attachment cards use the demo vertical layout",
+    "thumbnails and fallback occupy a 96 pixel top image area above filename and metadata",
+    "remove actions stay over the image area inside each card",
+    "actual filename and formatted byte size are displayed",
+    "legacy glass tile and MIME trust caption are replaced",
+    "missing preview uses an image icon without broken image",
+    "long filename is safely ellipsized",
+    "restored clipboard attachment receives a readable fallback filename",
+    "vertical image cards stay in a horizontal group inside composer",
+    "light Kelo theme retains Attachment cards",
+    "Attachment surface resolves in light theme",
+    "classic theme is restored",
+    "opened session b",
+    "other session has a separate empty attachment draft",
+    "opened session a",
+    "switching back restores all attachment draft cards",
+    "narrow window applied",
+    "narrow attachment row scrolls inside composer without page overflow",
+    "Tab reaches next attachment remove action",
+    "Tab reaches the clipped third attachment remove action",
+    "focused remove action scrolls into view",
+    "keyboard removal targets the selected attachment",
+    "removing an attachment never submits a run",
+    "text and images are ready to submit",
+    "successful send clears attachment and text draft",
+    "submission retains exact AttachmentRef values without local filename or preview metadata",
+    "successful image send displays every sent screenshot as a loaded image",
+    "sent multiple screenshots on desktop: sent thumbnails are separate from the text bubble",
+    "sent multiple screenshots on desktop: thumbnails sit 12 pixels above the text bubble",
+    "sent multiple screenshots on desktop: thumbnail group aligns right and supports wrapping",
+    "sent multiple screenshots on desktop: every rendered thumbnail row shares the group's right edge",
+    "sent multiple screenshots on desktop: thumbnail cards are 120 pixel squares with cover crops and 14 pixel corners",
+    "sent multiple screenshots on desktop: image filenames remain in title and alt without visible captions",
+    "sent multiple screenshots on desktop: thumbnails do not overflow the viewport horizontally",
+    "sent image with no draft preview is recovered through the run-scoped preview RPC",
+    "clicking a sent screenshot opens a loaded large-image dialog",
+    "Escape closes the sent screenshot preview",
+    "preview RPC refuses an attachment outside the requested run",
+    "preview RPC refuses an unknown run",
+    "opened session b",
+    "add menu exposes a separate generic file chooser",
+    "file chooser imports TXT, TSX and PDF attachments",
+    "generic file chooser receives profile provider scope",
+    "ordinary files use horizontal Attachment cards with file icons",
+    "persisted filenames, code type and actual file byte sizes are shown",
+    "a file-only draft does not require a vision model",
+    "opened session a",
+    "sent image session has an empty attachment draft",
+    "switching sessions restores sent image attachments independently of the empty draft",
+    "sent thumbnail narrow window applied",
+    "sent multiple screenshots in a narrow window: sent thumbnails are separate from the text bubble",
+    "sent multiple screenshots in a narrow window: thumbnails sit 12 pixels above the text bubble",
+    "sent multiple screenshots in a narrow window: thumbnail group aligns right and supports wrapping",
+    "sent multiple screenshots in a narrow window: every rendered thumbnail row shares the group's right edge",
+    "sent multiple screenshots in a narrow window: thumbnail cards are 120 pixel squares with cover crops and 14 pixel corners",
+    "sent multiple screenshots in a narrow window: image filenames remain in title and alt without visible captions",
+    "sent multiple screenshots in a narrow window: thumbnails do not overflow the viewport horizontally",
+    "narrow sent screenshots wrap across multiple right-aligned rows",
+    "opened session b",
+    "generic file drafts restore after switching sessions",
+    "generic file menu can reopen",
+    "file chooser failure is visible next to composer",
+    "a failed file import keeps the existing draft",
+    "importing dropped files shows pending state and prevents premature send",
+    "a mixed drop imports every file and normalizes the image",
+    "image import refreshes model selection with vision enabled",
+    "mixed file drop preserves filenames, uses the file importer and enables vision only for images",
+    "a pasted nonimage File is imported as an attachment",
+    "pasted files retain clipboard source",
+    "a pasted screenshot is imported as an image attachment",
+    "pasted screenshot import retains image MIME and clipboard source",
+    "ordinary file remove action targets its own attachment",
+    "generic file narrow window applied",
+    "mixed generic files and image attachments stay inside narrow composer",
+    "successful mixed file send clears draft",
+    "mixed file submission sends exact persisted refs for PDF, code, text and image without display metadata",
+    "a mixed sent message keeps ordinary files visible alongside dropped and pasted screenshots",
+    "a pasted screenshot remains visible after send",
+    "sent code and PDF attachments retain their persisted filenames",
+    "preview RPC refuses a nonimage owned by the run",
+    "pending file import is visible before switching session",
+    "opened session a",
+    "a stale file import cannot add an attachment to a different session",
+    "returning after a mixed file send restores all earlier screenshot attachments",
+    "renderer reload restores the application shell",
+    "opened session a",
+    "renderer reload restores historical screenshots from persisted AttachmentRef values",
+    "historical image recovery requests persisted preview bytes after a full renderer reload",
+    "a paused run accepts a screenshot into its follow-up draft",
+    "paused follow-up text and screenshot are ready to submit",
+    "unsupported screenshot follow-up shows an explicit error and preserves the complete draft",
+    "an unsupported attachment follow-up cannot silently send only its text or start another run",
+    "the guarded follow-up draft can be cleared without altering sent history",
+    "opened session b",
+    "renderer reload also restores mixed files and the pasted screenshot from history",
+    "opened session c",
+    "single screenshot reference session starts with an empty composer and history",
+    "single screenshot reference draft is ready",
+    "single screenshot and reference text can be submitted",
+    "single screenshot reference send clears its draft",
+    "single sent screenshot loads above its reference text",
+    "single screenshot and text reference layout: sent thumbnails are separate from the text bubble",
+    "single screenshot and text reference layout: thumbnails sit 12 pixels above the text bubble",
+    "single screenshot and text reference layout: thumbnail group aligns right and supports wrapping",
+    "single screenshot and text reference layout: every rendered thumbnail row shares the group's right edge",
+    "single screenshot and text reference layout: thumbnail cards are 120 pixel squares with cover crops and 14 pixel corners",
+    "single screenshot and text reference layout: image filenames remain in title and alt without visible captions",
+    "single screenshot and text reference layout: thumbnails do not overflow the viewport horizontally",
+    "renderer has no runtime errors"
+  ],
+  "rendererErrors": [],
+  "scratch": "D:\\qweai\\.cache\\attachment-ui-Uc58nY",
+  "sentRuns": [
+    "run_e429fb89-2c1d-4a16-9b78-edd64bb7ba33",
+    "run_37789af3-c321-439b-8457-a81540769618",
+    "run_76a501b2-9b23-4cac-980f-bf416c54ace0"
+  ],
+  "historicalImageIds": [
+    "attachment-0",
+    "attachment-1",
+    "attachment-3",
+    "attachment-4",
+    "attachment-5"
+  ],
+  "previewRequestCount": 28,
+  "sentLayoutMetrics": [
+    {
+      "label": "sent multiple screenshots on desktop",
+      "viewport": 1324,
+      "pageWidth": 1324,
+      "group": {
+        "left": 567,
+        "right": 1199,
+        "top": 158.6666717529297,
+        "bottom": 278.6666717529297,
+        "width": 632,
+        "height": 120
+      },
+      "bubble": {
+        "left": 1011,
+        "right": 1199,
+        "top": 290.66668701171875,
+        "bottom": 335.76043701171875,
+        "width": 188,
+        "height": 45.09375
+      },
+      "insideBubble": false,
+      "groupStyle": {
+        "wrap": "wrap",
+        "justify": "flex-end",
+        "gap": "8px"
+      },
+      "images": [
+        {
+          "card": {
+            "left": 567,
+            "right": 687,
+            "top": 158.6666717529297,
+            "bottom": 278.6666717529297,
+            "width": 120,
+            "height": 120
+          },
+          "button": {
+            "left": 567,
+            "right": 687,
+            "top": 158.6666717529297,
+            "bottom": 278.6666717529297,
+            "width": 120,
+            "height": 120
+          },
+          "image": {
+            "left": 567.6666870117188,
+            "right": 686.3333587646484,
+            "top": 159.33334350585938,
+            "bottom": 278.00001525878906,
+            "width": 118.66667175292969,
+            "height": 118.66667175292969
+          },
+          "radius": "14px",
+          "fit": "cover",
+          "title": "图片 1",
+          "alt": "图片 1"
+        },
+        {
+          "card": {
+            "left": 695,
+            "right": 815,
+            "top": 158.6666717529297,
+            "bottom": 278.6666717529297,
+            "width": 120,
+            "height": 120
+          },
+          "button": {
+            "left": 695,
+            "right": 815,
+            "top": 158.6666717529297,
+            "bottom": 278.6666717529297,
+            "width": 120,
+            "height": 120
+          },
+          "image": {
+            "left": 695.6666870117188,
+            "right": 814.3333587646484,
+            "top": 159.33334350585938,
+            "bottom": 278.00001525878906,
+            "width": 118.66667175292969,
+            "height": 118.66667175292969
+          },
+          "radius": "14px",
+          "fit": "cover",
+          "title": "图片 2",
+          "alt": "图片 2"
+        },
+        {
+          "card": {
+            "left": 823,
+            "right": 943,
+            "top": 158.6666717529297,
+            "bottom": 278.6666717529297,
+            "width": 120,
+            "height": 120
+          },
+          "button": {
+            "left": 823,
+            "right": 943,
+            "top": 158.6666717529297,
+            "bottom": 278.6666717529297,
+            "width": 120,
+            "height": 120
+          },
+          "image": {
+            "left": 823.6666870117188,
+            "right": 942.3333587646484,
+            "top": 159.33334350585938,
+            "bottom": 278.00001525878906,
+            "width": 118.66667175292969,
+            "height": 118.66667175292969
+          },
+          "radius": "14px",
+          "fit": "cover",
+          "title": "图片 3",
+          "alt": "图片 3"
+        },
+        {
+          "card": {
+            "left": 951,
+            "right": 1071,
+            "top": 158.6666717529297,
+            "bottom": 278.6666717529297,
+            "width": 120,
+            "height": 120
+          },
+          "button": {
+            "left": 951,
+            "right": 1071,
+            "top": 158.6666717529297,
+            "bottom": 278.6666717529297,
+            "width": 120,
+            "height": 120
+          },
+          "image": {
+            "left": 951.6666870117188,
+            "right": 1070.3333587646484,
+            "top": 159.33334350585938,
+            "bottom": 278.00001525878906,
+            "width": 118.66667175292969,
+            "height": 118.66667175292969
+          },
+          "radius": "14px",
+          "fit": "cover",
+          "title": "图片 4",
+          "alt": "图片 4"
+        },
+        {
+          "card": {
+            "left": 1079,
+            "right": 1199,
+            "top": 158.6666717529297,
+            "bottom": 278.6666717529297,
+            "width": 120,
+            "height": 120
+          },
+          "button": {
+            "left": 1079,
+            "right": 1199,
+            "top": 158.6666717529297,
+            "bottom": 278.6666717529297,
+            "width": 120,
+            "height": 120
+          },
+          "image": {
+            "left": 1079.666748046875,
+            "right": 1198.3334197998047,
+            "top": 159.33334350585938,
+            "bottom": 278.00001525878906,
+            "width": 118.66667175292969,
+            "height": 118.66667175292969
+          },
+          "radius": "14px",
+          "fit": "cover",
+          "title": "剪贴板图片 5",
+          "alt": "剪贴板图片 5"
+        }
+      ],
+      "visibleCaptions": 0
+    },
+    {
+      "label": "sent multiple screenshots in a narrow window",
+      "viewport": 760,
+      "pageWidth": 760,
+      "group": {
+        "left": 349.96875,
+        "right": 731.3229370117188,
+        "top": 158.6666717529297,
+        "bottom": 406.6666717529297,
+        "width": 381.35418701171875,
+        "height": 248
+      },
+      "bubble": {
+        "left": 543.3229370117188,
+        "right": 731.3229370117188,
+        "top": 418.66668701171875,
+        "bottom": 463.76043701171875,
+        "width": 188,
+        "height": 45.09375
+      },
+      "insideBubble": false,
+      "groupStyle": {
+        "wrap": "wrap",
+        "justify": "flex-end",
+        "gap": "8px"
+      },
+      "images": [
+        {
+          "card": {
+            "left": 355.32293701171875,
+            "right": 475.32293701171875,
+            "top": 158.6666717529297,
+            "bottom": 278.6666717529297,
+            "width": 120,
+            "height": 120
+          },
+          "button": {
+            "left": 355.32293701171875,
+            "right": 475.32293701171875,
+            "top": 158.6666717529297,
+            "bottom": 278.6666717529297,
+            "width": 120,
+            "height": 120
+          },
+          "image": {
+            "left": 355.9895935058594,
+            "right": 474.65626525878906,
+            "top": 159.33334350585938,
+            "bottom": 278.00001525878906,
+            "width": 118.66667175292969,
+            "height": 118.66667175292969
+          },
+          "radius": "14px",
+          "fit": "cover",
+          "title": "图片 1",
+          "alt": "图片 1"
+        },
+        {
+          "card": {
+            "left": 483.32293701171875,
+            "right": 603.3229370117188,
+            "top": 158.6666717529297,
+            "bottom": 278.6666717529297,
+            "width": 120,
+            "height": 120
+          },
+          "button": {
+            "left": 483.32293701171875,
+            "right": 603.3229370117188,
+            "top": 158.6666717529297,
+            "bottom": 278.6666717529297,
+            "width": 120,
+            "height": 120
+          },
+          "image": {
+            "left": 483.9895935058594,
+            "right": 602.6562652587891,
+            "top": 159.33334350585938,
+            "bottom": 278.00001525878906,
+            "width": 118.66667175292969,
+            "height": 118.66667175292969
+          },
+          "radius": "14px",
+          "fit": "cover",
+          "title": "图片 2",
+          "alt": "图片 2"
+        },
+        {
+          "card": {
+            "left": 611.3229370117188,
+            "right": 731.3229370117188,
+            "top": 158.6666717529297,
+            "bottom": 278.6666717529297,
+            "width": 120,
+            "height": 120
+          },
+          "button": {
+            "left": 611.3229370117188,
+            "right": 731.3229370117188,
+            "top": 158.6666717529297,
+            "bottom": 278.6666717529297,
+            "width": 120,
+            "height": 120
+          },
+          "image": {
+            "left": 611.9896240234375,
+            "right": 730.6562957763672,
+            "top": 159.33334350585938,
+            "bottom": 278.00001525878906,
+            "width": 118.66667175292969,
+            "height": 118.66667175292969
+          },
+          "radius": "14px",
+          "fit": "cover",
+          "title": "图片 3",
+          "alt": "图片 3"
+        },
+        {
+          "card": {
+            "left": 483.32293701171875,
+            "right": 603.3229370117188,
+            "top": 286.66668701171875,
+            "bottom": 406.66668701171875,
+            "width": 120,
+            "height": 120
+          },
+          "button": {
+            "left": 483.32293701171875,
+            "right": 603.3229370117188,
+            "top": 286.66668701171875,
+            "bottom": 406.66668701171875,
+            "width": 120,
+            "height": 120
+          },
+          "image": {
+            "left": 483.9895935058594,
+            "right": 602.6562652587891,
+            "top": 287.3333435058594,
+            "bottom": 406.00001525878906,
+            "width": 118.66667175292969,
+            "height": 118.66667175292969
+          },
+          "radius": "14px",
+          "fit": "cover",
+          "title": "图片 4",
+          "alt": "图片 4"
+        },
+        {
+          "card": {
+            "left": 611.3229370117188,
+            "right": 731.3229370117188,
+            "top": 286.66668701171875,
+            "bottom": 406.66668701171875,
+            "width": 120,
+            "height": 120
+          },
+          "button": {
+            "left": 611.3229370117188,
+            "right": 731.3229370117188,
+            "top": 286.66668701171875,
+            "bottom": 406.66668701171875,
+            "width": 120,
+            "height": 120
+          },
+          "image": {
+            "left": 611.9896240234375,
+            "right": 730.6562957763672,
+            "top": 287.3333435058594,
+            "bottom": 406.00001525878906,
+            "width": 118.66667175292969,
+            "height": 118.66667175292969
+          },
+          "radius": "14px",
+          "fit": "cover",
+          "title": "剪贴板图片 5",
+          "alt": "剪贴板图片 5"
+        }
+      ],
+      "visibleCaptions": 0
+    },
+    {
+      "label": "single screenshot and text reference layout",
+      "viewport": 1324,
+      "pageWidth": 1324,
+      "group": {
+        "left": 1079,
+        "right": 1199,
+        "top": 438.66668701171875,
+        "bottom": 558.6666870117188,
+        "width": 120,
+        "height": 120
+      },
+      "bubble": {
+        "left": 955,
+        "right": 1199,
+        "top": 570.6666870117188,
+        "bottom": 615.7604370117188,
+        "width": 244,
+        "height": 45.09375
+      },
+      "insideBubble": false,
+      "groupStyle": {
+        "wrap": "wrap",
+        "justify": "flex-end",
+        "gap": "8px"
+      },
+      "images": [
+        {
+          "card": {
+            "left": 1079,
+            "right": 1199,
+            "top": 438.66668701171875,
+            "bottom": 558.6666870117188,
+            "width": 120,
+            "height": 120
+          },
+          "button": {
+            "left": 1079,
+            "right": 1199,
+            "top": 438.66668701171875,
+            "bottom": 558.6666870117188,
+            "width": 120,
+            "height": 120
+          },
+          "image": {
+            "left": 1079.666748046875,
+            "right": 1198.3334197998047,
+            "top": 439.3333435058594,
+            "bottom": 558.0000152587891,
+            "width": 118.66667175292969,
+            "height": 118.66667175292969
+          },
+          "radius": "14px",
+          "fit": "cover",
+          "title": "single-reference.png",
+          "alt": "single-reference.png"
+        }
+      ],
+      "visibleCaptions": 0
+    }
+  ]
+}

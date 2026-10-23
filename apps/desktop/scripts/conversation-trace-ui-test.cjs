@@ -133,6 +133,59 @@ const run = {
   status: "completed", events,
 };
 
+// Separate history fixture keeps the existing command/read/replay checks intact.
+const editRunId = "run-file-edit-fixture";
+const probeContent = [
+  "<!doctype html>",
+  `<html><body style="margin:0;background:#0a0610;color:#ff3da9;font:700 48px Bahnschrift,sans-serif;display:grid;place-items:center;min-height:100vh" data-note="${"reference-line-".repeat(85)}">`,
+  "PIXEL PROBE",
+  "</body></html>",
+].join("\n") + "\n";
+const updatedProbeContent = probeContent.replace("PIXEL PROBE", "PIXEL UPDATED");
+const createProbeDiff = `--- /dev/null\n+++ b/_probe.html\n@@ -0,0 +1,4 @@\n${probeContent.trimEnd().split("\n").map(line => "+" + line).join("\n")}\n`;
+const overwriteProbeDiff = "--- a/_probe.html\n+++ b/_probe.html\n@@ -3 +3 @@\n-PIXEL PROBE\n+PIXEL UPDATED\n";
+const patchProbeDiff = "--- a/_probe.html\n+++ b/_probe.html\n@@ -3 +3 @@\n-PIXEL UPDATED\n+PIXEL PATCHED\n";
+const editEvents = [];
+function addEditEvent(seconds, payload) {
+  const sequence = editEvents.length;
+  editEvents.push({ id: `event-edit-${sequence}`, runId: editRunId, at: new Date(Date.parse(at) + seconds * 1000).toISOString(), sequence, ...payload });
+}
+function addEditCall(seconds, id, name, input, output, isError = false) {
+  addEditEvent(seconds, { type: "tool_started", call: { id, name, input } });
+  addEditEvent(seconds + 0.1, { type: "tool_finished", callId: id, output, durationMs: 100, isError });
+}
+addEditEvent(0, { type: "status", status: "running" });
+addEditEvent(0, { type: "assistant_turn_started" });
+addEditCall(1, "call-file-create", "write_file", { path: "_probe.html", content: probeContent }, {
+  written: true, path: "_probe.html", byteLength: Buffer.byteLength(probeContent), created: true, changed: true,
+  sha256: "a".repeat(64), diff: createProbeDiff, diffTruncated: false, added: 4, deleted: 0,
+});
+addEditCall(2, "call-file-overwrite", "write_file", { path: "_probe.html", content: updatedProbeContent, expectedSha256: "a".repeat(64) }, {
+  written: true, path: "_probe.html", byteLength: Buffer.byteLength(updatedProbeContent), created: false, changed: true,
+  sha256: "b".repeat(64), beforeSha256: "a".repeat(64), diff: overwriteProbeDiff, diffTruncated: false, added: 1, deleted: 1,
+});
+addEditCall(3, "call-file-patch", "patch", { patch: patchProbeDiff }, {
+  applied: true, paths: ["_probe.html"], diff: patchProbeDiff, diffTruncated: false,
+});
+addEditCall(4, "call-file-conflict", "write_file", { path: "_probe.html", content: "must not be displayed as applied", expectedSha256: "a".repeat(64) }, {
+  written: false, phase: "validation", code: "file_conflict", path: "_probe.html", error: "The current file no longer matches expectedSha256; no file was written.",
+}, true);
+addEditCall(5, "call-file-terminal", "terminal", { command: "echo FILE_FIXTURE_DONE" }, { stdout: "FILE_FIXTURE_DONE", stderr: "", exitCode: 0 });
+addEditEvent(6, { type: "assistant_turn_started" });
+const editFinalText = "已创建并更新 _probe.html；旧指纹覆盖请求被拒绝，保留当前文件。";
+addEditEvent(7, { type: "text_delta", delta: editFinalText });
+addEditEvent(8, { type: "result", text: editFinalText, status: "completed", sourceAssistantTurnSequence: editEvents.at(-2).sequence });
+const editRun = { spec: { ...run.spec, id: editRunId, request: "创建 HTML 探针并展示每次文件写入的真实代码差异。" }, status: "completed", events: editEvents };
+const editOutputs = new Map(editEvents.filter(event => event.type === "tool_finished").map(event => [event.callId, JSON.stringify(event.output, null, 2)]));
+const deliveredEditOutputs = new Set();
+const deferredEditEvents = editEvents.map(event => event.type === "tool_finished" ? { ...event, output: { deferred: true, runId: editRunId, callId: event.callId } } : event);
+// Match daemon history: canonical event pages contain handles, and run.output
+// returns JSON text. A smaller valid transport page exercises chunk assembly.
+const editHistoryRun = { ...editRun, events: editEvents.filter(event => event.type === "result"), view: { lastSequence: editEvents.at(-1).sequence, eventsComplete: false } };
+let releaseEditOutputs;
+const editOutputGate = new Promise(resolve => { releaseEditOutputs = resolve; });
+let showEditFixture = false;
+
 const requests = [], openedUrls = [], errors = [], checks = [], hoverTimings = [];
 let win;
 async function fixtureRequest(request) {
@@ -141,9 +194,24 @@ async function fixtureRequest(request) {
     case "profiles.list": return [profile];
     case "model.current": return { model };
     case "mcp.interactions.list": return { requests: [] };
-    case "sessions.list": return { items: [{ ...session, runCount: 1, latestRunId: runId, latestStatus: "completed" }], hasMore: false };
+    case "sessions.list": return { items: [{ ...session, runCount: 1, latestRunId: showEditFixture ? editRunId : runId, latestStatus: "completed" }], hasMore: false };
     case "projects.list": return [{ id: "project", workspacePath, createdAt: at, updatedAt: at }];
-    case "session.view": return { session, runs: [run], hasMore: false };
+    case "session.view": return { session, runs: [showEditFixture ? editHistoryRun : run], hasMore: false };
+    case "run.eventPage": {
+      assert.equal(request.params.runId, editRunId);
+      const page = deferredEditEvents.filter(event => event.sequence > (request.params.afterSequence ?? -1)).slice(0, request.params.limit ?? 200);
+      const nextSequence = page.at(-1)?.sequence ?? request.params.afterSequence ?? -1;
+      return { events: page, nextSequence, hasMore: nextSequence < editEvents.at(-1).sequence, status: "completed" };
+    }
+    case "run.output": {
+      assert.equal(request.params.runId, editRunId);
+      const text = editOutputs.get(request.params.callId);
+      assert.equal(typeof text, "string");
+      await editOutputGate;
+      const offset = request.params.offset ?? 0, limit = Math.min(request.params.limit ?? 16000, 512);
+      if (offset + limit >= text.length) deliveredEditOutputs.add(request.params.callId);
+      return { text: text.slice(offset, offset + limit), nextOffset: Math.min(offset + limit, text.length), hasMore: offset + limit < text.length };
+    }
     case "conversationTasks.list": return { tasks: [], limits: { maxConcurrentTasks: 4, maxQueueLength: 80 } };
     case "run.review": return undefined;
     case "run.start":
@@ -277,6 +345,88 @@ async function focusOperationItem(node, label) {
   await pause(120);
   await focusConversationItem(node, label, false);
   await waitFor(`(() => {const item=${node}.getBoundingClientRect(), list=${node}.closest('.conversation-operation-group-list').getBoundingClientRect();return item.top>=list.top && item.bottom<=list.bottom;})()`, `${label} is visible inside its operation panel`);
+}
+async function checkFileEditPanels() {
+  showEditFixture = true;
+  win.setSize(1280, 920);
+  const reloaded = new Promise(resolve => win.webContents.once("did-finish-load", resolve));
+  win.webContents.reload();
+  await reloaded;
+  await waitFor("document.querySelector('.history-session') && document.querySelector('.prompt-textarea')", "file edit fixture reloads the production renderer");
+  await click(`[...document.querySelectorAll('.history-session')].find(el=>el.querySelector('.history-session-content')?.textContent===${JSON.stringify(session.title)})`);
+  await waitFor(`document.querySelector('[data-run-id="${editRunId}"]') && document.body.innerText.includes(${JSON.stringify(editFinalText)})`, "file edit history loads without starting a real run");
+  await waitFor("document.querySelectorAll('.conversation-file-edit-row').length===4", "write, overwrite, patch and failed write keep separate visible timeline rows");
+  const create = tool("call-file-create"), overwrite = tool("call-file-overwrite"), patch = tool("call-file-patch"), failed = tool("call-file-conflict");
+  for (const id of ["call-file-create", "call-file-overwrite", "call-file-patch", "call-file-conflict"]) {
+    assert.equal(await evaluate(`${tool(id)}.closest('[data-operation-group]')===null`), true);
+  }
+  checks.push("file edit rows are not hidden inside a collapsed command group");
+  assert.equal(await evaluate(`${create}.querySelector('.tool-edit-panel')===null && ${create}.querySelector('.tool-edit-count-add')===null`), true);
+  await click(toolTrigger("call-file-overwrite"));
+  await waitFor(`${overwrite}.textContent.includes('正在同步写入记录') && !${overwrite}.querySelector('.tool-edit-panel')`, "deferred file output stays pending without claiming an applied change");
+  assert.ok(requests.some(request => request.method === "run.eventPage" && request.params.runId === editRunId));
+  assert.ok(requests.some(request => request.method === "run.output" && request.params.callId === "call-file-create"));
+  releaseEditOutputs();
+  await waitFor(`${create}.querySelector('.tool-edit-panel') && ${toolTrigger("call-file-create")}.getAttribute('aria-expanded')==='true'`, "a successful new file exposes its compact code change panel by default");
+  assert.ok(requests.some(request => request.method === "run.output" && request.params.callId === "call-file-create" && request.params.offset > 0));
+  checks.push("saved file receipts hydrate from paginated JSON text rather than inline output objects");
+  const outputDeadline = Date.now() + 4000;
+  while (deliveredEditOutputs.size < editOutputs.size && Date.now() < outputDeadline) await pause(20);
+  assert.equal(deliveredEditOutputs.size, editOutputs.size);
+  await waitFor(`${overwrite}.querySelector('.tool-edit-panel') && ${patch}.querySelector('.tool-edit-panel')`, "all successful historical edit receipts finish loading before screenshot layout checks");
+  await pause(200);
+  assert.ok(await evaluate(`${toolTrigger("call-file-create")}.textContent.includes('_probe.html') && /写入/.test(${toolTrigger("call-file-create")}.textContent) && /KB/i.test(${toolTrigger("call-file-create")}.textContent)`));
+  assert.equal(await evaluate(`${create}.querySelectorAll('.tool-edit-line-add').length`), 4);
+  assert.equal(await evaluate(`${create}.querySelectorAll('.tool-edit-line-delete').length`), 0);
+  assert.ok(await evaluate(`${create}.querySelector('.tool-edit-count-add')?.textContent.includes('4') && ${create}.querySelector('.tool-edit-count-delete')?.textContent.includes('0')`));
+  assert.ok(await evaluate(`${create}.querySelector('.tool-edit-panel').textContent.includes('html') && ${create}.querySelector('.tool-edit-panel').textContent.includes('_probe.html') && ${create}.querySelector('.tool-edit-panel').textContent.includes('PIXEL PROBE')`));
+  checks.push("the reference-style new HTML row shows its filename, size, four additions and language");
+
+  await evaluate("Object.defineProperty(navigator,'clipboard',{configurable:true,value:{writeText:async text=>{window.__copiedFileDiff=text;}}})");
+  await click(`${create}.querySelector('button[aria-label="复制差异"]')`);
+  await waitFor(`window.__copiedFileDiff===${JSON.stringify(createProbeDiff)}`, "copy preserves the actual recorded diff including its headers without touching the OS clipboard");
+  await focusConversationItem(toolTrigger("call-file-create"), "Created file panel");
+  await capture("file-write-reference.png");
+  await waitFor(`${create}.querySelector('.tool-edit-scroll').scrollWidth > ${create}.querySelector('.tool-edit-scroll').clientWidth`, "a long source line has a horizontal scrollbar inside its compact panel");
+  await evaluate(`${create}.querySelector('.tool-edit-scroll').scrollLeft=160`);
+  assert.ok(await evaluate(`${create}.querySelector('.tool-edit-scroll').scrollLeft>0 && document.documentElement.scrollWidth<=innerWidth+1`));
+  checks.push("scrolling a long source line does not overflow the whole application");
+  await capture("file-write-horizontal-scroll.png");
+  await evaluate(`${create}.querySelector('.tool-edit-scroll').scrollLeft=0`);
+  await click(toolTrigger("call-file-create"));
+  await waitFor(`${toolTrigger("call-file-create")}.getAttribute('aria-expanded')==='false' && !${create}.querySelector('.tool-edit-panel')`, "a file change panel can collapse to its summary row");
+  await click(toolTrigger("call-file-create"));
+  await waitFor(`${toolTrigger("call-file-create")}.getAttribute('aria-expanded')==='true' && !!${create}.querySelector('.tool-edit-panel')`, "the file change panel can reopen with its recorded code");
+
+  await waitFor(`${overwrite}.querySelectorAll('.tool-edit-line-add').length===1 && ${overwrite}.querySelectorAll('.tool-edit-line-delete').length===1`, "a successful overwrite distinguishes its actual removed and added lines");
+  assert.ok(await evaluate(`${overwrite}.querySelector('.tool-edit-line-delete').textContent.includes('PIXEL PROBE') && ${overwrite}.querySelector('.tool-edit-line-add').textContent.includes('PIXEL UPDATED')`));
+  await focusConversationItem(toolTrigger("call-file-overwrite"), "Overwritten file panel");
+  await capture("file-overwrite-diff.png");
+  await waitFor(`${patch}.querySelector('.tool-edit-panel') && ${patch}.querySelectorAll('.tool-edit-line-add').length===1 && ${patch}.querySelectorAll('.tool-edit-line-delete').length===1`, "a successfully applied patch uses the same compact diff panel");
+  assert.ok(await evaluate(`${patch}.querySelector('.tool-edit-line-delete').textContent.includes('PIXEL UPDATED') && ${patch}.querySelector('.tool-edit-line-add').textContent.includes('PIXEL PATCHED')`));
+  await focusConversationItem(toolTrigger("call-file-patch"), "Applied patch panel", false);
+  await capture("file-patch-diff.png");
+
+  assert.equal(await evaluate(`${failed}.getAttribute('data-tool-state')`), "error");
+  assert.equal(await evaluate(`${failed}.querySelector('.tool-edit-panel')===null && ${failed}.querySelector('.tool-edit-count-add')===null && ${failed}.querySelector('.tool-edit-count-delete')===null`), true);
+  await click(toolTrigger("call-file-conflict"));
+  await waitFor(`${failed}.textContent.includes('未成功') && ${failed}.querySelector('.tool-edit-raw-toggle')`, "a failed file row clearly states that no code change receipt exists");
+  await click(`${failed}.querySelector('.tool-edit-raw-toggle')`);
+  await waitFor(`${failed}.textContent.includes('file_conflict')`, "a rejected write exposes its real error instead of a success panel");
+  assert.equal(await evaluate(`${failed}.querySelector('.tool-edit-panel')===null`), true);
+  await focusConversationItem(toolTrigger("call-file-conflict"), "Rejected file write", false);
+  await capture("file-write-failed.png");
+  assert.equal(await evaluate(`${tool("call-file-terminal")}.classList.contains('conversation-file-edit-row')`), false);
+  assert.ok(await evaluate(`${tool("call-file-terminal")}.querySelector('.tool-edit-panel')===null && ${toolTrigger("call-file-terminal")}.textContent.includes('echo FILE_FIXTURE_DONE')`));
+  checks.push("ordinary terminal commands retain their command row and never impersonate file writes");
+
+  win.setSize(760, 920);
+  await pause(120);
+  await focusConversationItem(toolTrigger("call-file-create"), "Narrow file write panel");
+  await waitFor(`(() => {const panel=${create}.querySelector('.tool-edit-panel'), scroll=panel.querySelector('.tool-edit-scroll');return panel.getBoundingClientRect().width>0 && panel.getBoundingClientRect().right<=innerWidth+1 && scroll.scrollWidth>scroll.clientWidth && document.documentElement.scrollWidth<=innerWidth+1;})()`, "the narrow compact diff keeps long code lines inside its own horizontal scroller");
+  await capture("file-write-narrow.png");
+  assert.equal(requests.filter(request => request.method === "run.start" || request.method === "run.resume").length, 0);
+  return { runId: editRunId, createdLines: 4, createdBytes: Buffer.byteLength(probeContent), copiedDiff: createProbeDiff, screenshots: ["file-write-reference.png", "file-write-horizontal-scroll.png", "file-overwrite-diff.png", "file-patch-diff.png", "file-write-failed.png", "file-write-narrow.png"] };
 }
 async function main() {
   await app.whenReady();
@@ -667,10 +817,11 @@ async function main() {
   await click(operationMarker);
   assert.equal(requests.filter(request => request.method === "run.start" || request.method === "run.resume").length, 0);
   checks.push("replay is local and read-only without starting or resuming a run");
+  const fileEdits = await checkFileEditPanels();
   assert.deepEqual(errors, []);
-  return { checks, scratch, hoverTimings, openedUrls, daemonMethods: [...new Set(requests.map(request => request.method))] };
+  return { checks, scratch, hoverTimings, openedUrls, fileEdits, daemonMethods: [...new Set(requests.map(request => request.method))] };
 }
-const timer = setTimeout(() => { console.error("Trace UI test timeout"); app.exit(1); }, 60000);
+const timer = setTimeout(() => { console.error("Trace UI test timeout"); app.exit(1); }, 90000);
 main().then(result => {
   fs.writeFileSync(path.join(scratch, "result.json"), JSON.stringify(result, null, 2));
   console.log(JSON.stringify(result)); clearTimeout(timer); app.exit(0);

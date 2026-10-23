@@ -8,6 +8,7 @@ export * from "./conversation-tasks.js";
 export * from "./workflow.js";
 export * from "./mcp.js";
 export * from "./attachments.js";
+export * from "./prompt-backend.js";
 
 export const TrustLevelSchema = z.enum([
   "app_policy",
@@ -77,6 +78,17 @@ export const AttachmentRefSchema = z.object({
   createdAt: z.string().datetime()
 });
 export type AttachmentRef = z.infer<typeof AttachmentRefSchema>;
+
+export const AttachmentPreviewParamsSchema = z.object({
+  runId: z.string().min(1),
+  attachmentId: z.string().min(1),
+}).strict();
+export type AttachmentPreviewParams = z.infer<typeof AttachmentPreviewParamsSchema>;
+export const AttachmentPreviewSchema = z.object({
+  mimeType: z.enum(["image/png", "image/jpeg", "image/webp", "image/gif"]),
+  base64: z.string().min(1),
+});
+export type AttachmentPreview = z.infer<typeof AttachmentPreviewSchema>;
 
 export const ContentPartSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("text"), text: z.string(), trust: TrustLevelSchema }),
@@ -206,6 +218,7 @@ export const PlanSpecSchema = z.object({
 export type PlanSpec = z.infer<typeof PlanSpecSchema>;
 
 export const VerificationItemSchema = z.object({
+  generatedArtifactPaths: z.array(z.string().trim().min(1).max(500)).max(100).optional(),
   dependencyPaths: z.array(z.string().trim().min(1).max(500)).max(100).optional(),
   stdin: z.string().max(1_000_000).optional(),
   stage: z.enum(["local", "broader"]).optional(),
@@ -227,6 +240,8 @@ export const VerificationMatrixSchema = z.object({
 export type VerificationMatrix = z.infer<typeof VerificationMatrixSchema>;
 
 export const VerificationResultSchema = z.object({
+  generatedArtifactPaths: z.array(z.string()).optional(),
+  executionId: z.string().optional(),
   dependencyPaths: z.array(z.string()).optional(), dependencyFingerprint: z.string().optional(), dependencyComplete: z.boolean().optional(),
   reusedFromRunId: z.string().optional(),
   fingerprint: z.string().optional(),
@@ -293,6 +308,8 @@ export const RunCheckpointSchema = z.object({
   turns: z.number().int().nonnegative(),
   toolCalls: z.number().int().nonnegative(),
   pendingNonIdempotentToolCalls: z.array(ToolCallSchema).default([]),
+  // These calls never dispatched; pause preserves their user decisions for explicit resume.
+  suspendedApprovalIds: z.array(z.string()).optional(),
   // Optional for checkpoints written before steering became durable.
   pendingSteering: z.array(SteeringMessageSchema).max(8).optional(),
   createdAt: z.string().datetime()
@@ -390,6 +407,16 @@ export const EvalResultSchema = z.object({
 });
 export type EvalResult = z.infer<typeof EvalResultSchema>;
 
+export const RequestDiagnosticSchema = z.object({
+  boundary: z.literal("provider_request"), providerId: z.string(), modelId: z.string(),
+  reasoningEffort: ReasoningEffortSchema.optional(), maxOutputTokens: z.number().int().positive(),
+  messageCount: z.number().int().nonnegative(), toolCount: z.number().int().nonnegative(),
+  toolSchemaChars: z.number().int().nonnegative(), toolSchemaHash: z.string(),
+  textChars: z.object({ instructions: z.number(), profile: z.number(), project: z.number(), memory: z.number(), conversation: z.number(), toolResults: z.number() }),
+  attachmentCount: z.number().int().nonnegative(), attachmentManifestHash: z.string(),
+});
+export type RequestDiagnostic = z.infer<typeof RequestDiagnosticSchema>;
+
 export const ModelRequestSchema = z.object({
   reasoningEffort: ReasoningEffortSchema.optional(),
   disableThinking: z.boolean().optional(),
@@ -482,7 +509,7 @@ export const AgentEventSchema = z.discriminatedUnion("type", [
   z.object({ ...eventBase, type: z.literal("plugin_event"), pluginId: z.string(), action: z.string(), detail: z.string().optional() }),
   z.object({ ...eventBase, type: z.literal("search_usage"), providerId: z.string(), searchId: z.string(), resultCount: z.number().int().nonnegative(), usage: z.record(z.string(), z.unknown()).default({}) }),
   z.object({ ...eventBase, type: z.literal("recovery_event"), checkpointId: z.string().optional(), action: z.enum(["restored", "paused_non_idempotent", "failed"]), detail: z.string() }),
-  z.object({ ...eventBase, type: z.literal("model_request_finished"), purpose: z.enum(["main", "compaction", "review", "sampling", "memory"]), durationMs: z.number().nonnegative(), succeeded: z.boolean(), maxOutputTokens: z.number().int().positive().optional(), configuredMaxOutputTokens: z.number().int().positive().optional(), attempt: z.number().int().positive().optional(), errorCode: z.string().optional() }),
+  z.object({ ...eventBase, type: z.literal("model_request_finished"), requestDiagnostic: RequestDiagnosticSchema.optional(), purpose: z.enum(["main", "compaction", "review", "sampling", "memory"]), durationMs: z.number().nonnegative(), succeeded: z.boolean(), maxOutputTokens: z.number().int().positive().optional(), configuredMaxOutputTokens: z.number().int().positive().optional(), attempt: z.number().int().positive().optional(), errorCode: z.string().optional() }),
   z.object({ ...eventBase, type: z.literal("usage"), usage: UsageSchema }),
   // Accepted user input appears in the conversation before model delivery. Its stable ID joins
   // submission and delivery without duplicating the human message after resume or reload.
@@ -498,12 +525,19 @@ export type AgentEventInput = AgentEvent extends infer Event ? Event extends Age
  * Scoped allowance granted by a user approval or configured in a Profile/RunSpec.
  * Semantics: empty `toolNames` matches no tool; empty `pathGlobs`/`commandPrefixes`/
  * `networkDomains` mean "no constraint on that dimension"; `"**"` in pathGlobs matches
- * all paths. Expired grants (expiresAt in the past) never match.
+ * all paths. When present, `exactCommands` additionally requires the original command
+ * string to match an entry exactly; an empty list matches no command. It does not
+ * broaden commandPrefixes or other constraints. `exactPathInputs`, when present,
+ * also binds path/filePath/cwd to their original literal strings; a null field requires
+ * that input field to be absent. A null object never matches (one-time approval only).
+ * Configured grants without it retain their existing glob semantics. Expired grants never match.
  */
 export const PermissionGrantSchema = z.object({
   toolNames: z.array(z.string()),
   pathGlobs: z.array(z.string()),
   commandPrefixes: z.array(z.string()),
+  exactCommands: z.array(z.string().min(1)).optional(),
+  exactPathInputs: z.object({ path: z.string().nullable(), filePath: z.string().nullable(), cwd: z.string().nullable() }).nullable().optional(),
   networkDomains: z.array(z.string()),
   maxRisk: RiskLevelSchema,
   expiresAt: z.string().datetime().optional()
@@ -520,6 +554,7 @@ export type RunBudget = z.infer<typeof RunBudgetSchema>;
 
 export const GenerationPolicySchema = z.object({
   maxOutputTokens: z.number().int().positive().optional(),
+  compactionMaxOutputTokens: z.number().int().positive().optional(),
   reviewMaxOutputTokens: z.number().int().positive().optional(),
 });
 export type GenerationPolicy = z.infer<typeof GenerationPolicySchema>;
@@ -534,6 +569,7 @@ export const RunSpecSchema = z.object({
   skillSelection: z.array(z.string()).max(100).optional(),
   skills: z.array(SkillReferenceSchema).max(100).optional(),
   taskMode: z.enum(["auto", "analysis", "change"]).default("auto").optional(),
+  behaviorPolicyVersion: z.union([z.literal(1), z.literal(2)]).optional(),
   workflowVersion: z.union([z.literal(1), z.literal(2), z.literal(3)]).optional(),
   id: z.string(),
   sessionId: z.string(),
@@ -579,6 +615,7 @@ export type ProjectRecord = z.infer<typeof ProjectRecordSchema>;
 
 export const ProfileSchema = z.object({
   budgetPolicyVersion: z.number().int().nonnegative().optional(),
+  fileToolsPolicyVersion: z.number().int().nonnegative().optional(),
   contextPolicyMigration: z.object({ version: z.literal(1), reason: z.enum(["legacy_defaults", "invalid_saved_config"]), previous: z.unknown() }).optional(),
   id: z.string(),
   name: z.string(),
@@ -801,8 +838,10 @@ export const DaemonRequestSchema = z.discriminatedUnion("method", [
   z.object({ id: z.string(), method: z.literal("trace.export"), params: z.object({ runId: z.string(), destinationPath: z.string() }) }),
   z.object({ id: z.string(), method: z.literal("project.inspect"), params: z.object({ workspacePath: z.string() }) }),
   z.object({ id: z.string(), method: z.literal("project.trust"), params: z.object({ workspacePath: z.string(), files: z.array(z.object({ path: z.string(), sha256: z.string() })) }) }),
+  z.object({ id: z.string(), method: z.literal("project.migrate"), params: z.object({ workspacePath: z.string(), expectedSha256: z.string().regex(/^[a-f0-9]{64}$/) }) }),
   z.object({ id: z.string(), method: z.literal("project.scaffold"), params: z.object({ workspacePath: z.string() }) }),
   z.object({ id: z.string(), method: z.literal("connectors.pairing"), params: z.object({ connector: z.enum(["telegram", "feishu"]) }) }),
+  z.object({ id: z.string(), method: z.literal("attachment.preview"), params: AttachmentPreviewParamsSchema }),
   z.object({ id: z.string(), method: z.literal("attachment.put"), params: z.object({ base64: z.string(), mimeType: z.string(), fileName: z.string().min(1).max(255).optional(), source: z.enum(["file", "clipboard", "screenshot", "telegram", "feishu", "browser"]), allowedProviders: z.array(z.string()).default([]) }) })
 ]);
 export type DaemonRequest = z.infer<typeof DaemonRequestSchema>;
@@ -818,12 +857,13 @@ export type DaemonResponse = z.infer<typeof DaemonResponseSchema>;
 
 export const DEFAULT_PROFILE: Profile = ProfileSchema.parse({
   id: "default",
+  fileToolsPolicyVersion: 1,
   name: "Balanced Developer",
   systemPrompt: "You are a careful software development agent. Respect trust boundaries, inspect before editing, and verify changes.",
   allowedProviders: ["openai", "anthropic", "gemini", "openai-compatible", "gateway"],
   preferredModels: [],
   routeWeights: { quality: 0.5, cost: 0.25, latency: 0.25 },
-  toolNames: ["read_file", "read_range", "list_files", "search_text", "apply_patch", "terminal", "git_diff", "browser", "web_search", "delegate"],
+  toolNames: ["read_file", "read_range", "list_files", "search_text", "apply_patch", "write_file", "terminal", "git_diff", "browser", "web_search", "delegate"],
   memoryScopes: ["session", "project", "global"],
   skillIds: [],
   sandbox: "auto",

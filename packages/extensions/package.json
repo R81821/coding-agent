@@ -1,6 +1,6 @@
 {
   "name": "@harness/extensions",
-  "version": "1.4.51",
+  "version": "1.4.52",
   "type": "module",
   "exports": "./src/index.ts",
   "dependencies": {

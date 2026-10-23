@@ -1,0 +1,14 @@
+{
+  "capturedAt": "2026-10-18T09:00:24.226Z",
+  "callId": "call_00_GWZOQ00GDFxV19uuSWcx8705",
+  "tool": "terminal",
+  "input": {
+    "command": "cd D:\\npqo\n$p = 'src\\components\\EquityPanel.tsx'\n$t = Get-Content -Raw $p\n$t = $t.Replace('<div className=\"chart-tooltip\" style=', '<div className=\"chart-tooltip\" data-testid=\"chart-tooltip\" style=')\nSet-Content -Path $p -Value $t -NoNewline -Encoding ascii\n[IO.File]::WriteAllText('src\\test\\setup.ts', [Console]::In.ReadToEnd(), (New-Object System.Text.UTF8Encoding($false)))",
+    "stdin": "import \"@testing-library/jest-dom/vitest\";\nimport { cleanup } from \"@testing-library/react\";\nimport { afterEach, vi } from \"vitest\";\n\nafterEach(() => {\n  cleanup();\n  vi.useRealTimers();\n});\n",
+    "timeoutMs": 120000
+  },
+  "isError": false,
+  "durationMs": 614,
+  "text": "{\n  \"exitCode\": 0,\n  \"stdout\": \"\",\n  \"stderr\": \"\",\n  \"truncated\": false,\n  \"timedOut\": false\n}",
+  "truncated": false
+}

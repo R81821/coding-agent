@@ -1,6 +1,6 @@
 {
   "name": "@harness/tools",
-  "version": "1.4.51",
+  "version": "1.4.52",
   "type": "module",
   "exports": { ".": "./src/index.ts", "./paths": "./src/paths.ts" },
   "dependencies": { "@harness/protocol": "workspace:*", "tinyglobby": "^0.2.17", "zod": "^4.1.5" }

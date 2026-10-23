@@ -1,7 +1,7 @@
 import { posix, win32 } from "node:path";
 
-interface VerificationCheck { id?: string | undefined; stage?: string | undefined; command: string; cwd: string; stdin?: string | undefined }
-type MismatchField = "stage" | "command" | "cwd" | "stdin";
+interface VerificationCheck { id?: string | undefined; stage?: string | undefined; command: string; cwd: string; stdin?: string | undefined; generatedArtifactPaths?: string[] | undefined }
+type MismatchField = "stage" | "command" | "cwd" | "stdin" | "generatedArtifactPaths";
 const FEEDBACK_ITEMS = 8;
 const FEEDBACK_CHARACTERS = 300;
 
@@ -33,6 +33,7 @@ function differences(expected: VerificationCheck, actual: VerificationCheck): Mi
   if (expected.command !== actual.command) result.push("command");
   if (!sameVerificationCwd(expected.cwd, actual.cwd)) result.push("cwd");
   if (!sameVerificationStdin(expected.stdin, actual.stdin)) result.push("stdin");
+  if (JSON.stringify([...(expected.generatedArtifactPaths ?? [])].sort()) !== JSON.stringify([...(actual.generatedArtifactPaths ?? [])].sort())) result.push("generatedArtifactPaths");
   return result;
 }
 
@@ -44,7 +45,7 @@ export function verificationPlanMismatch(checks: VerificationCheck[], actual: Ve
   const nearest = (stageChecks.length ? stageChecks : checks).map(check => differences(check, actual)).sort((a, b) => a.length - b.length)[0];
   return {
     expected: stageChecks.slice(0, FEEDBACK_ITEMS).map(check => ({ ...(check.id ? { id: check.id } : {}), stage: check.stage ?? "local",
-      command: check.command.slice(0, FEEDBACK_CHARACTERS), cwd: check.cwd.slice(0, FEEDBACK_CHARACTERS), hasStdin: !!check.stdin,
+      command: check.command.slice(0, FEEDBACK_CHARACTERS), cwd: check.cwd.slice(0, FEEDBACK_CHARACTERS), hasStdin: !!check.stdin, ...(check.generatedArtifactPaths?.length ? { generatedArtifactPaths: check.generatedArtifactPaths } : {}),
       ...(check.command.length > FEEDBACK_CHARACTERS ? { commandTruncated: true } : {}), ...(check.cwd.length > FEEDBACK_CHARACTERS ? { cwdTruncated: true } : {}) })),
     expectedCount: stageChecks.length,
     expectedTruncated: stageChecks.length > FEEDBACK_ITEMS,

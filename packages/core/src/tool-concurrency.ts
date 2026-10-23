@@ -94,6 +94,7 @@ export class BoundedExecutionPool {
 export function boundModelProvider(provider: ModelProvider, pool: BoundedExecutionPool, beforeDispatch?: (request: ModelRequest) => void): ModelProvider {
   return {
     id: provider.id,
+    ...(provider.promptBackend ? { promptBackend: provider.promptBackend } : {}),
     listModels: () => provider.listModels(),
     health: signal => provider.health(signal),
     estimateCost: (model, input, output) => provider.estimateCost(model, input, output),

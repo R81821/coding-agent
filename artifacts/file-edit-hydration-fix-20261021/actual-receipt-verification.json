@@ -1,0 +1,13 @@
+{
+  "runId": "run_24e22e75-6bfe-41b6-9cd5-742a098d5521",
+  "callId": "call_02_u2bvi2QpL64S7qFAW9Mj8410",
+  "path": "server/marketData.ts",
+  "written": true,
+  "byteLength": 9830,
+  "added": 315,
+  "deleted": 0,
+  "diffCharacters": 10206,
+  "fullOutputLoaded": true,
+  "hydratedReceiptMatchesLiveReceipt": true,
+  "pendingReceiptDoesNotClaimChanges": true
+}

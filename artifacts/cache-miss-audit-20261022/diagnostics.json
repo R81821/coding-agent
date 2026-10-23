@@ -1,0 +1,5780 @@
+[
+  {
+    "runId": "run_3e675f4a-bc7d-4949-844c-2ea0c446c131",
+    "status": "completed",
+    "eventCount": 2076,
+    "routes": [
+      {
+        "at": "2026-10-22T07:24:55.572Z",
+        "provider": "openai-compatible",
+        "model": "deepseek-flash",
+        "reason": "capability match; quality=0.75, cost=1.00, latency=0.80; prompt=dsh@dsh-system-prompt@0.2.1-rc.2:harness-adapter-1"
+      },
+      {
+        "at": "2026-10-22T07:27:25.144Z",
+        "provider": "openai-compatible",
+        "model": "deepseek-flash",
+        "reason": "capability match; quality=0.75, cost=1.00, latency=0.80; prompt=dsh@dsh-system-prompt@0.2.1-rc.2:harness-adapter-1"
+      }
+    ],
+    "byPurpose": {
+      "main": {
+        "calls": 34,
+        "input": 5048340,
+        "cached": 4693888,
+        "measuredInput": 5048340,
+        "output": 59219,
+        "hitRate": 0.9297884056937528
+      },
+      "memory": {
+        "calls": 1,
+        "input": 3172,
+        "cached": 128,
+        "measuredInput": 3172,
+        "output": 758,
+        "hitRate": 0.0403530895334174
+      }
+    },
+    "diagnosticCounts": {
+      "main:first_request": 1,
+      "main:append": 31,
+      "main:rewrite": 2
+    },
+    "compactions": [
+      {
+        "sequence": 5,
+        "at": "2026-10-22T07:24:55.573Z",
+        "type": "context_adjusted",
+        "adjustment": {
+          "kind": "policy_migration",
+          "policyVersion": 1,
+          "capacityTokens": 1000000,
+          "triggerTokens": 800000,
+          "targetTokens": 450000
+        }
+      },
+      {
+        "sequence": 51,
+        "at": "2026-10-22T07:25:17.986Z",
+        "type": "context_adjusted",
+        "adjustment": {
+          "kind": "tool_result_bound",
+          "beforeCharacters": 1887,
+          "afterCharacters": 1821
+        }
+      },
+      {
+        "sequence": 149,
+        "at": "2026-10-22T07:25:30.660Z",
+        "type": "context_adjusted",
+        "adjustment": {
+          "kind": "tool_result_bound",
+          "beforeCharacters": 8688,
+          "afterCharacters": 5954
+        }
+      },
+      {
+        "sequence": 366,
+        "at": "2026-10-22T07:27:25.145Z",
+        "type": "context_adjusted",
+        "adjustment": {
+          "kind": "resume_rebuild"
+        }
+      },
+      {
+        "sequence": 417,
+        "at": "2026-10-22T07:27:56.517Z",
+        "type": "context_adjusted",
+        "adjustment": {
+          "kind": "tool_result_bound",
+          "beforeCharacters": 2149,
+          "afterCharacters": 1991
+        }
+      },
+      {
+        "sequence": 465,
+        "at": "2026-10-22T07:28:07.451Z",
+        "type": "context_adjusted",
+        "adjustment": {
+          "kind": "tool_result_bound",
+          "beforeCharacters": 978,
+          "afterCharacters": 940
+        }
+      },
+      {
+        "sequence": 666,
+        "at": "2026-10-22T07:29:36.718Z",
+        "type": "context_adjusted",
+        "adjustment": {
+          "kind": "tool_result_bound",
+          "beforeCharacters": 195,
+          "afterCharacters": 161
+        }
+      },
+      {
+        "sequence": 785,
+        "at": "2026-10-22T07:30:12.878Z",
+        "type": "context_adjusted",
+        "adjustment": {
+          "kind": "tool_result_bound",
+          "beforeCharacters": 173,
+          "afterCharacters": 141
+        }
+      },
+      {
+        "sequence": 828,
+        "at": "2026-10-22T07:30:31.063Z",
+        "type": "context_adjusted",
+        "adjustment": {
+          "kind": "tool_result_bound",
+          "beforeCharacters": 186,
+          "afterCharacters": 154
+        }
+      },
+      {
+        "sequence": 904,
+        "at": "2026-10-22T07:30:36.916Z",
+        "type": "context_adjusted",
+        "adjustment": {
+          "kind": "tool_result_bound",
+          "beforeCharacters": 7517,
+          "afterCharacters": 5954
+        }
+      },
+      {
+        "sequence": 979,
+        "at": "2026-10-22T07:31:01.403Z",
+        "type": "context_adjusted",
+        "adjustment": {
+          "kind": "tool_result_bound",
+          "beforeCharacters": 7397,
+          "afterCharacters": 5954
+        }
+      },
+      {
+        "sequence": 1015,
+        "at": "2026-10-22T07:31:34.595Z",
+        "type": "context_adjusted",
+        "adjustment": {
+          "kind": "tool_result_bound",
+          "beforeCharacters": 6814,
+          "afterCharacters": 5954
+        }
+      },
+      {
+        "sequence": 1099,
+        "at": "2026-10-22T07:32:47.950Z",
+        "type": "context_adjusted",
+        "adjustment": {
+          "kind": "tool_result_bound",
+          "beforeCharacters": 8848,
+          "afterCharacters": 5954
+        }
+      },
+      {
+        "sequence": 1166,
+        "at": "2026-10-22T07:33:19.638Z",
+        "type": "context_adjusted",
+        "adjustment": {
+          "kind": "tool_result_bound",
+          "beforeCharacters": 7173,
+          "afterCharacters": 5954
+        }
+      },
+      {
+        "sequence": 1206,
+        "at": "2026-10-22T07:33:23.081Z",
+        "type": "context_adjusted",
+        "adjustment": {
+          "kind": "tool_result_bound",
+          "beforeCharacters": 20466,
+          "afterCharacters": 5954
+        }
+      }
+    ],
+    "requests": [
+      {
+        "sequence": 38,
+        "at": "2026-10-22T07:24:59.809Z",
+        "purpose": "main",
+        "input": 74385,
+        "cached": 7552,
+        "miss": 66833,
+        "hitRate": 0.10152584526450226,
+        "diagnostic": {
+          "purpose": "main",
+          "protocol": "responses",
+          "reason": "first_request",
+          "unchangedPrefixItems": 0,
+          "inputItems": 116,
+          "sharedPrefixCharacters": 0,
+          "payloadCharacters": 250428
+        }
+      },
+      {
+        "sequence": 137,
+        "at": "2026-10-22T07:25:30.615Z",
+        "purpose": "main",
+        "input": 76181,
+        "cached": 74880,
+        "miss": 1301,
+        "hitRate": 0.9829222509549626,
+        "diagnostic": {
+          "purpose": "main",
+          "protocol": "responses",
+          "reason": "append",
+          "unchangedPrefixItems": 116,
+          "inputItems": 121,
+          "sharedPrefixCharacters": 221778,
+          "payloadCharacters": 257002
+        }
+      },
+      {
+        "sequence": 163,
+        "at": "2026-10-22T07:25:41.653Z",
+        "purpose": "main",
+        "input": 82289,
+        "cached": 78464,
+        "miss": 3825,
+        "hitRate": 0.9535174810728044,
+        "diagnostic": {
+          "purpose": "main",
+          "protocol": "responses",
+          "reason": "append",
+          "unchangedPrefixItems": 121,
+          "inputItems": 130,
+          "sharedPrefixCharacters": 228347,
+          "payloadCharacters": 278872
+        }
+      },
+      {
+        "sequence": 184,
+        "at": "2026-10-22T07:25:47.350Z",
+        "purpose": "main",
+        "input": 86186,
+        "cached": 84096,
+        "miss": 2090,
+        "hitRate": 0.9757501218295315,
+        "diagnostic": {
+          "purpose": "main",
+          "protocol": "responses",
+          "reason": "append",
+          "unchangedPrefixItems": 130,
+          "inputItems": 136,
+          "sharedPrefixCharacters": 250208,
+          "payloadCharacters": 293022
+        }
+      },
+      {
+        "sequence": 205,
+        "at": "2026-10-22T07:25:49.076Z",
+        "purpose": "main",
+        "input": 88899,
+        "cached": 87040,
+        "miss": 1859,
+        "hitRate": 0.979088628668489,
+        "diagnostic": {
+          "purpose": "main",
+          "protocol": "responses",
+          "reason": "append",
+          "unchangedPrefixItems": 136,
+          "inputItems": 142,
+          "sharedPrefixCharacters": 264352,
+          "payloadCharacters": 302706
+        }
+      },
+      {
+        "sequence": 225,
+        "at": "2026-10-22T07:26:13.321Z",
+        "purpose": "main",
+        "input": 90341,
+        "cached": 89088,
+        "miss": 1253,
+        "hitRate": 0.9861303284223111,
+        "diagnostic": {
+          "purpose": "main",
+          "protocol": "responses",
+          "reason": "append",
+          "unchangedPrefixItems": 142,
+          "inputItems": 148,
+          "sharedPrefixCharacters": 274030,
+          "payloadCharacters": 307751
+        }
+      },
+      {
+        "sequence": 306,
+        "at": "2026-10-22T07:26:24.022Z",
+        "purpose": "main",
+        "input": 96720,
+        "cached": 95488,
+        "miss": 1232,
+        "hitRate": 0.987262200165426,
+        "diagnostic": {
+          "purpose": "main",
+          "protocol": "responses",
+          "reason": "append",
+          "unchangedPrefixItems": 148,
+          "inputItems": 154,
+          "sharedPrefixCharacters": 279069,
+          "payloadCharacters": 332203
+        }
+      },
+      {
+        "sequence": 351,
+        "at": "2026-10-22T07:26:35.696Z",
+        "purpose": "main",
+        "input": 103271,
+        "cached": 512,
+        "miss": 102759,
+        "hitRate": 0.004957829400315674,
+        "diagnostic": {
+          "purpose": "main",
+          "protocol": "responses",
+          "reason": "rewrite",
+          "unchangedPrefixItems": 0,
+          "inputItems": 159,
+          "sharedPrefixCharacters": 0,
+          "payloadCharacters": 355261
+        }
+      },
+      {
+        "sequence": 404,
+        "at": "2026-10-22T07:27:33.929Z",
+        "purpose": "main",
+        "input": 113940,
+        "cached": 512,
+        "miss": 113428,
+        "hitRate": 0.004493593119185536,
+        "diagnostic": {
+          "purpose": "main",
+          "protocol": "responses",
+          "reason": "rewrite",
+          "unchangedPrefixItems": 0,
+          "inputItems": 166,
+          "sharedPrefixCharacters": 0,
+          "payloadCharacters": 394279
+        }
+      },
+      {
+        "sequence": 452,
+        "at": "2026-10-22T07:28:04.536Z",
+        "purpose": "main",
+        "input": 116545,
+        "cached": 115072,
+        "miss": 1473,
+        "hitRate": 0.9873611051525162,
+        "diagnostic": {
+          "purpose": "main",
+          "protocol": "responses",
+          "reason": "append",
+          "unchangedPrefixItems": 166,
+          "inputItems": 172,
+          "sharedPrefixCharacters": 359110,
+          "payloadCharacters": 403344
+        }
+      },
+      {
+        "sequence": 506,
+        "at": "2026-10-22T07:28:34.640Z",
+        "purpose": "main",
+        "input": 118733,
+        "cached": 117760,
+        "miss": 973,
+        "hitRate": 0.9918051426309451,
+        "diagnostic": {
+          "purpose": "main",
+          "protocol": "responses",
+          "reason": "append",
+          "unchangedPrefixItems": 172,
+          "inputItems": 177,
+          "sharedPrefixCharacters": 368169,
+          "payloadCharacters": 410719
+        }
+      },
+      {
+        "sequence": 549,
+        "at": "2026-10-22T07:28:49.501Z",
+        "purpose": "main",
+        "input": 127537,
+        "cached": 125952,
+        "miss": 1585,
+        "hitRate": 0.9875722339399546,
+        "diagnostic": {
+          "purpose": "main",
+          "protocol": "responses",
+          "reason": "append",
+          "unchangedPrefixItems": 177,
+          "inputItems": 182,
+          "sharedPrefixCharacters": 375539,
+          "payloadCharacters": 441589
+        }
+      },
+      {
+        "sequence": 593,
+        "at": "2026-10-22T07:28:57.324Z",
+        "purpose": "main",
+        "input": 131556,
+        "cached": 130560,
+        "miss": 996,
+        "hitRate": 0.9924290796314877,
+        "diagnostic": {
+          "purpose": "main",
+          "protocol": "responses",
+          "reason": "append",
+          "unchangedPrefixItems": 182,
+          "inputItems": 187,
+          "sharedPrefixCharacters": 406404,
+          "payloadCharacters": 455832
+        }
+      },
+      {
+        "sequence": 652,
+        "at": "2026-10-22T07:29:20.676Z",
+        "purpose": "main",
+        "input": 134525,
+        "cached": 133120,
+        "miss": 1405,
+        "hitRate": 0.9895558446385431,
+        "diagnostic": {
+          "purpose": "main",
+          "protocol": "responses",
+          "reason": "append",
+          "unchangedPrefixItems": 187,
+          "inputItems": 192,
+          "sharedPrefixCharacters": 420642,
+          "payloadCharacters": 466549
+        }
+      },
+      {
+        "sequence": 694,
+        "at": "2026-10-22T07:29:39.643Z",
+        "purpose": "main",
+        "input": 140822,
+        "cached": 139776,
+        "miss": 1046,
+        "hitRate": 0.9925721833236284,
+        "diagnostic": {
+          "purpose": "main",
+          "protocol": "responses",
+          "reason": "append",
+          "unchangedPrefixItems": 192,
+          "inputItems": 197,
+          "sharedPrefixCharacters": 431354,
+          "payloadCharacters": 490093
+        }
+      },
+      {
+        "sequence": 712,
+        "at": "2026-10-22T07:29:41.998Z",
+        "purpose": "main",
+        "input": 143174,
+        "cached": 141184,
+        "miss": 1990,
+        "hitRate": 0.9861008283626915,
+        "diagnostic": {
+          "purpose": "main",
+          "protocol": "responses",
+          "reason": "append",
+          "unchangedPrefixItems": 197,
+          "inputItems": 204,
+          "sharedPrefixCharacters": 454893,
+          "payloadCharacters": 498088
+        }
+      },
+      {
+        "sequence": 771,
+        "at": "2026-10-22T07:30:10.546Z",
+        "purpose": "main",
+        "input": 146638,
+        "cached": 143488,
+        "miss": 3150,
+        "hitRate": 0.9785185286215033,
+        "diagnostic": {
+          "purpose": "main",
+          "protocol": "responses",
+          "reason": "append",
+          "unchangedPrefixItems": 204,
+          "inputItems": 208,
+          "sharedPrefixCharacters": 462881,
+          "payloadCharacters": 510157
+        }
+      },
+      {
+        "sequence": 814,
+        "at": "2026-10-22T07:30:28.512Z",
+        "purpose": "main",
+        "input": 153639,
+        "cached": 151680,
+        "miss": 1959,
+        "hitRate": 0.9872493312244938,
+        "diagnostic": {
+          "purpose": "main",
+          "protocol": "responses",
+          "reason": "append",
+          "unchangedPrefixItems": 208,
+          "inputItems": 213,
+          "sharedPrefixCharacters": 474946,
+          "payloadCharacters": 536449
+        }
+      },
+      {
+        "sequence": 856,
+        "at": "2026-10-22T07:30:33.866Z",
+        "purpose": "main",
+        "input": 159729,
+        "cached": 158336,
+        "miss": 1393,
+        "hitRate": 0.9912789787702921,
+        "diagnostic": {
+          "purpose": "main",
+          "protocol": "responses",
+          "reason": "append",
+          "unchangedPrefixItems": 213,
+          "inputItems": 218,
+          "sharedPrefixCharacters": 501233,
+          "payloadCharacters": 559585
+        }
+      },
+      {
+        "sequence": 892,
+        "at": "2026-10-22T07:30:36.903Z",
+        "purpose": "main",
+        "input": 160662,
+        "cached": 160000,
+        "miss": 662,
+        "hitRate": 0.9958795483686248,
+        "diagnostic": {
+          "purpose": "main",
+          "protocol": "responses",
+          "reason": "append",
+          "unchangedPrefixItems": 218,
+          "inputItems": 223,
+          "sharedPrefixCharacters": 524364,
+          "payloadCharacters": 563194
+        }
+      },
+      {
+        "sequence": 911,
+        "at": "2026-10-22T07:30:40.270Z",
+        "purpose": "main",
+        "input": 164659,
+        "cached": 160896,
+        "miss": 3763,
+        "hitRate": 0.9771467092597429,
+        "diagnostic": {
+          "purpose": "main",
+          "protocol": "responses",
+          "reason": "append",
+          "unchangedPrefixItems": 223,
+          "inputItems": 230,
+          "sharedPrefixCharacters": 527968,
+          "payloadCharacters": 578455
+        }
+      },
+      {
+        "sequence": 972,
+        "at": "2026-10-22T07:31:01.397Z",
+        "purpose": "main",
+        "input": 169279,
+        "cached": 164992,
+        "miss": 4287,
+        "hitRate": 0.974674944913427,
+        "diagnostic": {
+          "purpose": "main",
+          "protocol": "responses",
+          "reason": "append",
+          "unchangedPrefixItems": 230,
+          "inputItems": 234,
+          "sharedPrefixCharacters": 543222,
+          "payloadCharacters": 593970
+        }
+      },
+      {
+        "sequence": 986,
+        "at": "2026-10-22T07:31:03.401Z",
+        "purpose": "main",
+        "input": 173028,
+        "cached": 169472,
+        "miss": 3556,
+        "hitRate": 0.9794484129736227,
+        "diagnostic": {
+          "purpose": "main",
+          "protocol": "responses",
+          "reason": "append",
+          "unchangedPrefixItems": 234,
+          "inputItems": 239,
+          "sharedPrefixCharacters": 558733,
+          "payloadCharacters": 607694
+        }
+      },
+      {
+        "sequence": 1046,
+        "at": "2026-10-22T07:31:52.050Z",
+        "purpose": "main",
+        "input": 178284,
+        "cached": 173056,
+        "miss": 5228,
+        "hitRate": 0.9706760000897444,
+        "diagnostic": {
+          "purpose": "main",
+          "protocol": "responses",
+          "reason": "append",
+          "unchangedPrefixItems": 239,
+          "inputItems": 242,
+          "sharedPrefixCharacters": 572452,
+          "payloadCharacters": 624387
+        }
+      },
+      {
+        "sequence": 1067,
+        "at": "2026-10-22T07:31:56.768Z",
+        "purpose": "main",
+        "input": 186613,
+        "cached": 182784,
+        "miss": 3829,
+        "hitRate": 0.979481600960276,
+        "diagnostic": {
+          "purpose": "main",
+          "protocol": "responses",
+          "reason": "append",
+          "unchangedPrefixItems": 242,
+          "inputItems": 247,
+          "sharedPrefixCharacters": 589142,
+          "payloadCharacters": 653900
+        }
+      },
+      {
+        "sequence": 1134,
+        "at": "2026-10-22T07:32:50.443Z",
+        "purpose": "main",
+        "input": 191701,
+        "cached": 186752,
+        "miss": 4949,
+        "hitRate": 0.97418375490999,
+        "diagnostic": {
+          "purpose": "main",
+          "protocol": "responses",
+          "reason": "append",
+          "unchangedPrefixItems": 247,
+          "inputItems": 250,
+          "sharedPrefixCharacters": 618650,
+          "payloadCharacters": 670101
+        }
+      },
+      {
+        "sequence": 1198,
+        "at": "2026-10-22T07:33:22.430Z",
+        "purpose": "main",
+        "input": 196153,
+        "cached": 192000,
+        "miss": 4153,
+        "hitRate": 0.9788277518059881,
+        "diagnostic": {
+          "purpose": "main",
+          "protocol": "responses",
+          "reason": "append",
+          "unchangedPrefixItems": 250,
+          "inputItems": 255,
+          "sharedPrefixCharacters": 634848,
+          "payloadCharacters": 683538
+        }
+      },
+      {
+        "sequence": 1214,
+        "at": "2026-10-22T07:33:25.755Z",
+        "purpose": "main",
+        "input": 199015,
+        "cached": 196224,
+        "miss": 2791,
+        "hitRate": 0.9859759314624525,
+        "diagnostic": {
+          "purpose": "main",
+          "protocol": "responses",
+          "reason": "append",
+          "unchangedPrefixItems": 255,
+          "inputItems": 260,
+          "sharedPrefixCharacters": 648280,
+          "payloadCharacters": 693785
+        }
+      },
+      {
+        "sequence": 1233,
+        "at": "2026-10-22T07:33:28.713Z",
+        "purpose": "main",
+        "input": 201984,
+        "cached": 199296,
+        "miss": 2688,
+        "hitRate": 0.9866920152091255,
+        "diagnostic": {
+          "purpose": "main",
+          "protocol": "responses",
+          "reason": "append",
+          "unchangedPrefixItems": 260,
+          "inputItems": 266,
+          "sharedPrefixCharacters": 658522,
+          "payloadCharacters": 704692
+        }
+      },
+      {
+        "sequence": 1251,
+        "at": "2026-10-22T07:33:31.142Z",
+        "purpose": "main",
+        "input": 204056,
+        "cached": 202368,
+        "miss": 1688,
+        "hitRate": 0.9917277610067825,
+        "diagnostic": {
+          "purpose": "main",
+          "protocol": "responses",
+          "reason": "append",
+          "unchangedPrefixItems": 266,
+          "inputItems": 272,
+          "sharedPrefixCharacters": 669423,
+          "payloadCharacters": 711946
+        }
+      },
+      {
+        "sequence": 1284,
+        "at": "2026-10-22T07:33:36.695Z",
+        "purpose": "main",
+        "input": 205286,
+        "cached": 204160,
+        "miss": 1126,
+        "hitRate": 0.99451496935982,
+        "diagnostic": {
+          "purpose": "main",
+          "protocol": "responses",
+          "reason": "append",
+          "unchangedPrefixItems": 272,
+          "inputItems": 276,
+          "sharedPrefixCharacters": 676671,
+          "payloadCharacters": 716255
+        }
+      },
+      {
+        "sequence": 1312,
+        "at": "2026-10-22T07:33:45.550Z",
+        "purpose": "main",
+        "input": 207358,
+        "cached": 205824,
+        "miss": 1534,
+        "hitRate": 0.9926021663017583,
+        "diagnostic": {
+          "purpose": "main",
+          "protocol": "responses",
+          "reason": "append",
+          "unchangedPrefixItems": 276,
+          "inputItems": 281,
+          "sharedPrefixCharacters": 680976,
+          "payloadCharacters": 723158
+        }
+      },
+      {
+        "sequence": 1349,
+        "at": "2026-10-22T07:33:51.149Z",
+        "purpose": "main",
+        "input": 210729,
+        "cached": 209408,
+        "miss": 1321,
+        "hitRate": 0.9937312852051687,
+        "diagnostic": {
+          "purpose": "main",
+          "protocol": "responses",
+          "reason": "append",
+          "unchangedPrefixItems": 281,
+          "inputItems": 286,
+          "sharedPrefixCharacters": 687874,
+          "payloadCharacters": 732208
+        }
+      },
+      {
+        "sequence": 2067,
+        "at": "2026-10-22T07:33:57.757Z",
+        "purpose": "main",
+        "input": 214423,
+        "cached": 212096,
+        "miss": 2327,
+        "hitRate": 0.989147619425155,
+        "diagnostic": {
+          "purpose": "main",
+          "protocol": "responses",
+          "reason": "append",
+          "unchangedPrefixItems": 286,
+          "inputItems": 291,
+          "sharedPrefixCharacters": 696919,
+          "payloadCharacters": 742125
+        }
+      },
+      {
+        "sequence": 2071,
+        "at": "2026-10-22T07:34:04.101Z",
+        "purpose": "memory",
+        "input": 3172,
+        "cached": 128,
+        "miss": 3044,
+        "hitRate": 0.0403530895334174
+      }
+    ],
+    "structural": [
+      {
+        "sequence": 39,
+        "at": "2026-10-22T07:24:59.814Z",
+        "purpose": "main",
+        "diagnostic": {
+          "boundary": "provider_request",
+          "providerId": "openai-compatible",
+          "modelId": "deepseek-flash",
+          "reasoningEffort": "max",
+          "maxOutputTokens": 393216,
+          "messageCount": 75,
+          "toolCount": 22,
+          "toolSchemaChars": 24700,
+          "toolSchemaHash": "a231725cb5a8ea62c87a788c406dac4ba083d41f6f731600f61c7ce2b6261292",
+          "textChars": {
+            "instructions": 3901,
+            "profile": 115,
+            "project": 1033,
+            "memory": 0,
+            "conversation": 9994,
+            "toolResults": 0
+          },
+          "attachmentCount": 0,
+          "attachmentManifestHash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+        }
+      },
+      {
+        "sequence": 138,
+        "at": "2026-10-22T07:25:30.616Z",
+        "purpose": "main",
+        "diagnostic": {
+          "boundary": "provider_request",
+          "providerId": "openai-compatible",
+          "modelId": "deepseek-flash",
+          "reasoningEffort": "max",
+          "maxOutputTokens": 393216,
+          "messageCount": 78,
+          "toolCount": 22,
+          "toolSchemaChars": 24700,
+          "toolSchemaHash": "a231725cb5a8ea62c87a788c406dac4ba083d41f6f731600f61c7ce2b6261292",
+          "textChars": {
+            "instructions": 3901,
+            "profile": 115,
+            "project": 1033,
+            "memory": 0,
+            "conversation": 11950,
+            "toolResults": 0
+          },
+          "attachmentCount": 0,
+          "attachmentManifestHash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+        }
+      },
+      {
+        "sequence": 164,
+        "at": "2026-10-22T07:25:41.654Z",
+        "purpose": "main",
+        "diagnostic": {
+          "boundary": "provider_request",
+          "providerId": "openai-compatible",
+          "modelId": "deepseek-flash",
+          "reasoningEffort": "max",
+          "maxOutputTokens": 393216,
+          "messageCount": 83,
+          "toolCount": 22,
+          "toolSchemaChars": 24700,
+          "toolSchemaHash": "a231725cb5a8ea62c87a788c406dac4ba083d41f6f731600f61c7ce2b6261292",
+          "textChars": {
+            "instructions": 3901,
+            "profile": 115,
+            "project": 1033,
+            "memory": 0,
+            "conversation": 13474,
+            "toolResults": 0
+          },
+          "attachmentCount": 0,
+          "attachmentManifestHash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+        }
+      },
+      {
+        "sequence": 185,
+        "at": "2026-10-22T07:25:47.351Z",
+        "purpose": "main",
+        "diagnostic": {
+          "boundary": "provider_request",
+          "providerId": "openai-compatible",
+          "modelId": "deepseek-flash",
+          "reasoningEffort": "max",
+          "maxOutputTokens": 393216,
+          "messageCount": 87,
+          "toolCount": 22,
+          "toolSchemaChars": 24700,
+          "toolSchemaHash": "a231725cb5a8ea62c87a788c406dac4ba083d41f6f731600f61c7ce2b6261292",
+          "textChars": {
+            "instructions": 3901,
+            "profile": 115,
+            "project": 1033,
+            "memory": 0,
+            "conversation": 14145,
+            "toolResults": 0
+          },
+          "attachmentCount": 0,
+          "attachmentManifestHash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+        }
+      },
+      {
+        "sequence": 206,
+        "at": "2026-10-22T07:25:49.077Z",
+        "purpose": "main",
+        "diagnostic": {
+          "boundary": "provider_request",
+          "providerId": "openai-compatible",
+          "modelId": "deepseek-flash",
+          "reasoningEffort": "max",
+          "maxOutputTokens": 393216,
+          "messageCount": 91,
+          "toolCount": 22,
+          "toolSchemaChars": 24700,
+          "toolSchemaHash": "a231725cb5a8ea62c87a788c406dac4ba083d41f6f731600f61c7ce2b6261292",
+          "textChars": {
+            "instructions": 3901,
+            "profile": 115,
+            "project": 1033,
+            "memory": 0,
+            "conversation": 14990,
+            "toolResults": 0
+          },
+          "attachmentCount": 0,
+          "attachmentManifestHash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+        }
+      },
+      {
+        "sequence": 226,
+        "at": "2026-10-22T07:26:13.322Z",
+        "purpose": "main",
+        "diagnostic": {
+          "boundary": "provider_request",
+          "providerId": "openai-compatible",
+          "modelId": "deepseek-flash",
+          "reasoningEffort": "max",
+          "maxOutputTokens": 393216,
+          "messageCount": 95,
+          "toolCount": 22,
+          "toolSchemaChars": 24700,
+          "toolSchemaHash": "a231725cb5a8ea62c87a788c406dac4ba083d41f6f731600f61c7ce2b6261292",
+          "textChars": {
+            "instructions": 3901,
+            "profile": 115,
+            "project": 1033,
+            "memory": 0,
+            "conversation": 15840,
+            "toolResults": 0
+          },
+          "attachmentCount": 0,
+          "attachmentManifestHash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+        }
+      },
+      {
+        "sequence": 307,
+        "at": "2026-10-22T07:26:24.023Z",
+        "purpose": "main",
+        "diagnostic": {
+          "boundary": "provider_request",
+          "providerId": "openai-compatible",
+          "modelId": "deepseek-flash",
+          "reasoningEffort": "max",
+          "maxOutputTokens": 393216,
+          "messageCount": 99,
+          "toolCount": 22,
+          "toolSchemaChars": 24700,
+          "toolSchemaHash": "a231725cb5a8ea62c87a788c406dac4ba083d41f6f731600f61c7ce2b6261292",
+          "textChars": {
+            "instructions": 3901,
+            "profile": 115,
+            "project": 1033,
+            "memory": 0,
+            "conversation": 16691,
+            "toolResults": 0
+          },
+          "attachmentCount": 0,
+          "attachmentManifestHash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+        }
+      },
+      {
+        "sequence": 352,
+        "at": "2026-10-22T07:26:35.697Z",
+        "purpose": "main",
+        "diagnostic": {
+          "boundary": "provider_request",
+          "providerId": "openai-compatible",
+          "modelId": "deepseek-flash",
+          "reasoningEffort": "max",
+          "maxOutputTokens": 393216,
+          "messageCount": 103,
+          "toolCount": 22,
+          "toolSchemaChars": 24700,
+          "toolSchemaHash": "a231725cb5a8ea62c87a788c406dac4ba083d41f6f731600f61c7ce2b6261292",
+          "textChars": {
+            "instructions": 8355,
+            "profile": 115,
+            "project": 1033,
+            "memory": 0,
+            "conversation": 21457,
+            "toolResults": 0
+          },
+          "attachmentCount": 0,
+          "attachmentManifestHash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+        }
+      },
+      {
+        "sequence": 405,
+        "at": "2026-10-22T07:27:33.929Z",
+        "purpose": "main",
+        "diagnostic": {
+          "boundary": "provider_request",
+          "providerId": "openai-compatible",
+          "modelId": "deepseek-flash",
+          "reasoningEffort": "max",
+          "maxOutputTokens": 393216,
+          "messageCount": 110,
+          "toolCount": 22,
+          "toolSchemaChars": 24700,
+          "toolSchemaHash": "a231725cb5a8ea62c87a788c406dac4ba083d41f6f731600f61c7ce2b6261292",
+          "textChars": {
+            "instructions": 10348,
+            "profile": 115,
+            "project": 1033,
+            "memory": 0,
+            "conversation": 31189,
+            "toolResults": 0
+          },
+          "attachmentCount": 0,
+          "attachmentManifestHash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+        }
+      },
+      {
+        "sequence": 453,
+        "at": "2026-10-22T07:28:04.537Z",
+        "purpose": "main",
+        "diagnostic": {
+          "boundary": "provider_request",
+          "providerId": "openai-compatible",
+          "modelId": "deepseek-flash",
+          "reasoningEffort": "max",
+          "maxOutputTokens": 393216,
+          "messageCount": 114,
+          "toolCount": 22,
+          "toolSchemaChars": 24700,
+          "toolSchemaHash": "a231725cb5a8ea62c87a788c406dac4ba083d41f6f731600f61c7ce2b6261292",
+          "textChars": {
+            "instructions": 10348,
+            "profile": 115,
+            "project": 1033,
+            "memory": 0,
+            "conversation": 33018,
+            "toolResults": 0
+          },
+          "attachmentCount": 0,
+          "attachmentManifestHash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+        }
+      },
+      {
+        "sequence": 507,
+        "at": "2026-10-22T07:28:34.641Z",
+        "purpose": "main",
+        "diagnostic": {
+          "boundary": "provider_request",
+          "providerId": "openai-compatible",
+          "modelId": "deepseek-flash",
+          "reasoningEffort": "max",
+          "maxOutputTokens": 393216,
+          "messageCount": 117,
+          "toolCount": 22,
+          "toolSchemaChars": 24700,
+          "toolSchemaHash": "a231725cb5a8ea62c87a788c406dac4ba083d41f6f731600f61c7ce2b6261292",
+          "textChars": {
+            "instructions": 10348,
+            "profile": 115,
+            "project": 1033,
+            "memory": 0,
+            "conversation": 34836,
+            "toolResults": 0
+          },
+          "attachmentCount": 0,
+          "attachmentManifestHash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+        }
+      },
+      {
+        "sequence": 550,
+        "at": "2026-10-22T07:28:49.502Z",
+        "purpose": "main",
+        "diagnostic": {
+          "boundary": "provider_request",
+          "providerId": "openai-compatible",
+          "modelId": "deepseek-flash",
+          "reasoningEffort": "max",
+          "maxOutputTokens": 393216,
+          "messageCount": 120,
+          "toolCount": 22,
+          "toolSchemaChars": 24700,
+          "toolSchemaHash": "a231725cb5a8ea62c87a788c406dac4ba083d41f6f731600f61c7ce2b6261292",
+          "textChars": {
+            "instructions": 10348,
+            "profile": 115,
+            "project": 1033,
+            "memory": 0,
+            "conversation": 37837,
+            "toolResults": 0
+          },
+          "attachmentCount": 0,
+          "attachmentManifestHash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+        }
+      },
+      {
+        "sequence": 594,
+        "at": "2026-10-22T07:28:57.325Z",
+        "purpose": "main",
+        "diagnostic": {
+          "boundary": "provider_request",
+          "providerId": "openai-compatible",
+          "modelId": "deepseek-flash",
+          "reasoningEffort": "max",
+          "maxOutputTokens": 393216,
+          "messageCount": 123,
+          "toolCount": 22,
+          "toolSchemaChars": 24700,
+          "toolSchemaHash": "a231725cb5a8ea62c87a788c406dac4ba083d41f6f731600f61c7ce2b6261292",
+          "textChars": {
+            "instructions": 10348,
+            "profile": 115,
+            "project": 1033,
+            "memory": 0,
+            "conversation": 38845,
+            "toolResults": 0
+          },
+          "attachmentCount": 0,
+          "attachmentManifestHash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+        }
+      },
+      {
+        "sequence": 653,
+        "at": "2026-10-22T07:29:20.677Z",
+        "purpose": "main",
+        "diagnostic": {
+          "boundary": "provider_request",
+          "providerId": "openai-compatible",
+          "modelId": "deepseek-flash",
+          "reasoningEffort": "max",
+          "maxOutputTokens": 393216,
+          "messageCount": 126,
+          "toolCount": 22,
+          "toolSchemaChars": 24700,
+          "toolSchemaHash": "a231725cb5a8ea62c87a788c406dac4ba083d41f6f731600f61c7ce2b6261292",
+          "textChars": {
+            "instructions": 10348,
+            "profile": 115,
+            "project": 1033,
+            "memory": 0,
+            "conversation": 41089,
+            "toolResults": 0
+          },
+          "attachmentCount": 0,
+          "attachmentManifestHash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+        }
+      },
+      {
+        "sequence": 695,
+        "at": "2026-10-22T07:29:39.662Z",
+        "purpose": "main",
+        "diagnostic": {
+          "boundary": "provider_request",
+          "providerId": "openai-compatible",
+          "modelId": "deepseek-flash",
+          "reasoningEffort": "max",
+          "maxOutputTokens": 393216,
+          "messageCount": 129,
+          "toolCount": 22,
+          "toolSchemaChars": 24700,
+          "toolSchemaHash": "a231725cb5a8ea62c87a788c406dac4ba083d41f6f731600f61c7ce2b6261292",
+          "textChars": {
+            "instructions": 10348,
+            "profile": 115,
+            "project": 1033,
+            "memory": 0,
+            "conversation": 43683,
+            "toolResults": 0
+          },
+          "attachmentCount": 0,
+          "attachmentManifestHash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+        }
+      },
+      {
+        "sequence": 713,
+        "at": "2026-10-22T07:29:41.998Z",
+        "purpose": "main",
+        "diagnostic": {
+          "boundary": "provider_request",
+          "providerId": "openai-compatible",
+          "modelId": "deepseek-flash",
+          "reasoningEffort": "max",
+          "maxOutputTokens": 393216,
+          "messageCount": 133,
+          "toolCount": 22,
+          "toolSchemaChars": 24700,
+          "toolSchemaHash": "a231725cb5a8ea62c87a788c406dac4ba083d41f6f731600f61c7ce2b6261292",
+          "textChars": {
+            "instructions": 10348,
+            "profile": 115,
+            "project": 1033,
+            "memory": 0,
+            "conversation": 44575,
+            "toolResults": 0
+          },
+          "attachmentCount": 0,
+          "attachmentManifestHash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+        }
+      },
+      {
+        "sequence": 772,
+        "at": "2026-10-22T07:30:10.547Z",
+        "purpose": "main",
+        "diagnostic": {
+          "boundary": "provider_request",
+          "providerId": "openai-compatible",
+          "modelId": "deepseek-flash",
+          "reasoningEffort": "max",
+          "maxOutputTokens": 393216,
+          "messageCount": 136,
+          "toolCount": 22,
+          "toolSchemaChars": 24700,
+          "toolSchemaHash": "a231725cb5a8ea62c87a788c406dac4ba083d41f6f731600f61c7ce2b6261292",
+          "textChars": {
+            "instructions": 10348,
+            "profile": 115,
+            "project": 1033,
+            "memory": 0,
+            "conversation": 51614,
+            "toolResults": 0
+          },
+          "attachmentCount": 0,
+          "attachmentManifestHash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+        }
+      },
+      {
+        "sequence": 815,
+        "at": "2026-10-22T07:30:28.513Z",
+        "purpose": "main",
+        "diagnostic": {
+          "boundary": "provider_request",
+          "providerId": "openai-compatible",
+          "modelId": "deepseek-flash",
+          "reasoningEffort": "max",
+          "maxOutputTokens": 393216,
+          "messageCount": 139,
+          "toolCount": 22,
+          "toolSchemaChars": 24700,
+          "toolSchemaHash": "a231725cb5a8ea62c87a788c406dac4ba083d41f6f731600f61c7ce2b6261292",
+          "textChars": {
+            "instructions": 10348,
+            "profile": 115,
+            "project": 1033,
+            "memory": 0,
+            "conversation": 57982,
+            "toolResults": 0
+          },
+          "attachmentCount": 0,
+          "attachmentManifestHash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+        }
+      },
+      {
+        "sequence": 857,
+        "at": "2026-10-22T07:30:33.867Z",
+        "purpose": "main",
+        "diagnostic": {
+          "boundary": "provider_request",
+          "providerId": "openai-compatible",
+          "modelId": "deepseek-flash",
+          "reasoningEffort": "max",
+          "maxOutputTokens": 393216,
+          "messageCount": 142,
+          "toolCount": 22,
+          "toolSchemaChars": 24700,
+          "toolSchemaHash": "a231725cb5a8ea62c87a788c406dac4ba083d41f6f731600f61c7ce2b6261292",
+          "textChars": {
+            "instructions": 10348,
+            "profile": 115,
+            "project": 1033,
+            "memory": 0,
+            "conversation": 61735,
+            "toolResults": 0
+          },
+          "attachmentCount": 0,
+          "attachmentManifestHash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+        }
+      },
+      {
+        "sequence": 893,
+        "at": "2026-10-22T07:30:36.904Z",
+        "purpose": "main",
+        "diagnostic": {
+          "boundary": "provider_request",
+          "providerId": "openai-compatible",
+          "modelId": "deepseek-flash",
+          "reasoningEffort": "max",
+          "maxOutputTokens": 393216,
+          "messageCount": 145,
+          "toolCount": 22,
+          "toolSchemaChars": 24700,
+          "toolSchemaHash": "a231725cb5a8ea62c87a788c406dac4ba083d41f6f731600f61c7ce2b6261292",
+          "textChars": {
+            "instructions": 10348,
+            "profile": 115,
+            "project": 1033,
+            "memory": 0,
+            "conversation": 62066,
+            "toolResults": 0
+          },
+          "attachmentCount": 0,
+          "attachmentManifestHash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+        }
+      },
+      {
+        "sequence": 912,
+        "at": "2026-10-22T07:30:40.272Z",
+        "purpose": "main",
+        "diagnostic": {
+          "boundary": "provider_request",
+          "providerId": "openai-compatible",
+          "modelId": "deepseek-flash",
+          "reasoningEffort": "max",
+          "maxOutputTokens": 393216,
+          "messageCount": 149,
+          "toolCount": 22,
+          "toolSchemaChars": 24700,
+          "toolSchemaHash": "a231725cb5a8ea62c87a788c406dac4ba083d41f6f731600f61c7ce2b6261292",
+          "textChars": {
+            "instructions": 10348,
+            "profile": 115,
+            "project": 1033,
+            "memory": 0,
+            "conversation": 65652,
+            "toolResults": 0
+          },
+          "attachmentCount": 0,
+          "attachmentManifestHash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+        }
+      },
+      {
+        "sequence": 973,
+        "at": "2026-10-22T07:31:01.397Z",
+        "purpose": "main",
+        "diagnostic": {
+          "boundary": "provider_request",
+          "providerId": "openai-compatible",
+          "modelId": "deepseek-flash",
+          "reasoningEffort": "max",
+          "maxOutputTokens": 393216,
+          "messageCount": 152,
+          "toolCount": 22,
+          "toolSchemaChars": 24700,
+          "toolSchemaHash": "a231725cb5a8ea62c87a788c406dac4ba083d41f6f731600f61c7ce2b6261292",
+          "textChars": {
+            "instructions": 10348,
+            "profile": 115,
+            "project": 1033,
+            "memory": 0,
+            "conversation": 73742,
+            "toolResults": 0
+          },
+          "attachmentCount": 0,
+          "attachmentManifestHash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+        }
+      },
+      {
+        "sequence": 987,
+        "at": "2026-10-22T07:31:03.401Z",
+        "purpose": "main",
+        "diagnostic": {
+          "boundary": "provider_request",
+          "providerId": "openai-compatible",
+          "modelId": "deepseek-flash",
+          "reasoningEffort": "max",
+          "maxOutputTokens": 393216,
+          "messageCount": 155,
+          "toolCount": 22,
+          "toolSchemaChars": 24700,
+          "toolSchemaHash": "a231725cb5a8ea62c87a788c406dac4ba083d41f6f731600f61c7ce2b6261292",
+          "textChars": {
+            "instructions": 10348,
+            "profile": 115,
+            "project": 1033,
+            "memory": 0,
+            "conversation": 77800,
+            "toolResults": 0
+          },
+          "attachmentCount": 0,
+          "attachmentManifestHash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+        }
+      },
+      {
+        "sequence": 1047,
+        "at": "2026-10-22T07:31:52.051Z",
+        "purpose": "main",
+        "diagnostic": {
+          "boundary": "provider_request",
+          "providerId": "openai-compatible",
+          "modelId": "deepseek-flash",
+          "reasoningEffort": "max",
+          "maxOutputTokens": 393216,
+          "messageCount": 158,
+          "toolCount": 22,
+          "toolSchemaChars": 24700,
+          "toolSchemaHash": "a231725cb5a8ea62c87a788c406dac4ba083d41f6f731600f61c7ce2b6261292",
+          "textChars": {
+            "instructions": 10348,
+            "profile": 115,
+            "project": 1033,
+            "memory": 0,
+            "conversation": 85767,
+            "toolResults": 0
+          },
+          "attachmentCount": 0,
+          "attachmentManifestHash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+        }
+      },
+      {
+        "sequence": 1068,
+        "at": "2026-10-22T07:31:56.768Z",
+        "purpose": "main",
+        "diagnostic": {
+          "boundary": "provider_request",
+          "providerId": "openai-compatible",
+          "modelId": "deepseek-flash",
+          "reasoningEffort": "max",
+          "maxOutputTokens": 393216,
+          "messageCount": 161,
+          "toolCount": 22,
+          "toolSchemaChars": 24700,
+          "toolSchemaHash": "a231725cb5a8ea62c87a788c406dac4ba083d41f6f731600f61c7ce2b6261292",
+          "textChars": {
+            "instructions": 10348,
+            "profile": 115,
+            "project": 1033,
+            "memory": 0,
+            "conversation": 92450,
+            "toolResults": 0
+          },
+          "attachmentCount": 0,
+          "attachmentManifestHash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+        }
+      },
+      {
+        "sequence": 1135,
+        "at": "2026-10-22T07:32:50.444Z",
+        "purpose": "main",
+        "diagnostic": {
+          "boundary": "provider_request",
+          "providerId": "openai-compatible",
+          "modelId": "deepseek-flash",
+          "reasoningEffort": "max",
+          "maxOutputTokens": 393216,
+          "messageCount": 164,
+          "toolCount": 22,
+          "toolSchemaChars": 24700,
+          "toolSchemaHash": "a231725cb5a8ea62c87a788c406dac4ba083d41f6f731600f61c7ce2b6261292",
+          "textChars": {
+            "instructions": 10348,
+            "profile": 115,
+            "project": 1033,
+            "memory": 0,
+            "conversation": 99856,
+            "toolResults": 0
+          },
+          "attachmentCount": 0,
+          "attachmentManifestHash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+        }
+      },
+      {
+        "sequence": 1199,
+        "at": "2026-10-22T07:33:22.430Z",
+        "purpose": "main",
+        "diagnostic": {
+          "boundary": "provider_request",
+          "providerId": "openai-compatible",
+          "modelId": "deepseek-flash",
+          "reasoningEffort": "max",
+          "maxOutputTokens": 393216,
+          "messageCount": 167,
+          "toolCount": 22,
+          "toolSchemaChars": 24700,
+          "toolSchemaHash": "a231725cb5a8ea62c87a788c406dac4ba083d41f6f731600f61c7ce2b6261292",
+          "textChars": {
+            "instructions": 10348,
+            "profile": 115,
+            "project": 1033,
+            "memory": 0,
+            "conversation": 103790,
+            "toolResults": 0
+          },
+          "attachmentCount": 0,
+          "attachmentManifestHash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+        }
+      },
+      {
+        "sequence": 1215,
+        "at": "2026-10-22T07:33:25.755Z",
+        "purpose": "main",
+        "diagnostic": {
+          "boundary": "provider_request",
+          "providerId": "openai-compatible",
+          "modelId": "deepseek-flash",
+          "reasoningEffort": "max",
+          "maxOutputTokens": 393216,
+          "messageCount": 170,
+          "toolCount": 22,
+          "toolSchemaChars": 24700,
+          "toolSchemaHash": "a231725cb5a8ea62c87a788c406dac4ba083d41f6f731600f61c7ce2b6261292",
+          "textChars": {
+            "instructions": 10348,
+            "profile": 115,
+            "project": 1033,
+            "memory": 0,
+            "conversation": 105463,
+            "toolResults": 0
+          },
+          "attachmentCount": 0,
+          "attachmentManifestHash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+        }
+      },
+      {
+        "sequence": 1234,
+        "at": "2026-10-22T07:33:28.713Z",
+        "purpose": "main",
+        "diagnostic": {
+          "boundary": "provider_request",
+          "providerId": "openai-compatible",
+          "modelId": "deepseek-flash",
+          "reasoningEffort": "max",
+          "maxOutputTokens": 393216,
+          "messageCount": 174,
+          "toolCount": 22,
+          "toolSchemaChars": 24700,
+          "toolSchemaHash": "a231725cb5a8ea62c87a788c406dac4ba083d41f6f731600f61c7ce2b6261292",
+          "textChars": {
+            "instructions": 10348,
+            "profile": 115,
+            "project": 1033,
+            "memory": 0,
+            "conversation": 106332,
+            "toolResults": 0
+          },
+          "attachmentCount": 0,
+          "attachmentManifestHash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+        }
+      },
+      {
+        "sequence": 1252,
+        "at": "2026-10-22T07:33:31.143Z",
+        "purpose": "main",
+        "diagnostic": {
+          "boundary": "provider_request",
+          "providerId": "openai-compatible",
+          "modelId": "deepseek-flash",
+          "reasoningEffort": "max",
+          "maxOutputTokens": 393216,
+          "messageCount": 178,
+          "toolCount": 22,
+          "toolSchemaChars": 24700,
+          "toolSchemaHash": "a231725cb5a8ea62c87a788c406dac4ba083d41f6f731600f61c7ce2b6261292",
+          "textChars": {
+            "instructions": 10348,
+            "profile": 115,
+            "project": 1033,
+            "memory": 0,
+            "conversation": 107190,
+            "toolResults": 0
+          },
+          "attachmentCount": 0,
+          "attachmentManifestHash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+        }
+      },
+      {
+        "sequence": 1285,
+        "at": "2026-10-22T07:33:36.696Z",
+        "purpose": "main",
+        "diagnostic": {
+          "boundary": "provider_request",
+          "providerId": "openai-compatible",
+          "modelId": "deepseek-flash",
+          "reasoningEffort": "max",
+          "maxOutputTokens": 393216,
+          "messageCount": 181,
+          "toolCount": 22,
+          "toolSchemaChars": 24700,
+          "toolSchemaHash": "a231725cb5a8ea62c87a788c406dac4ba083d41f6f731600f61c7ce2b6261292",
+          "textChars": {
+            "instructions": 10348,
+            "profile": 115,
+            "project": 1033,
+            "memory": 0,
+            "conversation": 107806,
+            "toolResults": 0
+          },
+          "attachmentCount": 0,
+          "attachmentManifestHash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+        }
+      },
+      {
+        "sequence": 1313,
+        "at": "2026-10-22T07:33:45.551Z",
+        "purpose": "main",
+        "diagnostic": {
+          "boundary": "provider_request",
+          "providerId": "openai-compatible",
+          "modelId": "deepseek-flash",
+          "reasoningEffort": "max",
+          "maxOutputTokens": 393216,
+          "messageCount": 184,
+          "toolCount": 22,
+          "toolSchemaChars": 24700,
+          "toolSchemaHash": "a231725cb5a8ea62c87a788c406dac4ba083d41f6f731600f61c7ce2b6261292",
+          "textChars": {
+            "instructions": 10348,
+            "profile": 115,
+            "project": 1033,
+            "memory": 0,
+            "conversation": 108130,
+            "toolResults": 0
+          },
+          "attachmentCount": 0,
+          "attachmentManifestHash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+        }
+      },
+      {
+        "sequence": 1350,
+        "at": "2026-10-22T07:33:51.149Z",
+        "purpose": "main",
+        "diagnostic": {
+          "boundary": "provider_request",
+          "providerId": "openai-compatible",
+          "modelId": "deepseek-flash",
+          "reasoningEffort": "max",
+          "maxOutputTokens": 393216,
+          "messageCount": 187,
+          "toolCount": 22,
+          "toolSchemaChars": 24700,
+          "toolSchemaHash": "a231725cb5a8ea62c87a788c406dac4ba083d41f6f731600f61c7ce2b6261292",
+          "textChars": {
+            "instructions": 10348,
+            "profile": 115,
+            "project": 1033,
+            "memory": 0,
+            "conversation": 108443,
+            "toolResults": 0
+          },
+          "attachmentCount": 0,
+          "attachmentManifestHash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+        }
+      },
+      {
+        "sequence": 2068,
+        "at": "2026-10-22T07:33:57.758Z",
+        "purpose": "main",
+        "diagnostic": {
+          "boundary": "provider_request",
+          "providerId": "openai-compatible",
+          "modelId": "deepseek-flash",
+          "reasoningEffort": "max",
+          "maxOutputTokens": 393216,
+          "messageCount": 190,
+          "toolCount": 22,
+          "toolSchemaChars": 24700,
+          "toolSchemaHash": "a231725cb5a8ea62c87a788c406dac4ba083d41f6f731600f61c7ce2b6261292",
+          "textChars": {
+            "instructions": 10348,
+            "profile": 115,
+            "project": 1033,
+            "memory": 0,
+            "conversation": 111037,
+            "toolResults": 0
+          },
+          "attachmentCount": 0,
+          "attachmentManifestHash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+        }
+      },
+      {
+        "sequence": 2072,
+        "at": "2026-10-22T07:34:04.102Z",
+        "purpose": "memory",
+        "diagnostic": {
+          "boundary": "provider_request",
+          "providerId": "openai-compatible",
+          "modelId": "deepseek-flash",
+          "maxOutputTokens": 1800,
+          "messageCount": 3,
+          "toolCount": 0,
+          "toolSchemaChars": 2,
+          "toolSchemaHash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+          "textChars": {
+            "instructions": 1592,
+            "profile": 0,
+            "project": 0,
+            "memory": 0,
+            "conversation": 6330,
+            "toolResults": 0
+          },
+          "attachmentCount": 0,
+          "attachmentManifestHash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+        }
+      }
+    ]
+  },
+  {
+    "runId": "run_1888efec-de5c-496e-a943-1a87e58a10a7",
+    "status": "completed",
+    "eventCount": 3624,
+    "routes": [
+      {
+        "at": "2026-10-22T07:17:59.168Z",
+        "provider": "openai-compatible",
+        "model": "deepseek-flash",
+        "reason": "capability match; quality=0.75, cost=1.00, latency=0.80; prompt=dsh@dsh-system-prompt@0.2.1-rc.2:harness-adapter-1"
+      }
+    ],
+    "byPurpose": {
+      "main": {
+        "calls": 24,
+        "input": 1092694,
+        "cached": 1025664,
+        "measuredInput": 1092694,
+        "output": 14147,
+        "hitRate": 0.93865620201081
+      },
+      "memory": {
+        "calls": 1,
+        "input": 5472,
+        "cached": 0,
+        "measuredInput": 5472,
+        "output": 1800,
+        "hitRate": 0
+      }
+    },
+    "diagnosticCounts": {
+      "main:first_request": 1,
+      "main:append": 23
+    },
+    "compactions": [
+      {
+        "sequence": 5,
+        "at": "2026-10-22T07:17:59.170Z",
+        "type": "context_adjusted",
+        "adjustment": {
+          "kind": "policy_migration",
+          "policyVersion": 1,
+          "capacityTokens": 1000000,
+          "triggerTokens": 800000,
+          "targetTokens": 450000
+        }
+      },
+      {
+        "sequence": 48,
+        "at": "2026-10-22T07:18:18.108Z",
+        "type": "context_adjusted",
+        "adjustment": {
+          "kind": "tool_result_bound",
+          "beforeCharacters": 1255,
+          "afterCharacters": 1167
+        }
+      },
+      {
+        "sequence": 153,
+        "at": "2026-10-22T07:18:24.606Z",
+        "type": "context_adjusted",
+        "adjustment": {
+          "kind": "tool_result_bound",
+          "beforeCharacters": 10063,
+          "afterCharacters": 5953
+        }
+      },
+      {
+        "sequence": 195,
+        "at": "2026-10-22T07:18:26.220Z",
+        "type": "context_adjusted",
+        "adjustment": {
+          "kind": "tool_result_bound",
+          "beforeCharacters": 7352,
+          "afterCharacters": 5954
+        }
+      },
+      {
+        "sequence": 232,
+        "at": "2026-10-22T07:18:28.856Z",
+        "type": "context_adjusted",
+        "adjustment": {
+          "kind": "tool_result_bound",
+          "beforeCharacters": 7573,
+          "afterCharacters": 5954
+        }
+      },
+      {
+        "sequence": 318,
+        "at": "2026-10-22T07:18:35.899Z",
+        "type": "context_adjusted",
+        "adjustment": {
+          "kind": "tool_result_bound",
+          "beforeCharacters": 7147,
+          "afterCharacters": 5954
+        }
+      },
+      {
+        "sequence": 354,
+        "at": "2026-10-22T07:18:38.535Z",
+        "type": "context_adjusted",
+        "adjustment": {
+          "kind": "tool_result_bound",
+          "beforeCharacters": 6183,
+          "afterCharacters": 5954
+        }
+      },
+      {
+        "sequence": 450,
+        "at": "2026-10-22T07:18:52.247Z",
+        "type": "context_adjusted",
+        "adjustment": {
+          "kind": "tool_result_bound",
+          "beforeCharacters": 432,
+          "afterCharacters": 374
+        }
+      },
+      {
+        "sequence": 470,
+        "at": "2026-10-22T07:19:37.619Z",
+        "type": "context_adjusted",
+        "adjustment": {
+          "kind": "tool_result_bound",
+          "beforeCharacters": 1537,
+          "afterCharacters": 1385
+        }
+      },
+      {
+        "sequence": 542,
+        "at": "2026-10-22T07:19:52.038Z",
+        "type": "context_adjusted",
+        "adjustment": {
+          "kind": "tool_result_bound",
+          "beforeCharacters": 6989,
+          "afterCharacters": 5954
+        }
+      },
+      {
+        "sequence": 638,
+        "at": "2026-10-22T07:21:33.267Z",
+        "type": "context_adjusted",
+        "adjustment": {
+          "kind": "tool_result_bound",
+          "beforeCharacters": 3055,
+          "afterCharacters": 2844
+        }
+      }
+    ],
+    "requests": [
+      {
+        "sequence": 30,
+        "at": "2026-10-22T07:18:01.768Z",
+        "purpose": "main",
+        "input": 8596,
+        "cached": 0,
+        "miss": 8596,
+        "hitRate": 0,
+        "diagnostic": {
+          "purpose": "main",
+          "protocol": "responses",
+          "reason": "first_request",
+          "unchangedPrefixItems": 0,
+          "inputItems": 4,
+          "sharedPrefixCharacters": 0,
+          "payloadCharacters": 32405
+        }
+      },
+      {
+        "sequence": 81,
+        "at": "2026-10-22T07:18:20.134Z",
+        "purpose": "main",
+        "input": 10186,
+        "cached": 8576,
+        "miss": 1610,
+        "hitRate": 0.84193991753387,
+        "diagnostic": {
+          "purpose": "main",
+          "protocol": "responses",
+          "reason": "append",
+          "unchangedPrefixItems": 4,
+          "inputItems": 11,
+          "sharedPrefixCharacters": 3867,
+          "payloadCharacters": 38534
+        }
+      },
+      {
+        "sequence": 140,
+        "at": "2026-10-22T07:18:21.962Z",
+        "purpose": "main",
+        "input": 16564,
+        "cached": 10368,
+        "miss": 6196,
+        "hitRate": 0.6259357643081381,
+        "diagnostic": {
+          "purpose": "main",
+          "protocol": "responses",
+          "reason": "append",
+          "unchangedPrefixItems": 11,
+          "inputItems": 22,
+          "sharedPrefixCharacters": 9989,
+          "payloadCharacters": 56702
+        }
+      },
+      {
+        "sequence": 183,
+        "at": "2026-10-22T07:18:26.183Z",
+        "purpose": "main",
+        "input": 18696,
+        "cached": 16768,
+        "miss": 1928,
+        "hitRate": 0.8968763371844245,
+        "diagnostic": {
+          "purpose": "main",
+          "protocol": "responses",
+          "reason": "append",
+          "unchangedPrefixItems": 22,
+          "inputItems": 27,
+          "sharedPrefixCharacters": 28146,
+          "payloadCharacters": 66755
+        }
+      },
+      {
+        "sequence": 212,
+        "at": "2026-10-22T07:18:28.830Z",
+        "purpose": "main",
+        "input": 23886,
+        "cached": 18816,
+        "miss": 5070,
+        "hitRate": 0.7877417734237628,
+        "diagnostic": {
+          "purpose": "main",
+          "protocol": "responses",
+          "reason": "append",
+          "unchangedPrefixItems": 27,
+          "inputItems": 36,
+          "sharedPrefixCharacters": 38194,
+          "payloadCharacters": 83379
+        }
+      },
+      {
+        "sequence": 260,
+        "at": "2026-10-22T07:18:30.365Z",
+        "purpose": "main",
+        "input": 29230,
+        "cached": 23808,
+        "miss": 5422,
+        "hitRate": 0.8145056448853917,
+        "diagnostic": {
+          "purpose": "main",
+          "protocol": "responses",
+          "reason": "append",
+          "unchangedPrefixItems": 36,
+          "inputItems": 44,
+          "sharedPrefixCharacters": 54809,
+          "payloadCharacters": 101669
+        }
+      },
+      {
+        "sequence": 310,
+        "at": "2026-10-22T07:18:35.858Z",
+        "purpose": "main",
+        "input": 33306,
+        "cached": 29312,
+        "miss": 3994,
+        "hitRate": 0.8800816669669129,
+        "diagnostic": {
+          "purpose": "main",
+          "protocol": "responses",
+          "reason": "append",
+          "unchangedPrefixItems": 44,
+          "inputItems": 53,
+          "sharedPrefixCharacters": 73091,
+          "payloadCharacters": 115367
+        }
+      },
+      {
+        "sequence": 326,
+        "at": "2026-10-22T07:18:37.517Z",
+        "purpose": "main",
+        "input": 36443,
+        "cached": 34048,
+        "miss": 2395,
+        "hitRate": 0.934280931866202,
+        "diagnostic": {
+          "purpose": "main",
+          "protocol": "responses",
+          "reason": "append",
+          "unchangedPrefixItems": 53,
+          "inputItems": 58,
+          "sharedPrefixCharacters": 86780,
+          "payloadCharacters": 126759
+        }
+      },
+      {
+        "sequence": 346,
+        "at": "2026-10-22T07:18:38.524Z",
+        "purpose": "main",
+        "input": 40477,
+        "cached": 36608,
+        "miss": 3869,
+        "hitRate": 0.904414852879413,
+        "diagnostic": {
+          "purpose": "main",
+          "protocol": "responses",
+          "reason": "append",
+          "unchangedPrefixItems": 58,
+          "inputItems": 64,
+          "sharedPrefixCharacters": 98167,
+          "payloadCharacters": 140291
+        }
+      },
+      {
+        "sequence": 362,
+        "at": "2026-10-22T07:18:40.550Z",
+        "purpose": "main",
+        "input": 42692,
+        "cached": 40576,
+        "miss": 2116,
+        "hitRate": 0.9504356788157031,
+        "diagnostic": {
+          "purpose": "main",
+          "protocol": "responses",
+          "reason": "append",
+          "unchangedPrefixItems": 64,
+          "inputItems": 68,
+          "sharedPrefixCharacters": 111693,
+          "payloadCharacters": 149053
+        }
+      },
+      {
+        "sequence": 382,
+        "at": "2026-10-22T07:18:42.352Z",
+        "purpose": "main",
+        "input": 45699,
+        "cached": 43008,
+        "miss": 2691,
+        "hitRate": 0.9411146852228714,
+        "diagnostic": {
+          "purpose": "main",
+          "protocol": "responses",
+          "reason": "append",
+          "unchangedPrefixItems": 68,
+          "inputItems": 74,
+          "sharedPrefixCharacters": 120451,
+          "payloadCharacters": 159296
+        }
+      },
+      {
+        "sequence": 396,
+        "at": "2026-10-22T07:18:43.713Z",
+        "purpose": "main",
+        "input": 48347,
+        "cached": 45824,
+        "miss": 2523,
+        "hitRate": 0.9478147558276625,
+        "diagnostic": {
+          "purpose": "main",
+          "protocol": "responses",
+          "reason": "append",
+          "unchangedPrefixItems": 74,
+          "inputItems": 78,
+          "sharedPrefixCharacters": 130688,
+          "payloadCharacters": 167727
+        }
+      },
+      {
+        "sequence": 431,
+        "at": "2026-10-22T07:18:47.600Z",
+        "purpose": "main",
+        "input": 49802,
+        "cached": 48384,
+        "miss": 1418,
+        "hitRate": 0.9715272479016906,
+        "diagnostic": {
+          "purpose": "main",
+          "protocol": "responses",
+          "reason": "append",
+          "unchangedPrefixItems": 78,
+          "inputItems": 82,
+          "sharedPrefixCharacters": 139115,
+          "payloadCharacters": 172807
+        }
+      },
+      {
+        "sequence": 457,
+        "at": "2026-10-22T07:18:55.365Z",
+        "purpose": "main",
+        "input": 51754,
+        "cached": 50432,
+        "miss": 1322,
+        "hitRate": 0.9744560806894154,
+        "diagnostic": {
+          "purpose": "main",
+          "protocol": "responses",
+          "reason": "append",
+          "unchangedPrefixItems": 82,
+          "inputItems": 89,
+          "sharedPrefixCharacters": 144191,
+          "payloadCharacters": 179732
+        }
+      },
+      {
+        "sequence": 478,
+        "at": "2026-10-22T07:19:40.213Z",
+        "purpose": "main",
+        "input": 53359,
+        "cached": 52096,
+        "miss": 1263,
+        "hitRate": 0.9763301411195862,
+        "diagnostic": {
+          "purpose": "main",
+          "protocol": "responses",
+          "reason": "append",
+          "unchangedPrefixItems": 89,
+          "inputItems": 93,
+          "sharedPrefixCharacters": 151109,
+          "payloadCharacters": 185449
+        }
+      },
+      {
+        "sequence": 497,
+        "at": "2026-10-22T07:19:42.314Z",
+        "purpose": "main",
+        "input": 56504,
+        "cached": 53504,
+        "miss": 3000,
+        "hitRate": 0.9469064137052244,
+        "diagnostic": {
+          "purpose": "main",
+          "protocol": "responses",
+          "reason": "append",
+          "unchangedPrefixItems": 93,
+          "inputItems": 99,
+          "sharedPrefixCharacters": 156822,
+          "payloadCharacters": 196253
+        }
+      },
+      {
+        "sequence": 511,
+        "at": "2026-10-22T07:19:44.364Z",
+        "purpose": "main",
+        "input": 57047,
+        "cached": 56576,
+        "miss": 471,
+        "hitRate": 0.9917436499728294,
+        "diagnostic": {
+          "purpose": "main",
+          "protocol": "responses",
+          "reason": "append",
+          "unchangedPrefixItems": 99,
+          "inputItems": 103,
+          "sharedPrefixCharacters": 167620,
+          "payloadCharacters": 198307
+        }
+      },
+      {
+        "sequence": 532,
+        "at": "2026-10-22T07:19:51.992Z",
+        "purpose": "main",
+        "input": 58680,
+        "cached": 57088,
+        "miss": 1592,
+        "hitRate": 0.9728698023176551,
+        "diagnostic": {
+          "purpose": "main",
+          "protocol": "responses",
+          "reason": "append",
+          "unchangedPrefixItems": 103,
+          "inputItems": 108,
+          "sharedPrefixCharacters": 169670,
+          "payloadCharacters": 203746
+        }
+      },
+      {
+        "sequence": 553,
+        "at": "2026-10-22T07:19:53.499Z",
+        "purpose": "main",
+        "input": 63995,
+        "cached": 59904,
+        "miss": 4091,
+        "hitRate": 0.936073130713337,
+        "diagnostic": {
+          "purpose": "main",
+          "protocol": "responses",
+          "reason": "append",
+          "unchangedPrefixItems": 108,
+          "inputItems": 114,
+          "sharedPrefixCharacters": 175104,
+          "payloadCharacters": 222173
+        }
+      },
+      {
+        "sequence": 566,
+        "at": "2026-10-22T07:19:55.268Z",
+        "purpose": "main",
+        "input": 64714,
+        "cached": 64128,
+        "miss": 586,
+        "hitRate": 0.9909447723831011,
+        "diagnostic": {
+          "purpose": "main",
+          "protocol": "responses",
+          "reason": "append",
+          "unchangedPrefixItems": 114,
+          "inputItems": 118,
+          "sharedPrefixCharacters": 193525,
+          "payloadCharacters": 224716
+        }
+      },
+      {
+        "sequence": 580,
+        "at": "2026-10-22T07:19:57.708Z",
+        "purpose": "main",
+        "input": 66211,
+        "cached": 64768,
+        "miss": 1443,
+        "hitRate": 0.9782060382715863,
+        "diagnostic": {
+          "purpose": "main",
+          "protocol": "responses",
+          "reason": "append",
+          "unchangedPrefixItems": 118,
+          "inputItems": 121,
+          "sharedPrefixCharacters": 196064,
+          "payloadCharacters": 229844
+        }
+      },
+      {
+        "sequence": 594,
+        "at": "2026-10-22T07:20:12.913Z",
+        "purpose": "main",
+        "input": 68126,
+        "cached": 66560,
+        "miss": 1566,
+        "hitRate": 0.9770131814578868,
+        "diagnostic": {
+          "purpose": "main",
+          "protocol": "responses",
+          "reason": "append",
+          "unchangedPrefixItems": 121,
+          "inputItems": 125,
+          "sharedPrefixCharacters": 201189,
+          "payloadCharacters": 236665
+        }
+      },
+      {
+        "sequence": 625,
+        "at": "2026-10-22T07:20:21.868Z",
+        "purpose": "main",
+        "input": 72014,
+        "cached": 70912,
+        "miss": 1102,
+        "hitRate": 0.9846974199461216,
+        "diagnostic": {
+          "purpose": "main",
+          "protocol": "responses",
+          "reason": "append",
+          "unchangedPrefixItems": 125,
+          "inputItems": 129,
+          "sharedPrefixCharacters": 208006,
+          "payloadCharacters": 248567
+        }
+      },
+      {
+        "sequence": 3615,
+        "at": "2026-10-22T07:21:49.652Z",
+        "purpose": "main",
+        "input": 76366,
+        "cached": 73600,
+        "miss": 2766,
+        "hitRate": 0.9637796925333264,
+        "diagnostic": {
+          "purpose": "main",
+          "protocol": "responses",
+          "reason": "append",
+          "unchangedPrefixItems": 129,
+          "inputItems": 134,
+          "sharedPrefixCharacters": 219904,
+          "payloadCharacters": 263041
+        }
+      },
+      {
+        "sequence": 3619,
+        "at": "2026-10-22T07:21:59.800Z",
+        "purpose": "memory",
+        "input": 5472,
+        "cached": 0,
+        "miss": 5472,
+        "hitRate": 0
+      }
+    ],
+    "structural": [
+      {
+        "sequence": 31,
+        "at": "2026-10-22T07:18:01.773Z",
+        "purpose": "main",
+        "diagnostic": {
+          "boundary": "provider_request",
+          "providerId": "openai-compatible",
+          "modelId": "deepseek-flash",
+          "reasoningEffort": "max",
+          "maxOutputTokens": 393216,
+          "messageCount": 9,
+          "toolCount": 22,
+          "toolSchemaChars": 24700,
+          "toolSchemaHash": "a231725cb5a8ea62c87a788c406dac4ba083d41f6f731600f61c7ce2b6261292",
+          "textChars": {
+            "instructions": 3901,
+            "profile": 115,
+            "project": 1033,
+            "memory": 0,
+            "conversation": 2279,
+            "toolResults": 0
+          },
+          "attachmentCount": 0,
+          "attachmentManifestHash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+        }
+      },
+      {
+        "sequence": 82,
+        "at": "2026-10-22T07:18:20.135Z",
+        "purpose": "main",
+        "diagnostic": {
+          "boundary": "provider_request",
+          "providerId": "openai-compatible",
+          "modelId": "deepseek-flash",
+          "reasoningEffort": "max",
+          "maxOutputTokens": 393216,
+          "messageCount": 13,
+          "toolCount": 22,
+          "toolSchemaChars": 24700,
+          "toolSchemaHash": "a231725cb5a8ea62c87a788c406dac4ba083d41f6f731600f61c7ce2b6261292",
+          "textChars": {
+            "instructions": 3901,
+            "profile": 115,
+            "project": 1033,
+            "memory": 0,
+            "conversation": 4689,
+            "toolResults": 0
+          },
+          "attachmentCount": 0,
+          "attachmentManifestHash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+        }
+      },
+      {
+        "sequence": 141,
+        "at": "2026-10-22T07:18:21.963Z",
+        "purpose": "main",
+        "diagnostic": {
+          "boundary": "provider_request",
+          "providerId": "openai-compatible",
+          "modelId": "deepseek-flash",
+          "reasoningEffort": "max",
+          "maxOutputTokens": 393216,
+          "messageCount": 19,
+          "toolCount": 22,
+          "toolSchemaChars": 24700,
+          "toolSchemaHash": "a231725cb5a8ea62c87a788c406dac4ba083d41f6f731600f61c7ce2b6261292",
+          "textChars": {
+            "instructions": 3901,
+            "profile": 115,
+            "project": 1033,
+            "memory": 0,
+            "conversation": 5789,
+            "toolResults": 0
+          },
+          "attachmentCount": 0,
+          "attachmentManifestHash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+        }
+      },
+      {
+        "sequence": 184,
+        "at": "2026-10-22T07:18:26.206Z",
+        "purpose": "main",
+        "diagnostic": {
+          "boundary": "provider_request",
+          "providerId": "openai-compatible",
+          "modelId": "deepseek-flash",
+          "reasoningEffort": "max",
+          "maxOutputTokens": 393216,
+          "messageCount": 22,
+          "toolCount": 22,
+          "toolSchemaChars": 24700,
+          "toolSchemaHash": "a231725cb5a8ea62c87a788c406dac4ba083d41f6f731600f61c7ce2b6261292",
+          "textChars": {
+            "instructions": 3901,
+            "profile": 115,
+            "project": 1033,
+            "memory": 0,
+            "conversation": 7606,
+            "toolResults": 0
+          },
+          "attachmentCount": 0,
+          "attachmentManifestHash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+        }
+      },
+      {
+        "sequence": 213,
+        "at": "2026-10-22T07:18:28.830Z",
+        "purpose": "main",
+        "diagnostic": {
+          "boundary": "provider_request",
+          "providerId": "openai-compatible",
+          "modelId": "deepseek-flash",
+          "reasoningEffort": "max",
+          "maxOutputTokens": 393216,
+          "messageCount": 27,
+          "toolCount": 22,
+          "toolSchemaChars": 24700,
+          "toolSchemaHash": "a231725cb5a8ea62c87a788c406dac4ba083d41f6f731600f61c7ce2b6261292",
+          "textChars": {
+            "instructions": 3901,
+            "profile": 115,
+            "project": 1033,
+            "memory": 0,
+            "conversation": 8738,
+            "toolResults": 0
+          },
+          "attachmentCount": 0,
+          "attachmentManifestHash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+        }
+      },
+      {
+        "sequence": 261,
+        "at": "2026-10-22T07:18:30.365Z",
+        "purpose": "main",
+        "diagnostic": {
+          "boundary": "provider_request",
+          "providerId": "openai-compatible",
+          "modelId": "deepseek-flash",
+          "reasoningEffort": "max",
+          "maxOutputTokens": 393216,
+          "messageCount": 32,
+          "toolCount": 22,
+          "toolSchemaChars": 24700,
+          "toolSchemaHash": "a231725cb5a8ea62c87a788c406dac4ba083d41f6f731600f61c7ce2b6261292",
+          "textChars": {
+            "instructions": 3901,
+            "profile": 115,
+            "project": 1033,
+            "memory": 0,
+            "conversation": 9828,
+            "toolResults": 0
+          },
+          "attachmentCount": 0,
+          "attachmentManifestHash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+        }
+      },
+      {
+        "sequence": 311,
+        "at": "2026-10-22T07:18:35.858Z",
+        "purpose": "main",
+        "diagnostic": {
+          "boundary": "provider_request",
+          "providerId": "openai-compatible",
+          "modelId": "deepseek-flash",
+          "reasoningEffort": "max",
+          "maxOutputTokens": 393216,
+          "messageCount": 37,
+          "toolCount": 22,
+          "toolSchemaChars": 24700,
+          "toolSchemaHash": "a231725cb5a8ea62c87a788c406dac4ba083d41f6f731600f61c7ce2b6261292",
+          "textChars": {
+            "instructions": 3901,
+            "profile": 115,
+            "project": 1033,
+            "memory": 0,
+            "conversation": 10951,
+            "toolResults": 0
+          },
+          "attachmentCount": 0,
+          "attachmentManifestHash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+        }
+      },
+      {
+        "sequence": 327,
+        "at": "2026-10-22T07:18:37.517Z",
+        "purpose": "main",
+        "diagnostic": {
+          "boundary": "provider_request",
+          "providerId": "openai-compatible",
+          "modelId": "deepseek-flash",
+          "reasoningEffort": "max",
+          "maxOutputTokens": 393216,
+          "messageCount": 40,
+          "toolCount": 22,
+          "toolSchemaChars": 24700,
+          "toolSchemaHash": "a231725cb5a8ea62c87a788c406dac4ba083d41f6f731600f61c7ce2b6261292",
+          "textChars": {
+            "instructions": 3901,
+            "profile": 115,
+            "project": 1033,
+            "memory": 0,
+            "conversation": 11593,
+            "toolResults": 0
+          },
+          "attachmentCount": 0,
+          "attachmentManifestHash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+        }
+      },
+      {
+        "sequence": 347,
+        "at": "2026-10-22T07:18:38.525Z",
+        "purpose": "main",
+        "diagnostic": {
+          "boundary": "provider_request",
+          "providerId": "openai-compatible",
+          "modelId": "deepseek-flash",
+          "reasoningEffort": "max",
+          "maxOutputTokens": 393216,
+          "messageCount": 44,
+          "toolCount": 22,
+          "toolSchemaChars": 24700,
+          "toolSchemaHash": "a231725cb5a8ea62c87a788c406dac4ba083d41f6f731600f61c7ce2b6261292",
+          "textChars": {
+            "instructions": 3901,
+            "profile": 115,
+            "project": 1033,
+            "memory": 0,
+            "conversation": 12441,
+            "toolResults": 0
+          },
+          "attachmentCount": 0,
+          "attachmentManifestHash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+        }
+      },
+      {
+        "sequence": 363,
+        "at": "2026-10-22T07:18:40.551Z",
+        "purpose": "main",
+        "diagnostic": {
+          "boundary": "provider_request",
+          "providerId": "openai-compatible",
+          "modelId": "deepseek-flash",
+          "reasoningEffort": "max",
+          "maxOutputTokens": 393216,
+          "messageCount": 47,
+          "toolCount": 22,
+          "toolSchemaChars": 24700,
+          "toolSchemaHash": "a231725cb5a8ea62c87a788c406dac4ba083d41f6f731600f61c7ce2b6261292",
+          "textChars": {
+            "instructions": 3901,
+            "profile": 115,
+            "project": 1033,
+            "memory": 0,
+            "conversation": 13047,
+            "toolResults": 0
+          },
+          "attachmentCount": 0,
+          "attachmentManifestHash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+        }
+      },
+      {
+        "sequence": 383,
+        "at": "2026-10-22T07:18:42.354Z",
+        "purpose": "main",
+        "diagnostic": {
+          "boundary": "provider_request",
+          "providerId": "openai-compatible",
+          "modelId": "deepseek-flash",
+          "reasoningEffort": "max",
+          "maxOutputTokens": 393216,
+          "messageCount": 51,
+          "toolCount": 22,
+          "toolSchemaChars": 24700,
+          "toolSchemaHash": "a231725cb5a8ea62c87a788c406dac4ba083d41f6f731600f61c7ce2b6261292",
+          "textChars": {
+            "instructions": 3901,
+            "profile": 115,
+            "project": 1033,
+            "memory": 0,
+            "conversation": 13895,
+            "toolResults": 0
+          },
+          "attachmentCount": 0,
+          "attachmentManifestHash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+        }
+      },
+      {
+        "sequence": 397,
+        "at": "2026-10-22T07:18:43.714Z",
+        "purpose": "main",
+        "diagnostic": {
+          "boundary": "provider_request",
+          "providerId": "openai-compatible",
+          "modelId": "deepseek-flash",
+          "reasoningEffort": "max",
+          "maxOutputTokens": 393216,
+          "messageCount": 54,
+          "toolCount": 22,
+          "toolSchemaChars": 24700,
+          "toolSchemaHash": "a231725cb5a8ea62c87a788c406dac4ba083d41f6f731600f61c7ce2b6261292",
+          "textChars": {
+            "instructions": 3901,
+            "profile": 115,
+            "project": 1033,
+            "memory": 0,
+            "conversation": 14501,
+            "toolResults": 0
+          },
+          "attachmentCount": 0,
+          "attachmentManifestHash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+        }
+      },
+      {
+        "sequence": 432,
+        "at": "2026-10-22T07:18:47.600Z",
+        "purpose": "main",
+        "diagnostic": {
+          "boundary": "provider_request",
+          "providerId": "openai-compatible",
+          "modelId": "deepseek-flash",
+          "reasoningEffort": "max",
+          "maxOutputTokens": 393216,
+          "messageCount": 57,
+          "toolCount": 22,
+          "toolSchemaChars": 24700,
+          "toolSchemaHash": "a231725cb5a8ea62c87a788c406dac4ba083d41f6f731600f61c7ce2b6261292",
+          "textChars": {
+            "instructions": 3901,
+            "profile": 115,
+            "project": 1033,
+            "memory": 0,
+            "conversation": 15107,
+            "toolResults": 0
+          },
+          "attachmentCount": 0,
+          "attachmentManifestHash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+        }
+      },
+      {
+        "sequence": 458,
+        "at": "2026-10-22T07:18:55.366Z",
+        "purpose": "main",
+        "diagnostic": {
+          "boundary": "provider_request",
+          "providerId": "openai-compatible",
+          "modelId": "deepseek-flash",
+          "reasoningEffort": "max",
+          "maxOutputTokens": 393216,
+          "messageCount": 61,
+          "toolCount": 22,
+          "toolSchemaChars": 24700,
+          "toolSchemaHash": "a231725cb5a8ea62c87a788c406dac4ba083d41f6f731600f61c7ce2b6261292",
+          "textChars": {
+            "instructions": 3901,
+            "profile": 115,
+            "project": 1033,
+            "memory": 0,
+            "conversation": 17158,
+            "toolResults": 0
+          },
+          "attachmentCount": 0,
+          "attachmentManifestHash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+        }
+      },
+      {
+        "sequence": 479,
+        "at": "2026-10-22T07:19:40.214Z",
+        "purpose": "main",
+        "diagnostic": {
+          "boundary": "provider_request",
+          "providerId": "openai-compatible",
+          "modelId": "deepseek-flash",
+          "reasoningEffort": "max",
+          "maxOutputTokens": 393216,
+          "messageCount": 64,
+          "toolCount": 22,
+          "toolSchemaChars": 24700,
+          "toolSchemaHash": "a231725cb5a8ea62c87a788c406dac4ba083d41f6f731600f61c7ce2b6261292",
+          "textChars": {
+            "instructions": 3901,
+            "profile": 115,
+            "project": 1033,
+            "memory": 0,
+            "conversation": 18842,
+            "toolResults": 0
+          },
+          "attachmentCount": 0,
+          "attachmentManifestHash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+        }
+      },
+      {
+        "sequence": 498,
+        "at": "2026-10-22T07:19:42.314Z",
+        "purpose": "main",
+        "diagnostic": {
+          "boundary": "provider_request",
+          "providerId": "openai-compatible",
+          "modelId": "deepseek-flash",
+          "reasoningEffort": "max",
+          "maxOutputTokens": 393216,
+          "messageCount": 68,
+          "toolCount": 22,
+          "toolSchemaChars": 24700,
+          "toolSchemaHash": "a231725cb5a8ea62c87a788c406dac4ba083d41f6f731600f61c7ce2b6261292",
+          "textChars": {
+            "instructions": 3901,
+            "profile": 115,
+            "project": 1033,
+            "memory": 0,
+            "conversation": 19692,
+            "toolResults": 0
+          },
+          "attachmentCount": 0,
+          "attachmentManifestHash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+        }
+      },
+      {
+        "sequence": 512,
+        "at": "2026-10-22T07:19:44.364Z",
+        "purpose": "main",
+        "diagnostic": {
+          "boundary": "provider_request",
+          "providerId": "openai-compatible",
+          "modelId": "deepseek-flash",
+          "reasoningEffort": "max",
+          "maxOutputTokens": 393216,
+          "messageCount": 71,
+          "toolCount": 22,
+          "toolSchemaChars": 24700,
+          "toolSchemaHash": "a231725cb5a8ea62c87a788c406dac4ba083d41f6f731600f61c7ce2b6261292",
+          "textChars": {
+            "instructions": 3901,
+            "profile": 115,
+            "project": 1033,
+            "memory": 0,
+            "conversation": 20300,
+            "toolResults": 0
+          },
+          "attachmentCount": 0,
+          "attachmentManifestHash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+        }
+      },
+      {
+        "sequence": 533,
+        "at": "2026-10-22T07:19:51.994Z",
+        "purpose": "main",
+        "diagnostic": {
+          "boundary": "provider_request",
+          "providerId": "openai-compatible",
+          "modelId": "deepseek-flash",
+          "reasoningEffort": "max",
+          "maxOutputTokens": 393216,
+          "messageCount": 75,
+          "toolCount": 22,
+          "toolSchemaChars": 24700,
+          "toolSchemaHash": "a231725cb5a8ea62c87a788c406dac4ba083d41f6f731600f61c7ce2b6261292",
+          "textChars": {
+            "instructions": 3901,
+            "profile": 115,
+            "project": 1033,
+            "memory": 0,
+            "conversation": 21153,
+            "toolResults": 0
+          },
+          "attachmentCount": 0,
+          "attachmentManifestHash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+        }
+      },
+      {
+        "sequence": 554,
+        "at": "2026-10-22T07:19:53.500Z",
+        "purpose": "main",
+        "diagnostic": {
+          "boundary": "provider_request",
+          "providerId": "openai-compatible",
+          "modelId": "deepseek-flash",
+          "reasoningEffort": "max",
+          "maxOutputTokens": 393216,
+          "messageCount": 79,
+          "toolCount": 22,
+          "toolSchemaChars": 24700,
+          "toolSchemaHash": "a231725cb5a8ea62c87a788c406dac4ba083d41f6f731600f61c7ce2b6261292",
+          "textChars": {
+            "instructions": 3901,
+            "profile": 115,
+            "project": 1033,
+            "memory": 0,
+            "conversation": 22000,
+            "toolResults": 0
+          },
+          "attachmentCount": 0,
+          "attachmentManifestHash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+        }
+      },
+      {
+        "sequence": 567,
+        "at": "2026-10-22T07:19:55.269Z",
+        "purpose": "main",
+        "diagnostic": {
+          "boundary": "provider_request",
+          "providerId": "openai-compatible",
+          "modelId": "deepseek-flash",
+          "reasoningEffort": "max",
+          "maxOutputTokens": 393216,
+          "messageCount": 82,
+          "toolCount": 22,
+          "toolSchemaChars": 24700,
+          "toolSchemaHash": "a231725cb5a8ea62c87a788c406dac4ba083d41f6f731600f61c7ce2b6261292",
+          "textChars": {
+            "instructions": 3901,
+            "profile": 115,
+            "project": 1033,
+            "memory": 0,
+            "conversation": 22608,
+            "toolResults": 0
+          },
+          "attachmentCount": 0,
+          "attachmentManifestHash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+        }
+      },
+      {
+        "sequence": 581,
+        "at": "2026-10-22T07:19:57.709Z",
+        "purpose": "main",
+        "diagnostic": {
+          "boundary": "provider_request",
+          "providerId": "openai-compatible",
+          "modelId": "deepseek-flash",
+          "reasoningEffort": "max",
+          "maxOutputTokens": 393216,
+          "messageCount": 85,
+          "toolCount": 22,
+          "toolSchemaChars": 24700,
+          "toolSchemaHash": "a231725cb5a8ea62c87a788c406dac4ba083d41f6f731600f61c7ce2b6261292",
+          "textChars": {
+            "instructions": 3901,
+            "profile": 115,
+            "project": 1033,
+            "memory": 0,
+            "conversation": 23216,
+            "toolResults": 0
+          },
+          "attachmentCount": 0,
+          "attachmentManifestHash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+        }
+      },
+      {
+        "sequence": 595,
+        "at": "2026-10-22T07:20:12.913Z",
+        "purpose": "main",
+        "diagnostic": {
+          "boundary": "provider_request",
+          "providerId": "openai-compatible",
+          "modelId": "deepseek-flash",
+          "reasoningEffort": "max",
+          "maxOutputTokens": 393216,
+          "messageCount": 88,
+          "toolCount": 22,
+          "toolSchemaChars": 24700,
+          "toolSchemaHash": "a231725cb5a8ea62c87a788c406dac4ba083d41f6f731600f61c7ce2b6261292",
+          "textChars": {
+            "instructions": 3901,
+            "profile": 115,
+            "project": 1033,
+            "memory": 0,
+            "conversation": 23824,
+            "toolResults": 0
+          },
+          "attachmentCount": 0,
+          "attachmentManifestHash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+        }
+      },
+      {
+        "sequence": 626,
+        "at": "2026-10-22T07:20:21.868Z",
+        "purpose": "main",
+        "diagnostic": {
+          "boundary": "provider_request",
+          "providerId": "openai-compatible",
+          "modelId": "deepseek-flash",
+          "reasoningEffort": "max",
+          "maxOutputTokens": 393216,
+          "messageCount": 91,
+          "toolCount": 22,
+          "toolSchemaChars": 24700,
+          "toolSchemaHash": "a231725cb5a8ea62c87a788c406dac4ba083d41f6f731600f61c7ce2b6261292",
+          "textChars": {
+            "instructions": 3901,
+            "profile": 115,
+            "project": 1033,
+            "memory": 0,
+            "conversation": 24432,
+            "toolResults": 0
+          },
+          "attachmentCount": 0,
+          "attachmentManifestHash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+        }
+      },
+      {
+        "sequence": 3616,
+        "at": "2026-10-22T07:21:49.653Z",
+        "purpose": "main",
+        "diagnostic": {
+          "boundary": "provider_request",
+          "providerId": "openai-compatible",
+          "modelId": "deepseek-flash",
+          "reasoningEffort": "max",
+          "maxOutputTokens": 393216,
+          "messageCount": 94,
+          "toolCount": 22,
+          "toolSchemaChars": 24700,
+          "toolSchemaHash": "a231725cb5a8ea62c87a788c406dac4ba083d41f6f731600f61c7ce2b6261292",
+          "textChars": {
+            "instructions": 3901,
+            "profile": 115,
+            "project": 1033,
+            "memory": 0,
+            "conversation": 26229,
+            "toolResults": 0
+          },
+          "attachmentCount": 0,
+          "attachmentManifestHash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+        }
+      },
+      {
+        "sequence": 3620,
+        "at": "2026-10-22T07:21:59.801Z",
+        "purpose": "memory",
+        "diagnostic": {
+          "boundary": "provider_request",
+          "providerId": "openai-compatible",
+          "modelId": "deepseek-flash",
+          "maxOutputTokens": 1800,
+          "messageCount": 3,
+          "toolCount": 0,
+          "toolSchemaChars": 2,
+          "toolSchemaHash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+          "textChars": {
+            "instructions": 1592,
+            "profile": 0,
+            "project": 0,
+            "memory": 0,
+            "conversation": 10958,
+            "toolResults": 0
+          },
+          "attachmentCount": 0,
+          "attachmentManifestHash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+        }
+      }
+    ]
+  },
+  {
+    "runId": "run_24e22e75-6bfe-41b6-9cd5-742a098d5521",
+    "status": "completed",
+    "eventCount": 3095,
+    "routes": [
+      {
+        "at": "2026-10-21T07:48:55.432Z",
+        "provider": "openai-compatible",
+        "model": "deepseek-flash",
+        "reason": "capability match; quality=0.75, cost=1.00, latency=0.80"
+      },
+      {
+        "at": "2026-10-21T08:07:53.808Z",
+        "provider": "openai-compatible",
+        "model": "deepseek-flash",
+        "reason": "capability match; quality=0.75, cost=1.00, latency=0.80"
+      }
+    ],
+    "byPurpose": {
+      "main": {
+        "calls": 52,
+        "input": 7938332,
+        "cached": 6736000,
+        "measuredInput": 7938332,
+        "output": 96550,
+        "hitRate": 0.8485409781299145
+      },
+      "compaction": {
+        "calls": 1,
+        "input": 501297,
+        "cached": 512,
+        "measuredInput": 501297,
+        "output": 1670,
+        "hitRate": 0.0010213506165007969
+      },
+      "memory": {
+        "calls": 1,
+        "input": 1074,
+        "cached": 128,
+        "measuredInput": 1074,
+        "output": 1000,
+        "hitRate": 0.1191806331471136
+      }
+    },
+    "diagnosticCounts": {
+      "main:first_request": 1,
+      "main:append": 48,
+      "main:rewrite": 3,
+      "compaction:first_request": 1
+    },
+    "compactions": [
+      {
+        "sequence": 5,
+        "at": "2026-10-21T07:48:55.434Z",
+        "type": "context_adjusted",
+        "adjustment": {
+          "kind": "policy_migration",
+          "policyVersion": 1,
+          "capacityTokens": 1000000,
+          "triggerTokens": 800000,
+          "targetTokens": 450000
+        }
+      },
+      {
+        "sequence": 161,
+        "at": "2026-10-21T07:52:23.425Z",
+        "type": "context_adjusted",
+        "adjustment": {
+          "kind": "tool_result_bound",
+          "beforeCharacters": 916,
+          "afterCharacters": 876
+        }
+      },
+      {
+        "sequence": 231,
+        "at": "2026-10-21T07:54:30.854Z",
+        "type": "context_adjusted",
+        "adjustment": {
+          "kind": "tool_result_bound",
+          "beforeCharacters": 10863,
+          "afterCharacters": 5954
+        }
+      },
+      {
+        "sequence": 290,
+        "at": "2026-10-21T07:55:25.311Z",
+        "type": "context_adjusted",
+        "adjustment": {
+          "kind": "tool_result_bound",
+          "beforeCharacters": 16921,
+          "afterCharacters": 5954
+        }
+      },
+      {
+        "sequence": 304,
+        "at": "2026-10-21T08:07:53.808Z",
+        "type": "context_adjusted",
+        "adjustment": {
+          "kind": "resume_rebuild"
+        }
+      },
+      {
+        "sequence": 312,
+        "at": "2026-10-21T08:08:13.157Z",
+        "type": "context_compacted",
+        "keys": [
+          "type",
+          "record",
+          "id",
+          "runId",
+          "at",
+          "sequence"
+        ]
+      },
+      {
+        "sequence": 314,
+        "at": "2026-10-21T08:08:13.158Z",
+        "type": "context_adjusted",
+        "adjustment": {
+          "kind": "full_compaction",
+          "beforeTokens": 909340,
+          "afterTokens": 72770,
+          "capacityTokens": 1000000,
+          "triggerTokens": 800000,
+          "targetTokens": 450000,
+          "summaryOutcome": "accepted"
+        }
+      },
+      {
+        "sequence": 441,
+        "at": "2026-10-21T08:08:22.323Z",
+        "type": "context_adjusted",
+        "adjustment": {
+          "kind": "tool_result_bound",
+          "beforeCharacters": 9928,
+          "afterCharacters": 5954
+        }
+      },
+      {
+        "sequence": 507,
+        "at": "2026-10-21T08:09:09.674Z",
+        "type": "context_adjusted",
+        "adjustment": {
+          "kind": "tool_result_bound",
+          "beforeCharacters": 7756,
+          "afterCharacters": 5954
+        }
+      },
+      {
+        "sequence": 573,
+        "at": "2026-10-21T08:09:29.042Z",
+        "type": "context_adjusted",
+        "adjustment": {
+          "kind": "tool_result_bound",
+          "beforeCharacters": 9518,
+          "afterCharacters": 5954
+        }
+      },
+      {
+        "sequence": 692,
+        "at": "2026-10-21T08:10:03.379Z",
+        "type": "context_adjusted",
+        "adjustment": {
+          "kind": "tool_result_bound",
+          "beforeCharacters": 8515,
+          "afterCharacters": 5954
+        }
+      },
+      {
+        "sequence": 998,
+        "at": "2026-10-21T08:12:21.251Z",
+        "type": "context_adjusted",
+        "adjustment": {
+          "kind": "tool_result_bound",
+          "beforeCharacters": 7262,
+          "afterCharacters": 5954
+        }
+      },
+      {
+        "sequence": 1102,
+        "at": "2026-10-21T08:12:52.258Z",
+        "type": "context_adjusted",
+        "adjustment": {
+          "kind": "tool_result_bound",
+          "beforeCharacters": 6880,
+          "afterCharacters": 5954
+        }
+      },
+      {
+        "sequence": 1234,
+        "at": "2026-10-21T08:13:39.948Z",
+        "type": "context_adjusted",
+        "adjustment": {
+          "kind": "tool_result_bound",
+          "beforeCharacters": 6244,
+          "afterCharacters": 5954
+        }
+      },
+      {
+        "sequence": 1246,
+        "at": "2026-10-21T08:13:43.634Z",
+        "type": "context_adjusted",
+        "adjustment": {
+          "kind": "tool_result_bound",
+          "beforeCharacters": 6075,
+          "afterCharacters": 5954
+        }
+      },
+      {
+        "sequence": 1309,
+        "at": "2026-10-21T08:13:58.115Z",
+        "type": "context_adjusted",
+        "adjustment": {
+          "kind": "tool_result_bound",
+          "beforeCharacters": 6945,
+          "afterCharacters": 5954
+        }
+      },
+      {
+        "sequence": 1371,
+        "at": "2026-10-21T08:14:17.515Z",
+        "type": "context_adjusted",
+        "adjustment": {
+          "kind": "tool_result_bound",
+          "beforeCharacters": 16176,
+          "afterCharacters": 5954
+        }
+      },
+      {
+        "sequence": 1664,
+        "at": "2026-10-21T08:15:14.171Z",
+        "type": "context_adjusted",
+        "adjustment": {
+          "kind": "tool_result_bound",
+          "beforeCharacters": 12147,
+          "afterCharacters": 5954
+        }
+      },
+      {
+        "sequence": 1824,
+        "at": "2026-10-21T08:15:50.590Z",
+        "type": "context_adjusted",
+        "adjustment": {
+          "kind": "tool_result_bound",
+          "beforeCharacters": 12062,
+          "afterCharacters": 5954
+        }
+      },
+      {
+        "sequence": 1914,
+        "at": "2026-10-21T08:16:05.054Z",
+        "type": "context_adjusted",
+        "adjustment": {
+          "kind": "tool_result_bound",
+          "beforeCharacters": 6983,
+          "afterCharacters": 5954
+        }
+      },
+      {
+        "sequence": 2098,
+        "at": "2026-10-21T08:16:41.521Z",
+        "type": "context_adjusted",
+        "adjustment": {
+          "kind": "tool_result_bound",
+          "beforeCharacters": 12148,
+          "afterCharacters": 5954
+        }
+      },
+      {
+        "sequence": 2153,
+        "at": "2026-10-21T08:16:57.875Z",
+        "type": "context_adjusted",
+        "adjustment": {
+          "kind": "tool_result_bound",
+          "beforeCharacters": 12487,
+          "afterCharacters": 5954
+        }
+      },
+      {
+        "sequence": 2197,
+        "at": "2026-10-21T08:17:01.958Z",
+        "type": "context_adjusted",
+        "adjustment": {
+          "kind": "tool_result_bound",
+          "beforeCharacters": 64902,
+          "afterCharacters": 5954
+        }
+      },
+      {
+        "sequence": 2259,
+        "at": "2026-10-21T08:17:07.823Z",
+        "type": "context_adjusted",
+        "adjustment": {
+          "kind": "tool_result_bound",
+          "beforeCharacters": 64599,
+          "afterCharacters": 5954
+        }
+      },
+      {
+        "sequence": 2274,
+        "at": "2026-10-21T08:17:11.889Z",
+        "type": "context_adjusted",
+        "adjustment": {
+          "kind": "tool_result_bound",
+          "beforeCharacters": 64603,
+          "afterCharacters": 5954
+        }
+      },
+      {
+        "sequence": 2289,
+        "at": "2026-10-21T08:17:15.676Z",
+        "type": "context_adjusted",
+        "adjustment": {
+          "kind": "tool_result_bound",
+          "beforeCharacters": 64567,
+          "afterCharacters": 5954
+        }
+      },
+      {
+        "sequence": 2304,
+        "at": "2026-10-21T08:17:19.542Z",
+        "type": "context_adjusted",
+        "adjustment": {
+          "kind": "tool_result_bound",
+          "beforeCharacters": 66201,
+          "afterCharacters": 5954
+        }
+      },
+      {
+        "sequence": 2319,
+        "at": "2026-10-21T08:17:22.979Z",
+        "type": "context_adjusted",
+        "adjustment": {
+          "kind": "tool_result_bound",
+          "beforeCharacters": 71931,
+          "afterCharacters": 5954
+        }
+      },
+      {
+        "sequence": 2334,
+        "at": "2026-10-21T08:17:27.207Z",
+        "type": "context_adjusted",
+        "adjustment": {
+          "kind": "tool_result_bound",
+          "beforeCharacters": 26563,
+          "afterCharacters": 5954
+        }
+      }
+    ],
+    "requests": [
+      {
+        "sequence": 68,
+        "at": "2026-10-21T07:49:48.020Z",
+        "purpose": "main",
+        "input": 334347,
+        "cached": 7552,
+        "miss": 326795,
+        "hitRate": 0.022587311984255877,
+        "diagnostic": {
+          "purpose": "main",
+          "protocol": "responses",
+          "reason": "first_request",
+          "unchangedPrefixItems": 0,
+          "inputItems": 301,
+          "sharedPrefixCharacters": 0,
+          "payloadCharacters": 4061489
+        }
+      },
+      {
+        "sequence": 100,
+        "at": "2026-10-21T07:50:01.925Z",
+        "purpose": "main",
+        "input": 346360,
+        "cached": 342272,
+        "miss": 4088,
+        "hitRate": 0.988197251414713,
+        "diagnostic": {
+          "purpose": "main",
+          "protocol": "responses",
+          "reason": "append",
+          "unchangedPrefixItems": 301,
+          "inputItems": 312,
+          "sharedPrefixCharacters": 4032706,
+          "payloadCharacters": 4106939
+        }
+      },
+      {
+        "sequence": 143,
+        "at": "2026-10-21T07:50:15.015Z",
+        "purpose": "main",
+        "input": 351049,
+        "cached": 2048,
+        "miss": 349001,
+        "hitRate": 0.005833943409609485,
+        "diagnostic": {
+          "purpose": "main",
+          "protocol": "responses",
+          "reason": "rewrite",
+          "unchangedPrefixItems": 0,
+          "inputItems": 316,
+          "sharedPrefixCharacters": 0,
+          "payloadCharacters": 4127711
+        }
+      },
+      {
+        "sequence": 196,
+        "at": "2026-10-21T07:53:57.305Z",
+        "purpose": "main",
+        "input": 355270,
+        "cached": 640,
+        "miss": 354630,
+        "hitRate": 0.00180144678695077,
+        "diagnostic": {
+          "purpose": "main",
+          "protocol": "responses",
+          "reason": "rewrite",
+          "unchangedPrefixItems": 0,
+          "inputItems": 323,
+          "sharedPrefixCharacters": 0,
+          "payloadCharacters": 4145979
+        }
+      },
+      {
+        "sequence": 277,
+        "at": "2026-10-21T07:55:23.554Z",
+        "purpose": "main",
+        "input": 381292,
+        "cached": 369792,
+        "miss": 11500,
+        "hitRate": 0.9698393881854327,
+        "diagnostic": {
+          "purpose": "main",
+          "protocol": "responses",
+          "reason": "append",
+          "unchangedPrefixItems": 323,
+          "inputItems": 332,
+          "sharedPrefixCharacters": 4110705,
+          "payloadCharacters": 4243972
+        }
+      },
+      {
+        "sequence": 308,
+        "at": "2026-10-21T08:08:13.130Z",
+        "purpose": "compaction",
+        "input": 501297,
+        "cached": 512,
+        "miss": 500785,
+        "hitRate": 0.0010213506165007969,
+        "diagnostic": {
+          "purpose": "compaction",
+          "protocol": "responses",
+          "reason": "first_request",
+          "unchangedPrefixItems": 0,
+          "inputItems": 1,
+          "sharedPrefixCharacters": 0,
+          "payloadCharacters": 1828011
+        }
+      },
+      {
+        "sequence": 361,
+        "at": "2026-10-21T08:08:19.455Z",
+        "purpose": "main",
+        "input": 32746,
+        "cached": 8704,
+        "miss": 24042,
+        "hitRate": 0.26580345691076773,
+        "diagnostic": {
+          "purpose": "main",
+          "protocol": "responses",
+          "reason": "rewrite",
+          "unchangedPrefixItems": 1,
+          "inputItems": 14,
+          "sharedPrefixCharacters": 313,
+          "payloadCharacters": 1373477
+        }
+      },
+      {
+        "sequence": 430,
+        "at": "2026-10-21T08:08:22.310Z",
+        "purpose": "main",
+        "input": 35346,
+        "cached": 33152,
+        "miss": 2194,
+        "hitRate": 0.9379279126350931,
+        "diagnostic": {
+          "purpose": "main",
+          "protocol": "responses",
+          "reason": "append",
+          "unchangedPrefixItems": 14,
+          "inputItems": 25,
+          "sharedPrefixCharacters": 1338512,
+          "payloadCharacters": 1383099
+        }
+      },
+      {
+        "sequence": 494,
+        "at": "2026-10-21T08:08:30.233Z",
+        "purpose": "main",
+        "input": 41620,
+        "cached": 35456,
+        "miss": 6164,
+        "hitRate": 0.8518981259010091,
+        "diagnostic": {
+          "purpose": "main",
+          "protocol": "responses",
+          "reason": "append",
+          "unchangedPrefixItems": 25,
+          "inputItems": 34,
+          "sharedPrefixCharacters": 1348123,
+          "payloadCharacters": 1403574
+        }
+      },
+      {
+        "sequence": 560,
+        "at": "2026-10-21T08:09:27.038Z",
+        "purpose": "main",
+        "input": 46596,
+        "cached": 43648,
+        "miss": 2948,
+        "hitRate": 0.9367327667610954,
+        "diagnostic": {
+          "purpose": "main",
+          "protocol": "responses",
+          "reason": "append",
+          "unchangedPrefixItems": 34,
+          "inputItems": 39,
+          "sharedPrefixCharacters": 1368589,
+          "payloadCharacters": 1422157
+        }
+      },
+      {
+        "sequence": 608,
+        "at": "2026-10-21T08:09:39.367Z",
+        "purpose": "main",
+        "input": 53510,
+        "cached": 50688,
+        "miss": 2822,
+        "hitRate": 0.9472621939824332,
+        "diagnostic": {
+          "purpose": "main",
+          "protocol": "responses",
+          "reason": "append",
+          "unchangedPrefixItems": 39,
+          "inputItems": 44,
+          "sharedPrefixCharacters": 1387167,
+          "payloadCharacters": 1448640
+        }
+      },
+      {
+        "sequence": 631,
+        "at": "2026-10-21T08:09:43.314Z",
+        "purpose": "main",
+        "input": 56928,
+        "cached": 55552,
+        "miss": 1376,
+        "hitRate": 0.9758291174817313,
+        "diagnostic": {
+          "purpose": "main",
+          "protocol": "responses",
+          "reason": "append",
+          "unchangedPrefixItems": 44,
+          "inputItems": 53,
+          "sharedPrefixCharacters": 1413645,
+          "payloadCharacters": 1461852
+        }
+      },
+      {
+        "sequence": 679,
+        "at": "2026-10-21T08:10:00.241Z",
+        "purpose": "main",
+        "input": 58219,
+        "cached": 57216,
+        "miss": 1003,
+        "hitRate": 0.982771947302427,
+        "diagnostic": {
+          "purpose": "main",
+          "protocol": "responses",
+          "reason": "append",
+          "unchangedPrefixItems": 53,
+          "inputItems": 57,
+          "sharedPrefixCharacters": 1426848,
+          "payloadCharacters": 1466833
+        }
+      },
+      {
+        "sequence": 770,
+        "at": "2026-10-21T08:10:15.412Z",
+        "purpose": "main",
+        "input": 68314,
+        "cached": 62848,
+        "miss": 5466,
+        "hitRate": 0.9199871183066428,
+        "diagnostic": {
+          "purpose": "main",
+          "protocol": "responses",
+          "reason": "append",
+          "unchangedPrefixItems": 57,
+          "inputItems": 68,
+          "sharedPrefixCharacters": 1431825,
+          "payloadCharacters": 1503484
+        }
+      },
+      {
+        "sequence": 821,
+        "at": "2026-10-21T08:10:24.488Z",
+        "purpose": "main",
+        "input": 70818,
+        "cached": 69376,
+        "miss": 1442,
+        "hitRate": 0.9796379451551865,
+        "diagnostic": {
+          "purpose": "main",
+          "protocol": "responses",
+          "reason": "append",
+          "unchangedPrefixItems": 68,
+          "inputItems": 73,
+          "sharedPrefixCharacters": 1468465,
+          "payloadCharacters": 1513337
+        }
+      },
+      {
+        "sequence": 870,
+        "at": "2026-10-21T08:10:30.812Z",
+        "purpose": "main",
+        "input": 73756,
+        "cached": 72064,
+        "miss": 1692,
+        "hitRate": 0.9770594934649385,
+        "diagnostic": {
+          "purpose": "main",
+          "protocol": "responses",
+          "reason": "append",
+          "unchangedPrefixItems": 73,
+          "inputItems": 78,
+          "sharedPrefixCharacters": 1478313,
+          "payloadCharacters": 1524088
+        }
+      },
+      {
+        "sequence": 914,
+        "at": "2026-10-21T08:10:34.269Z",
+        "purpose": "main",
+        "input": 76140,
+        "cached": 74752,
+        "miss": 1388,
+        "hitRate": 0.9817704229051747,
+        "diagnostic": {
+          "purpose": "main",
+          "protocol": "responses",
+          "reason": "append",
+          "unchangedPrefixItems": 78,
+          "inputItems": 83,
+          "sharedPrefixCharacters": 1489059,
+          "payloadCharacters": 1533000
+        }
+      },
+      {
+        "sequence": 991,
+        "at": "2026-10-21T08:12:21.239Z",
+        "purpose": "main",
+        "input": 78708,
+        "cached": 76288,
+        "miss": 2420,
+        "hitRate": 0.9692534431061646,
+        "diagnostic": {
+          "purpose": "main",
+          "protocol": "responses",
+          "reason": "append",
+          "unchangedPrefixItems": 83,
+          "inputItems": 88,
+          "sharedPrefixCharacters": 1497966,
+          "payloadCharacters": 1543107
+        }
+      },
+      {
+        "sequence": 1005,
+        "at": "2026-10-21T08:12:23.890Z",
+        "purpose": "main",
+        "input": 81257,
+        "cached": 78976,
+        "miss": 2281,
+        "hitRate": 0.9719285723076165,
+        "diagnostic": {
+          "purpose": "main",
+          "protocol": "responses",
+          "reason": "append",
+          "unchangedPrefixItems": 88,
+          "inputItems": 93,
+          "sharedPrefixCharacters": 1508068,
+          "payloadCharacters": 1552210
+        }
+      },
+      {
+        "sequence": 1058,
+        "at": "2026-10-21T08:12:49.607Z",
+        "purpose": "main",
+        "input": 82806,
+        "cached": 81280,
+        "miss": 1526,
+        "hitRate": 0.9815713837161558,
+        "diagnostic": {
+          "purpose": "main",
+          "protocol": "responses",
+          "reason": "append",
+          "unchangedPrefixItems": 93,
+          "inputItems": 97,
+          "sharedPrefixCharacters": 1517166,
+          "payloadCharacters": 1557481
+        }
+      },
+      {
+        "sequence": 1095,
+        "at": "2026-10-21T08:12:52.237Z",
+        "purpose": "main",
+        "input": 88572,
+        "cached": 88064,
+        "miss": 508,
+        "hitRate": 0.9942645531319153,
+        "diagnostic": {
+          "purpose": "main",
+          "protocol": "responses",
+          "reason": "append",
+          "unchangedPrefixItems": 97,
+          "inputItems": 106,
+          "sharedPrefixCharacters": 1522433,
+          "payloadCharacters": 1580870
+        }
+      },
+      {
+        "sequence": 1130,
+        "at": "2026-10-21T08:13:00.183Z",
+        "purpose": "main",
+        "input": 91426,
+        "cached": 88576,
+        "miss": 2850,
+        "hitRate": 0.9688272482663575,
+        "diagnostic": {
+          "purpose": "main",
+          "protocol": "responses",
+          "reason": "append",
+          "unchangedPrefixItems": 106,
+          "inputItems": 111,
+          "sharedPrefixCharacters": 1545813,
+          "payloadCharacters": 1592670
+        }
+      },
+      {
+        "sequence": 1210,
+        "at": "2026-10-21T08:13:28.870Z",
+        "purpose": "main",
+        "input": 98345,
+        "cached": 93568,
+        "miss": 4777,
+        "hitRate": 0.9514261019878998,
+        "diagnostic": {
+          "purpose": "main",
+          "protocol": "responses",
+          "reason": "append",
+          "unchangedPrefixItems": 111,
+          "inputItems": 120,
+          "sharedPrefixCharacters": 1557608,
+          "payloadCharacters": 1617476
+        }
+      },
+      {
+        "sequence": 1296,
+        "at": "2026-10-21T08:13:54.892Z",
+        "purpose": "main",
+        "input": 111922,
+        "cached": 104192,
+        "miss": 7730,
+        "hitRate": 0.9309340433516199,
+        "diagnostic": {
+          "purpose": "main",
+          "protocol": "responses",
+          "reason": "append",
+          "unchangedPrefixItems": 120,
+          "inputItems": 129,
+          "sharedPrefixCharacters": 1582405,
+          "payloadCharacters": 1668217
+        }
+      },
+      {
+        "sequence": 1345,
+        "at": "2026-10-21T08:14:08.009Z",
+        "purpose": "main",
+        "input": 117431,
+        "cached": 114432,
+        "miss": 2999,
+        "hitRate": 0.9744615987260604,
+        "diagnostic": {
+          "purpose": "main",
+          "protocol": "responses",
+          "reason": "append",
+          "unchangedPrefixItems": 129,
+          "inputItems": 134,
+          "sharedPrefixCharacters": 1633137,
+          "payloadCharacters": 1689519
+        }
+      },
+      {
+        "sequence": 1430,
+        "at": "2026-10-21T08:14:21.925Z",
+        "purpose": "main",
+        "input": 126423,
+        "cached": 117888,
+        "miss": 8535,
+        "hitRate": 0.9324885503428965,
+        "diagnostic": {
+          "purpose": "main",
+          "protocol": "responses",
+          "reason": "append",
+          "unchangedPrefixItems": 134,
+          "inputItems": 139,
+          "sharedPrefixCharacters": 1654434,
+          "payloadCharacters": 1718702
+        }
+      },
+      {
+        "sequence": 1513,
+        "at": "2026-10-21T08:14:30.642Z",
+        "purpose": "main",
+        "input": 135319,
+        "cached": 126720,
+        "miss": 8599,
+        "hitRate": 0.9364538608768909,
+        "diagnostic": {
+          "purpose": "main",
+          "protocol": "responses",
+          "reason": "append",
+          "unchangedPrefixItems": 139,
+          "inputItems": 144,
+          "sharedPrefixCharacters": 1683612,
+          "payloadCharacters": 1740946
+        }
+      },
+      {
+        "sequence": 1558,
+        "at": "2026-10-21T08:14:35.069Z",
+        "purpose": "main",
+        "input": 138387,
+        "cached": 136704,
+        "miss": 1683,
+        "hitRate": 0.9878384530338833,
+        "diagnostic": {
+          "purpose": "main",
+          "protocol": "responses",
+          "reason": "append",
+          "unchangedPrefixItems": 144,
+          "inputItems": 149,
+          "sharedPrefixCharacters": 1705851,
+          "payloadCharacters": 1753378
+        }
+      },
+      {
+        "sequence": 1582,
+        "at": "2026-10-21T08:14:38.061Z",
+        "purpose": "main",
+        "input": 140061,
+        "cached": 138624,
+        "miss": 1437,
+        "hitRate": 0.9897401846338381,
+        "diagnostic": {
+          "purpose": "main",
+          "protocol": "responses",
+          "reason": "append",
+          "unchangedPrefixItems": 149,
+          "inputItems": 158,
+          "sharedPrefixCharacters": 1718278,
+          "payloadCharacters": 1759455
+        }
+      },
+      {
+        "sequence": 1595,
+        "at": "2026-10-21T08:14:43.174Z",
+        "purpose": "main",
+        "input": 140603,
+        "cached": 140032,
+        "miss": 571,
+        "hitRate": 0.9959389202221859,
+        "diagnostic": {
+          "purpose": "main",
+          "protocol": "responses",
+          "reason": "append",
+          "unchangedPrefixItems": 158,
+          "inputItems": 162,
+          "sharedPrefixCharacters": 1724346,
+          "payloadCharacters": 1761380
+        }
+      },
+      {
+        "sequence": 1636,
+        "at": "2026-10-21T08:14:46.582Z",
+        "purpose": "main",
+        "input": 142926,
+        "cached": 141184,
+        "miss": 1742,
+        "hitRate": 0.987811874676406,
+        "diagnostic": {
+          "purpose": "main",
+          "protocol": "responses",
+          "reason": "append",
+          "unchangedPrefixItems": 162,
+          "inputItems": 166,
+          "sharedPrefixCharacters": 1726267,
+          "payloadCharacters": 1770305
+        }
+      },
+      {
+        "sequence": 1713,
+        "at": "2026-10-21T08:15:19.645Z",
+        "purpose": "main",
+        "input": 147255,
+        "cached": 142976,
+        "miss": 4279,
+        "hitRate": 0.9709415639536858,
+        "diagnostic": {
+          "purpose": "main",
+          "protocol": "responses",
+          "reason": "append",
+          "unchangedPrefixItems": 166,
+          "inputItems": 171,
+          "sharedPrefixCharacters": 1735188,
+          "payloadCharacters": 1784813
+        }
+      },
+      {
+        "sequence": 1768,
+        "at": "2026-10-21T08:15:36.707Z",
+        "purpose": "main",
+        "input": 149553,
+        "cached": 147712,
+        "miss": 1841,
+        "hitRate": 0.9876899828154567,
+        "diagnostic": {
+          "purpose": "main",
+          "protocol": "responses",
+          "reason": "append",
+          "unchangedPrefixItems": 171,
+          "inputItems": 176,
+          "sharedPrefixCharacters": 1749691,
+          "payloadCharacters": 1791495
+        }
+      },
+      {
+        "sequence": 1801,
+        "at": "2026-10-21T08:15:40.664Z",
+        "purpose": "main",
+        "input": 153102,
+        "cached": 152832,
+        "miss": 270,
+        "hitRate": 0.9982364698044441,
+        "diagnostic": {
+          "purpose": "main",
+          "protocol": "responses",
+          "reason": "append",
+          "unchangedPrefixItems": 176,
+          "inputItems": 181,
+          "sharedPrefixCharacters": 1756368,
+          "payloadCharacters": 1801918
+        }
+      },
+      {
+        "sequence": 1856,
+        "at": "2026-10-21T08:15:58.360Z",
+        "purpose": "main",
+        "input": 156411,
+        "cached": 153344,
+        "miss": 3067,
+        "hitRate": 0.9803914046966006,
+        "diagnostic": {
+          "purpose": "main",
+          "protocol": "responses",
+          "reason": "append",
+          "unchangedPrefixItems": 181,
+          "inputItems": 186,
+          "sharedPrefixCharacters": 1766786,
+          "payloadCharacters": 1812586
+        }
+      },
+      {
+        "sequence": 1907,
+        "at": "2026-10-21T08:16:05.022Z",
+        "purpose": "main",
+        "input": 158029,
+        "cached": 157824,
+        "miss": 205,
+        "hitRate": 0.9987027697447937,
+        "diagnostic": {
+          "purpose": "main",
+          "protocol": "responses",
+          "reason": "append",
+          "unchangedPrefixItems": 186,
+          "inputItems": 191,
+          "sharedPrefixCharacters": 1777449,
+          "payloadCharacters": 1817111
+        }
+      },
+      {
+        "sequence": 1921,
+        "at": "2026-10-21T08:16:11.569Z",
+        "purpose": "main",
+        "input": 161736,
+        "cached": 158592,
+        "miss": 3144,
+        "hitRate": 0.980560914082208,
+        "diagnostic": {
+          "purpose": "main",
+          "protocol": "responses",
+          "reason": "append",
+          "unchangedPrefixItems": 191,
+          "inputItems": 196,
+          "sharedPrefixCharacters": 1781969,
+          "payloadCharacters": 1833016
+        }
+      },
+      {
+        "sequence": 1970,
+        "at": "2026-10-21T08:16:16.383Z",
+        "purpose": "main",
+        "input": 164706,
+        "cached": 163072,
+        "miss": 1634,
+        "hitRate": 0.9900792928005051,
+        "diagnostic": {
+          "purpose": "main",
+          "protocol": "responses",
+          "reason": "append",
+          "unchangedPrefixItems": 196,
+          "inputItems": 200,
+          "sharedPrefixCharacters": 1797869,
+          "payloadCharacters": 1842699
+        }
+      },
+      {
+        "sequence": 2021,
+        "at": "2026-10-21T08:16:26.563Z",
+        "purpose": "main",
+        "input": 167166,
+        "cached": 164992,
+        "miss": 2174,
+        "hitRate": 0.9869949630905807,
+        "diagnostic": {
+          "purpose": "main",
+          "protocol": "responses",
+          "reason": "append",
+          "unchangedPrefixItems": 200,
+          "inputItems": 211,
+          "sharedPrefixCharacters": 1807548,
+          "payloadCharacters": 1849967
+        }
+      },
+      {
+        "sequence": 2075,
+        "at": "2026-10-21T08:16:30.986Z",
+        "purpose": "main",
+        "input": 171415,
+        "cached": 169216,
+        "miss": 2199,
+        "hitRate": 0.9871714844091823,
+        "diagnostic": {
+          "purpose": "main",
+          "protocol": "responses",
+          "reason": "append",
+          "unchangedPrefixItems": 211,
+          "inputItems": 216,
+          "sharedPrefixCharacters": 1814805,
+          "payloadCharacters": 1862033
+        }
+      },
+      {
+        "sequence": 2130,
+        "at": "2026-10-21T08:16:46.165Z",
+        "purpose": "main",
+        "input": 175327,
+        "cached": 171648,
+        "miss": 3679,
+        "hitRate": 0.9790163523016991,
+        "diagnostic": {
+          "purpose": "main",
+          "protocol": "responses",
+          "reason": "append",
+          "unchangedPrefixItems": 216,
+          "inputItems": 221,
+          "sharedPrefixCharacters": 1826866,
+          "payloadCharacters": 1874953
+        }
+      },
+      {
+        "sequence": 2189,
+        "at": "2026-10-21T08:17:01.628Z",
+        "purpose": "main",
+        "input": 178464,
+        "cached": 175488,
+        "miss": 2976,
+        "hitRate": 0.9833243679397525,
+        "diagnostic": {
+          "purpose": "main",
+          "protocol": "responses",
+          "reason": "append",
+          "unchangedPrefixItems": 221,
+          "inputItems": 226,
+          "sharedPrefixCharacters": 1839781,
+          "payloadCharacters": 1884970
+        }
+      },
+      {
+        "sequence": 2251,
+        "at": "2026-10-21T08:17:07.645Z",
+        "purpose": "main",
+        "input": 184280,
+        "cached": 178560,
+        "miss": 5720,
+        "hitRate": 0.9689602778380725,
+        "diagnostic": {
+          "purpose": "main",
+          "protocol": "responses",
+          "reason": "append",
+          "unchangedPrefixItems": 226,
+          "inputItems": 233,
+          "sharedPrefixCharacters": 1849793,
+          "payloadCharacters": 1900660
+        }
+      },
+      {
+        "sequence": 2266,
+        "at": "2026-10-21T08:17:11.702Z",
+        "purpose": "main",
+        "input": 187859,
+        "cached": 184704,
+        "miss": 3155,
+        "hitRate": 0.9832054892233004,
+        "diagnostic": {
+          "purpose": "main",
+          "protocol": "responses",
+          "reason": "append",
+          "unchangedPrefixItems": 233,
+          "inputItems": 238,
+          "sharedPrefixCharacters": 1865476,
+          "payloadCharacters": 1912233
+        }
+      },
+      {
+        "sequence": 2281,
+        "at": "2026-10-21T08:17:15.438Z",
+        "purpose": "main",
+        "input": 191023,
+        "cached": 187904,
+        "miss": 3119,
+        "hitRate": 0.9836721232521738,
+        "diagnostic": {
+          "purpose": "main",
+          "protocol": "responses",
+          "reason": "append",
+          "unchangedPrefixItems": 238,
+          "inputItems": 242,
+          "sharedPrefixCharacters": 1877044,
+          "payloadCharacters": 1922388
+        }
+      },
+      {
+        "sequence": 2296,
+        "at": "2026-10-21T08:17:19.356Z",
+        "purpose": "main",
+        "input": 194219,
+        "cached": 191104,
+        "miss": 3115,
+        "hitRate": 0.9839614043940088,
+        "diagnostic": {
+          "purpose": "main",
+          "protocol": "responses",
+          "reason": "append",
+          "unchangedPrefixItems": 242,
+          "inputItems": 246,
+          "sharedPrefixCharacters": 1887195,
+          "payloadCharacters": 1932150
+        }
+      },
+      {
+        "sequence": 2311,
+        "at": "2026-10-21T08:17:22.658Z",
+        "purpose": "main",
+        "input": 197327,
+        "cached": 194304,
+        "miss": 3023,
+        "hitRate": 0.9846802515621278,
+        "diagnostic": {
+          "purpose": "main",
+          "protocol": "responses",
+          "reason": "append",
+          "unchangedPrefixItems": 246,
+          "inputItems": 250,
+          "sharedPrefixCharacters": 1896953,
+          "payloadCharacters": 1941825
+        }
+      },
+      {
+        "sequence": 2326,
+        "at": "2026-10-21T08:17:26.841Z",
+        "purpose": "main",
+        "input": 199931,
+        "cached": 197376,
+        "miss": 2555,
+        "hitRate": 0.9872205911039309,
+        "diagnostic": {
+          "purpose": "main",
+          "protocol": "responses",
+          "reason": "append",
+          "unchangedPrefixItems": 250,
+          "inputItems": 254,
+          "sharedPrefixCharacters": 1906624,
+          "payloadCharacters": 1950648
+        }
+      },
+      {
+        "sequence": 2374,
+        "at": "2026-10-21T08:17:33.283Z",
+        "purpose": "main",
+        "input": 202785,
+        "cached": 199936,
+        "miss": 2849,
+        "hitRate": 0.9859506373745592,
+        "diagnostic": {
+          "purpose": "main",
+          "protocol": "responses",
+          "reason": "append",
+          "unchangedPrefixItems": 254,
+          "inputItems": 258,
+          "sharedPrefixCharacters": 1915443,
+          "payloadCharacters": 1960390
+        }
+      },
+      {
+        "sequence": 2421,
+        "at": "2026-10-21T08:17:42.020Z",
+        "purpose": "main",
+        "input": 204121,
+        "cached": 203264,
+        "miss": 857,
+        "hitRate": 0.9958015098887425,
+        "diagnostic": {
+          "purpose": "main",
+          "protocol": "responses",
+          "reason": "append",
+          "unchangedPrefixItems": 258,
+          "inputItems": 263,
+          "sharedPrefixCharacters": 1925181,
+          "payloadCharacters": 1966617
+        }
+      },
+      {
+        "sequence": 2481,
+        "at": "2026-10-21T08:17:52.806Z",
+        "purpose": "main",
+        "input": 209285,
+        "cached": 205184,
+        "miss": 4101,
+        "hitRate": 0.9804047112788781,
+        "diagnostic": {
+          "purpose": "main",
+          "protocol": "responses",
+          "reason": "append",
+          "unchangedPrefixItems": 263,
+          "inputItems": 270,
+          "sharedPrefixCharacters": 1931403,
+          "payloadCharacters": 1987136
+        }
+      },
+      {
+        "sequence": 2528,
+        "at": "2026-10-21T08:18:02.808Z",
+        "purpose": "main",
+        "input": 212139,
+        "cached": 209792,
+        "miss": 2347,
+        "hitRate": 0.98893649918214,
+        "diagnostic": {
+          "purpose": "main",
+          "protocol": "responses",
+          "reason": "append",
+          "unchangedPrefixItems": 270,
+          "inputItems": 275,
+          "sharedPrefixCharacters": 1951915,
+          "payloadCharacters": 1995785
+        }
+      },
+      {
+        "sequence": 3086,
+        "at": "2026-10-21T08:18:09.698Z",
+        "purpose": "main",
+        "input": 215702,
+        "cached": 213888,
+        "miss": 1814,
+        "hitRate": 0.9915902495108992,
+        "diagnostic": {
+          "purpose": "main",
+          "protocol": "responses",
+          "reason": "append",
+          "unchangedPrefixItems": 275,
+          "inputItems": 280,
+          "sharedPrefixCharacters": 1960559,
+          "payloadCharacters": 2006272
+        }
+      },
+      {
+        "sequence": 3090,
+        "at": "2026-10-21T08:18:16.360Z",
+        "purpose": "memory",
+        "input": 1074,
+        "cached": 128,
+        "miss": 946,
+        "hitRate": 0.1191806331471136
+      }
+    ],
+    "structural": [
+      {
+        "sequence": 69,
+        "at": "2026-10-21T07:49:48.025Z",
+        "purpose": "main",
+        "diagnostic": {
+          "boundary": "provider_request",
+          "providerId": "openai-compatible",
+          "modelId": "deepseek-flash",
+          "reasoningEffort": "max",
+          "maxOutputTokens": 359839,
+          "messageCount": 176,
+          "toolCount": 22,
+          "toolSchemaChars": 24700,
+          "toolSchemaHash": "a231725cb5a8ea62c87a788c406dac4ba083d41f6f731600f61c7ce2b6261292",
+          "textChars": {
+            "instructions": 3853,
+            "profile": 115,
+            "project": 1655,
+            "memory": 1560,
+            "conversation": 16073,
+            "toolResults": 0
+          },
+          "attachmentCount": 6,
+          "attachmentManifestHash": "54b80c8159ddb0aee50577b62ed35d2ad8c024962cdbf735eb4e6849cd9d1588"
+        }
+      },
+      {
+        "sequence": 101,
+        "at": "2026-10-21T07:50:01.926Z",
+        "purpose": "main",
+        "diagnostic": {
+          "boundary": "provider_request",
+          "providerId": "openai-compatible",
+          "modelId": "deepseek-flash",
+          "reasoningEffort": "max",
+          "maxOutputTokens": 336314,
+          "messageCount": 182,
+          "toolCount": 22,
+          "toolSchemaChars": 24700,
+          "toolSchemaHash": "a231725cb5a8ea62c87a788c406dac4ba083d41f6f731600f61c7ce2b6261292",
+          "textChars": {
+            "instructions": 3853,
+            "profile": 115,
+            "project": 1655,
+            "memory": 1560,
+            "conversation": 17553,
+            "toolResults": 0
+          },
+          "attachmentCount": 6,
+          "attachmentManifestHash": "54b80c8159ddb0aee50577b62ed35d2ad8c024962cdbf735eb4e6849cd9d1588"
+        }
+      },
+      {
+        "sequence": 144,
+        "at": "2026-10-21T07:50:15.027Z",
+        "purpose": "main",
+        "diagnostic": {
+          "boundary": "provider_request",
+          "providerId": "openai-compatible",
+          "modelId": "deepseek-flash",
+          "reasoningEffort": "max",
+          "maxOutputTokens": 326272,
+          "messageCount": 186,
+          "toolCount": 22,
+          "toolSchemaChars": 24700,
+          "toolSchemaHash": "a231725cb5a8ea62c87a788c406dac4ba083d41f6f731600f61c7ce2b6261292",
+          "textChars": {
+            "instructions": 8307,
+            "profile": 115,
+            "project": 1655,
+            "memory": 1560,
+            "conversation": 21541,
+            "toolResults": 0
+          },
+          "attachmentCount": 6,
+          "attachmentManifestHash": "54b80c8159ddb0aee50577b62ed35d2ad8c024962cdbf735eb4e6849cd9d1588"
+        }
+      },
+      {
+        "sequence": 197,
+        "at": "2026-10-21T07:53:57.306Z",
+        "purpose": "main",
+        "diagnostic": {
+          "boundary": "provider_request",
+          "providerId": "openai-compatible",
+          "modelId": "deepseek-flash",
+          "reasoningEffort": "max",
+          "maxOutputTokens": 317357,
+          "messageCount": 192,
+          "toolCount": 22,
+          "toolSchemaChars": 24700,
+          "toolSchemaHash": "a231725cb5a8ea62c87a788c406dac4ba083d41f6f731600f61c7ce2b6261292",
+          "textChars": {
+            "instructions": 10300,
+            "profile": 115,
+            "project": 1655,
+            "memory": 1560,
+            "conversation": 27396,
+            "toolResults": 0
+          },
+          "attachmentCount": 6,
+          "attachmentManifestHash": "54b80c8159ddb0aee50577b62ed35d2ad8c024962cdbf735eb4e6849cd9d1588"
+        }
+      },
+      {
+        "sequence": 278,
+        "at": "2026-10-21T07:55:23.556Z",
+        "purpose": "main",
+        "diagnostic": {
+          "boundary": "provider_request",
+          "providerId": "openai-compatible",
+          "modelId": "deepseek-flash",
+          "reasoningEffort": "max",
+          "maxOutputTokens": 269818,
+          "messageCount": 197,
+          "toolCount": 22,
+          "toolSchemaChars": 24700,
+          "toolSchemaHash": "a231725cb5a8ea62c87a788c406dac4ba083d41f6f731600f61c7ce2b6261292",
+          "textChars": {
+            "instructions": 10300,
+            "profile": 115,
+            "project": 1655,
+            "memory": 1560,
+            "conversation": 30470,
+            "toolResults": 0
+          },
+          "attachmentCount": 6,
+          "attachmentManifestHash": "54b80c8159ddb0aee50577b62ed35d2ad8c024962cdbf735eb4e6849cd9d1588"
+        }
+      },
+      {
+        "sequence": 309,
+        "at": "2026-10-21T08:08:13.131Z",
+        "purpose": "compaction",
+        "diagnostic": {
+          "boundary": "provider_request",
+          "providerId": "openai-compatible",
+          "modelId": "deepseek-flash",
+          "maxOutputTokens": 32768,
+          "messageCount": 2,
+          "toolCount": 0,
+          "toolSchemaChars": 2,
+          "toolSchemaHash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+          "textChars": {
+            "instructions": 2085,
+            "profile": 0,
+            "project": 0,
+            "memory": 0,
+            "conversation": 1601862,
+            "toolResults": 0
+          },
+          "attachmentCount": 0,
+          "attachmentManifestHash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+        }
+      },
+      {
+        "sequence": 362,
+        "at": "2026-10-21T08:08:19.456Z",
+        "purpose": "main",
+        "diagnostic": {
+          "boundary": "provider_request",
+          "providerId": "openai-compatible",
+          "modelId": "deepseek-flash",
+          "reasoningEffort": "max",
+          "maxOutputTokens": 393216,
+          "messageCount": 18,
+          "toolCount": 22,
+          "toolSchemaChars": 24700,
+          "toolSchemaHash": "a231725cb5a8ea62c87a788c406dac4ba083d41f6f731600f61c7ce2b6261292",
+          "textChars": {
+            "instructions": 10300,
+            "profile": 115,
+            "project": 0,
+            "memory": 0,
+            "conversation": 26302,
+            "toolResults": 0
+          },
+          "attachmentCount": 1,
+          "attachmentManifestHash": "8ea12bf4ca5720558579eacd1c9f75f37d8a074dd10e40dd9f53c7a8d1515a64"
+        }
+      },
+      {
+        "sequence": 431,
+        "at": "2026-10-21T08:08:22.311Z",
+        "purpose": "main",
+        "diagnostic": {
+          "boundary": "provider_request",
+          "providerId": "openai-compatible",
+          "modelId": "deepseek-flash",
+          "reasoningEffort": "max",
+          "maxOutputTokens": 393216,
+          "messageCount": 24,
+          "toolCount": 22,
+          "toolSchemaChars": 24700,
+          "toolSchemaHash": "a231725cb5a8ea62c87a788c406dac4ba083d41f6f731600f61c7ce2b6261292",
+          "textChars": {
+            "instructions": 10300,
+            "profile": 115,
+            "project": 0,
+            "memory": 0,
+            "conversation": 27710,
+            "toolResults": 0
+          },
+          "attachmentCount": 1,
+          "attachmentManifestHash": "8ea12bf4ca5720558579eacd1c9f75f37d8a074dd10e40dd9f53c7a8d1515a64"
+        }
+      },
+      {
+        "sequence": 495,
+        "at": "2026-10-21T08:08:30.234Z",
+        "purpose": "main",
+        "diagnostic": {
+          "boundary": "provider_request",
+          "providerId": "openai-compatible",
+          "modelId": "deepseek-flash",
+          "reasoningEffort": "max",
+          "maxOutputTokens": 393216,
+          "messageCount": 29,
+          "toolCount": 22,
+          "toolSchemaChars": 24700,
+          "toolSchemaHash": "a231725cb5a8ea62c87a788c406dac4ba083d41f6f731600f61c7ce2b6261292",
+          "textChars": {
+            "instructions": 10300,
+            "profile": 115,
+            "project": 0,
+            "memory": 0,
+            "conversation": 28865,
+            "toolResults": 0
+          },
+          "attachmentCount": 1,
+          "attachmentManifestHash": "8ea12bf4ca5720558579eacd1c9f75f37d8a074dd10e40dd9f53c7a8d1515a64"
+        }
+      },
+      {
+        "sequence": 561,
+        "at": "2026-10-21T08:09:27.040Z",
+        "purpose": "main",
+        "diagnostic": {
+          "boundary": "provider_request",
+          "providerId": "openai-compatible",
+          "modelId": "deepseek-flash",
+          "reasoningEffort": "max",
+          "maxOutputTokens": 393216,
+          "messageCount": 32,
+          "toolCount": 22,
+          "toolSchemaChars": 24700,
+          "toolSchemaHash": "a231725cb5a8ea62c87a788c406dac4ba083d41f6f731600f61c7ce2b6261292",
+          "textChars": {
+            "instructions": 10300,
+            "profile": 115,
+            "project": 0,
+            "memory": 0,
+            "conversation": 30619,
+            "toolResults": 0
+          },
+          "attachmentCount": 1,
+          "attachmentManifestHash": "8ea12bf4ca5720558579eacd1c9f75f37d8a074dd10e40dd9f53c7a8d1515a64"
+        }
+      },
+      {
+        "sequence": 609,
+        "at": "2026-10-21T08:09:39.367Z",
+        "purpose": "main",
+        "diagnostic": {
+          "boundary": "provider_request",
+          "providerId": "openai-compatible",
+          "modelId": "deepseek-flash",
+          "reasoningEffort": "max",
+          "maxOutputTokens": 393216,
+          "messageCount": 35,
+          "toolCount": 22,
+          "toolSchemaChars": 24700,
+          "toolSchemaHash": "a231725cb5a8ea62c87a788c406dac4ba083d41f6f731600f61c7ce2b6261292",
+          "textChars": {
+            "instructions": 10300,
+            "profile": 115,
+            "project": 0,
+            "memory": 0,
+            "conversation": 32386,
+            "toolResults": 0
+          },
+          "attachmentCount": 1,
+          "attachmentManifestHash": "8ea12bf4ca5720558579eacd1c9f75f37d8a074dd10e40dd9f53c7a8d1515a64"
+        }
+      },
+      {
+        "sequence": 632,
+        "at": "2026-10-21T08:09:43.315Z",
+        "purpose": "main",
+        "diagnostic": {
+          "boundary": "provider_request",
+          "providerId": "openai-compatible",
+          "modelId": "deepseek-flash",
+          "reasoningEffort": "max",
+          "maxOutputTokens": 393216,
+          "messageCount": 40,
+          "toolCount": 22,
+          "toolSchemaChars": 24700,
+          "toolSchemaHash": "a231725cb5a8ea62c87a788c406dac4ba083d41f6f731600f61c7ce2b6261292",
+          "textChars": {
+            "instructions": 10300,
+            "profile": 115,
+            "project": 0,
+            "memory": 0,
+            "conversation": 33521,
+            "toolResults": 0
+          },
+          "attachmentCount": 1,
+          "attachmentManifestHash": "8ea12bf4ca5720558579eacd1c9f75f37d8a074dd10e40dd9f53c7a8d1515a64"
+        }
+      },
+      {
+        "sequence": 680,
+        "at": "2026-10-21T08:10:00.242Z",
+        "purpose": "main",
+        "diagnostic": {
+          "boundary": "provider_request",
+          "providerId": "openai-compatible",
+          "modelId": "deepseek-flash",
+          "reasoningEffort": "max",
+          "maxOutputTokens": 393216,
+          "messageCount": 43,
+          "toolCount": 22,
+          "toolSchemaChars": 24700,
+          "toolSchemaHash": "a231725cb5a8ea62c87a788c406dac4ba083d41f6f731600f61c7ce2b6261292",
+          "textChars": {
+            "instructions": 10300,
+            "profile": 115,
+            "project": 0,
+            "memory": 0,
+            "conversation": 34126,
+            "toolResults": 0
+          },
+          "attachmentCount": 1,
+          "attachmentManifestHash": "8ea12bf4ca5720558579eacd1c9f75f37d8a074dd10e40dd9f53c7a8d1515a64"
+        }
+      },
+      {
+        "sequence": 771,
+        "at": "2026-10-21T08:10:15.412Z",
+        "purpose": "main",
+        "diagnostic": {
+          "boundary": "provider_request",
+          "providerId": "openai-compatible",
+          "modelId": "deepseek-flash",
+          "reasoningEffort": "max",
+          "maxOutputTokens": 393216,
+          "messageCount": 49,
+          "toolCount": 22,
+          "toolSchemaChars": 24700,
+          "toolSchemaHash": "a231725cb5a8ea62c87a788c406dac4ba083d41f6f731600f61c7ce2b6261292",
+          "textChars": {
+            "instructions": 10300,
+            "profile": 115,
+            "project": 0,
+            "memory": 0,
+            "conversation": 38505,
+            "toolResults": 0
+          },
+          "attachmentCount": 1,
+          "attachmentManifestHash": "8ea12bf4ca5720558579eacd1c9f75f37d8a074dd10e40dd9f53c7a8d1515a64"
+        }
+      },
+      {
+        "sequence": 822,
+        "at": "2026-10-21T08:10:24.488Z",
+        "purpose": "main",
+        "diagnostic": {
+          "boundary": "provider_request",
+          "providerId": "openai-compatible",
+          "modelId": "deepseek-flash",
+          "reasoningEffort": "max",
+          "maxOutputTokens": 393216,
+          "messageCount": 52,
+          "toolCount": 22,
+          "toolSchemaChars": 24700,
+          "toolSchemaHash": "a231725cb5a8ea62c87a788c406dac4ba083d41f6f731600f61c7ce2b6261292",
+          "textChars": {
+            "instructions": 10300,
+            "profile": 115,
+            "project": 0,
+            "memory": 0,
+            "conversation": 42078,
+            "toolResults": 0
+          },
+          "attachmentCount": 1,
+          "attachmentManifestHash": "8ea12bf4ca5720558579eacd1c9f75f37d8a074dd10e40dd9f53c7a8d1515a64"
+        }
+      },
+      {
+        "sequence": 871,
+        "at": "2026-10-21T08:10:30.813Z",
+        "purpose": "main",
+        "diagnostic": {
+          "boundary": "provider_request",
+          "providerId": "openai-compatible",
+          "modelId": "deepseek-flash",
+          "reasoningEffort": "max",
+          "maxOutputTokens": 393216,
+          "messageCount": 55,
+          "toolCount": 22,
+          "toolSchemaChars": 24700,
+          "toolSchemaHash": "a231725cb5a8ea62c87a788c406dac4ba083d41f6f731600f61c7ce2b6261292",
+          "textChars": {
+            "instructions": 10300,
+            "profile": 115,
+            "project": 0,
+            "memory": 0,
+            "conversation": 45275,
+            "toolResults": 0
+          },
+          "attachmentCount": 1,
+          "attachmentManifestHash": "8ea12bf4ca5720558579eacd1c9f75f37d8a074dd10e40dd9f53c7a8d1515a64"
+        }
+      },
+      {
+        "sequence": 915,
+        "at": "2026-10-21T08:10:34.270Z",
+        "purpose": "main",
+        "diagnostic": {
+          "boundary": "provider_request",
+          "providerId": "openai-compatible",
+          "modelId": "deepseek-flash",
+          "reasoningEffort": "max",
+          "maxOutputTokens": 393216,
+          "messageCount": 58,
+          "toolCount": 22,
+          "toolSchemaChars": 24700,
+          "toolSchemaHash": "a231725cb5a8ea62c87a788c406dac4ba083d41f6f731600f61c7ce2b6261292",
+          "textChars": {
+            "instructions": 10300,
+            "profile": 115,
+            "project": 0,
+            "memory": 0,
+            "conversation": 47710,
+            "toolResults": 0
+          },
+          "attachmentCount": 1,
+          "attachmentManifestHash": "8ea12bf4ca5720558579eacd1c9f75f37d8a074dd10e40dd9f53c7a8d1515a64"
+        }
+      },
+      {
+        "sequence": 992,
+        "at": "2026-10-21T08:12:21.240Z",
+        "purpose": "main",
+        "diagnostic": {
+          "boundary": "provider_request",
+          "providerId": "openai-compatible",
+          "modelId": "deepseek-flash",
+          "reasoningEffort": "max",
+          "maxOutputTokens": 393216,
+          "messageCount": 61,
+          "toolCount": 22,
+          "toolSchemaChars": 24700,
+          "toolSchemaHash": "a231725cb5a8ea62c87a788c406dac4ba083d41f6f731600f61c7ce2b6261292",
+          "textChars": {
+            "instructions": 10300,
+            "profile": 115,
+            "project": 0,
+            "memory": 0,
+            "conversation": 53979,
+            "toolResults": 0
+          },
+          "attachmentCount": 1,
+          "attachmentManifestHash": "8ea12bf4ca5720558579eacd1c9f75f37d8a074dd10e40dd9f53c7a8d1515a64"
+        }
+      },
+      {
+        "sequence": 1006,
+        "at": "2026-10-21T08:12:23.891Z",
+        "purpose": "main",
+        "diagnostic": {
+          "boundary": "provider_request",
+          "providerId": "openai-compatible",
+          "modelId": "deepseek-flash",
+          "reasoningEffort": "max",
+          "maxOutputTokens": 393216,
+          "messageCount": 64,
+          "toolCount": 22,
+          "toolSchemaChars": 24700,
+          "toolSchemaHash": "a231725cb5a8ea62c87a788c406dac4ba083d41f6f731600f61c7ce2b6261292",
+          "textChars": {
+            "instructions": 10300,
+            "profile": 115,
+            "project": 0,
+            "memory": 0,
+            "conversation": 54661,
+            "toolResults": 0
+          },
+          "attachmentCount": 1,
+          "attachmentManifestHash": "8ea12bf4ca5720558579eacd1c9f75f37d8a074dd10e40dd9f53c7a8d1515a64"
+        }
+      },
+      {
+        "sequence": 1059,
+        "at": "2026-10-21T08:12:49.608Z",
+        "purpose": "main",
+        "diagnostic": {
+          "boundary": "provider_request",
+          "providerId": "openai-compatible",
+          "modelId": "deepseek-flash",
+          "reasoningEffort": "max",
+          "maxOutputTokens": 393216,
+          "messageCount": 67,
+          "toolCount": 22,
+          "toolSchemaChars": 24700,
+          "toolSchemaHash": "a231725cb5a8ea62c87a788c406dac4ba083d41f6f731600f61c7ce2b6261292",
+          "textChars": {
+            "instructions": 10300,
+            "profile": 115,
+            "project": 0,
+            "memory": 0,
+            "conversation": 55278,
+            "toolResults": 0
+          },
+          "attachmentCount": 1,
+          "attachmentManifestHash": "8ea12bf4ca5720558579eacd1c9f75f37d8a074dd10e40dd9f53c7a8d1515a64"
+        }
+      },
+      {
+        "sequence": 1096,
+        "at": "2026-10-21T08:12:52.239Z",
+        "purpose": "main",
+        "diagnostic": {
+          "boundary": "provider_request",
+          "providerId": "openai-compatible",
+          "modelId": "deepseek-flash",
+          "reasoningEffort": "max",
+          "maxOutputTokens": 393216,
+          "messageCount": 72,
+          "toolCount": 22,
+          "toolSchemaChars": 24700,
+          "toolSchemaHash": "a231725cb5a8ea62c87a788c406dac4ba083d41f6f731600f61c7ce2b6261292",
+          "textChars": {
+            "instructions": 10300,
+            "profile": 115,
+            "project": 0,
+            "memory": 0,
+            "conversation": 55632,
+            "toolResults": 0
+          },
+          "attachmentCount": 1,
+          "attachmentManifestHash": "8ea12bf4ca5720558579eacd1c9f75f37d8a074dd10e40dd9f53c7a8d1515a64"
+        }
+      },
+      {
+        "sequence": 1131,
+        "at": "2026-10-21T08:13:00.183Z",
+        "purpose": "main",
+        "diagnostic": {
+          "boundary": "provider_request",
+          "providerId": "openai-compatible",
+          "modelId": "deepseek-flash",
+          "reasoningEffort": "max",
+          "maxOutputTokens": 393216,
+          "messageCount": 75,
+          "toolCount": 22,
+          "toolSchemaChars": 24700,
+          "toolSchemaHash": "a231725cb5a8ea62c87a788c406dac4ba083d41f6f731600f61c7ce2b6261292",
+          "textChars": {
+            "instructions": 10300,
+            "profile": 115,
+            "project": 0,
+            "memory": 0,
+            "conversation": 58244,
+            "toolResults": 0
+          },
+          "attachmentCount": 1,
+          "attachmentManifestHash": "8ea12bf4ca5720558579eacd1c9f75f37d8a074dd10e40dd9f53c7a8d1515a64"
+        }
+      },
+      {
+        "sequence": 1211,
+        "at": "2026-10-21T08:13:28.871Z",
+        "purpose": "main",
+        "diagnostic": {
+          "boundary": "provider_request",
+          "providerId": "openai-compatible",
+          "modelId": "deepseek-flash",
+          "reasoningEffort": "max",
+          "maxOutputTokens": 393216,
+          "messageCount": 80,
+          "toolCount": 22,
+          "toolSchemaChars": 24700,
+          "toolSchemaHash": "a231725cb5a8ea62c87a788c406dac4ba083d41f6f731600f61c7ce2b6261292",
+          "textChars": {
+            "instructions": 10300,
+            "profile": 115,
+            "project": 0,
+            "memory": 0,
+            "conversation": 62182,
+            "toolResults": 0
+          },
+          "attachmentCount": 1,
+          "attachmentManifestHash": "8ea12bf4ca5720558579eacd1c9f75f37d8a074dd10e40dd9f53c7a8d1515a64"
+        }
+      },
+      {
+        "sequence": 1297,
+        "at": "2026-10-21T08:13:54.894Z",
+        "purpose": "main",
+        "diagnostic": {
+          "boundary": "provider_request",
+          "providerId": "openai-compatible",
+          "modelId": "deepseek-flash",
+          "reasoningEffort": "max",
+          "maxOutputTokens": 393216,
+          "messageCount": 85,
+          "toolCount": 22,
+          "toolSchemaChars": 24700,
+          "toolSchemaHash": "a231725cb5a8ea62c87a788c406dac4ba083d41f6f731600f61c7ce2b6261292",
+          "textChars": {
+            "instructions": 10300,
+            "profile": 115,
+            "project": 0,
+            "memory": 0,
+            "conversation": 65977,
+            "toolResults": 0
+          },
+          "attachmentCount": 1,
+          "attachmentManifestHash": "8ea12bf4ca5720558579eacd1c9f75f37d8a074dd10e40dd9f53c7a8d1515a64"
+        }
+      },
+      {
+        "sequence": 1346,
+        "at": "2026-10-21T08:14:08.018Z",
+        "purpose": "main",
+        "diagnostic": {
+          "boundary": "provider_request",
+          "providerId": "openai-compatible",
+          "modelId": "deepseek-flash",
+          "reasoningEffort": "max",
+          "maxOutputTokens": 393216,
+          "messageCount": 88,
+          "toolCount": 22,
+          "toolSchemaChars": 24700,
+          "toolSchemaHash": "a231725cb5a8ea62c87a788c406dac4ba083d41f6f731600f61c7ce2b6261292",
+          "textChars": {
+            "instructions": 10300,
+            "profile": 115,
+            "project": 0,
+            "memory": 0,
+            "conversation": 68566,
+            "toolResults": 0
+          },
+          "attachmentCount": 1,
+          "attachmentManifestHash": "8ea12bf4ca5720558579eacd1c9f75f37d8a074dd10e40dd9f53c7a8d1515a64"
+        }
+      },
+      {
+        "sequence": 1431,
+        "at": "2026-10-21T08:14:21.926Z",
+        "purpose": "main",
+        "diagnostic": {
+          "boundary": "provider_request",
+          "providerId": "openai-compatible",
+          "modelId": "deepseek-flash",
+          "reasoningEffort": "max",
+          "maxOutputTokens": 393216,
+          "messageCount": 91,
+          "toolCount": 22,
+          "toolSchemaChars": 24700,
+          "toolSchemaHash": "a231725cb5a8ea62c87a788c406dac4ba083d41f6f731600f61c7ce2b6261292",
+          "textChars": {
+            "instructions": 10300,
+            "profile": 115,
+            "project": 0,
+            "memory": 0,
+            "conversation": 77228,
+            "toolResults": 0
+          },
+          "attachmentCount": 1,
+          "attachmentManifestHash": "8ea12bf4ca5720558579eacd1c9f75f37d8a074dd10e40dd9f53c7a8d1515a64"
+        }
+      },
+      {
+        "sequence": 1514,
+        "at": "2026-10-21T08:14:30.643Z",
+        "purpose": "main",
+        "diagnostic": {
+          "boundary": "provider_request",
+          "providerId": "openai-compatible",
+          "modelId": "deepseek-flash",
+          "reasoningEffort": "max",
+          "maxOutputTokens": 393216,
+          "messageCount": 94,
+          "toolCount": 22,
+          "toolSchemaChars": 24700,
+          "toolSchemaHash": "a231725cb5a8ea62c87a788c406dac4ba083d41f6f731600f61c7ce2b6261292",
+          "textChars": {
+            "instructions": 10300,
+            "profile": 115,
+            "project": 0,
+            "memory": 0,
+            "conversation": 77609,
+            "toolResults": 0
+          },
+          "attachmentCount": 1,
+          "attachmentManifestHash": "8ea12bf4ca5720558579eacd1c9f75f37d8a074dd10e40dd9f53c7a8d1515a64"
+        }
+      },
+      {
+        "sequence": 1559,
+        "at": "2026-10-21T08:14:35.069Z",
+        "purpose": "main",
+        "diagnostic": {
+          "boundary": "provider_request",
+          "providerId": "openai-compatible",
+          "modelId": "deepseek-flash",
+          "reasoningEffort": "max",
+          "maxOutputTokens": 393216,
+          "messageCount": 97,
+          "toolCount": 22,
+          "toolSchemaChars": 24700,
+          "toolSchemaHash": "a231725cb5a8ea62c87a788c406dac4ba083d41f6f731600f61c7ce2b6261292",
+          "textChars": {
+            "instructions": 10300,
+            "profile": 115,
+            "project": 0,
+            "memory": 0,
+            "conversation": 81392,
+            "toolResults": 0
+          },
+          "attachmentCount": 1,
+          "attachmentManifestHash": "8ea12bf4ca5720558579eacd1c9f75f37d8a074dd10e40dd9f53c7a8d1515a64"
+        }
+      },
+      {
+        "sequence": 1583,
+        "at": "2026-10-21T08:14:38.061Z",
+        "purpose": "main",
+        "diagnostic": {
+          "boundary": "provider_request",
+          "providerId": "openai-compatible",
+          "modelId": "deepseek-flash",
+          "reasoningEffort": "max",
+          "maxOutputTokens": 393216,
+          "messageCount": 102,
+          "toolCount": 22,
+          "toolSchemaChars": 24700,
+          "toolSchemaHash": "a231725cb5a8ea62c87a788c406dac4ba083d41f6f731600f61c7ce2b6261292",
+          "textChars": {
+            "instructions": 10300,
+            "profile": 115,
+            "project": 0,
+            "memory": 0,
+            "conversation": 82925,
+            "toolResults": 0
+          },
+          "attachmentCount": 1,
+          "attachmentManifestHash": "8ea12bf4ca5720558579eacd1c9f75f37d8a074dd10e40dd9f53c7a8d1515a64"
+        }
+      },
+      {
+        "sequence": 1596,
+        "at": "2026-10-21T08:14:43.186Z",
+        "purpose": "main",
+        "diagnostic": {
+          "boundary": "provider_request",
+          "providerId": "openai-compatible",
+          "modelId": "deepseek-flash",
+          "reasoningEffort": "max",
+          "maxOutputTokens": 393216,
+          "messageCount": 105,
+          "toolCount": 22,
+          "toolSchemaChars": 24700,
+          "toolSchemaHash": "a231725cb5a8ea62c87a788c406dac4ba083d41f6f731600f61c7ce2b6261292",
+          "textChars": {
+            "instructions": 10300,
+            "profile": 115,
+            "project": 0,
+            "memory": 0,
+            "conversation": 83542,
+            "toolResults": 0
+          },
+          "attachmentCount": 1,
+          "attachmentManifestHash": "8ea12bf4ca5720558579eacd1c9f75f37d8a074dd10e40dd9f53c7a8d1515a64"
+        }
+      },
+      {
+        "sequence": 1637,
+        "at": "2026-10-21T08:14:46.583Z",
+        "purpose": "main",
+        "diagnostic": {
+          "boundary": "provider_request",
+          "providerId": "openai-compatible",
+          "modelId": "deepseek-flash",
+          "reasoningEffort": "max",
+          "maxOutputTokens": 393216,
+          "messageCount": 108,
+          "toolCount": 22,
+          "toolSchemaChars": 24700,
+          "toolSchemaHash": "a231725cb5a8ea62c87a788c406dac4ba083d41f6f731600f61c7ce2b6261292",
+          "textChars": {
+            "instructions": 10300,
+            "profile": 115,
+            "project": 0,
+            "memory": 0,
+            "conversation": 87291,
+            "toolResults": 0
+          },
+          "attachmentCount": 1,
+          "attachmentManifestHash": "8ea12bf4ca5720558579eacd1c9f75f37d8a074dd10e40dd9f53c7a8d1515a64"
+        }
+      },
+      {
+        "sequence": 1714,
+        "at": "2026-10-21T08:15:19.646Z",
+        "purpose": "main",
+        "diagnostic": {
+          "boundary": "provider_request",
+          "providerId": "openai-compatible",
+          "modelId": "deepseek-flash",
+          "reasoningEffort": "max",
+          "maxOutputTokens": 393216,
+          "messageCount": 111,
+          "toolCount": 22,
+          "toolSchemaChars": 24700,
+          "toolSchemaHash": "a231725cb5a8ea62c87a788c406dac4ba083d41f6f731600f61c7ce2b6261292",
+          "textChars": {
+            "instructions": 10300,
+            "profile": 115,
+            "project": 0,
+            "memory": 0,
+            "conversation": 92954,
+            "toolResults": 0
+          },
+          "attachmentCount": 1,
+          "attachmentManifestHash": "8ea12bf4ca5720558579eacd1c9f75f37d8a074dd10e40dd9f53c7a8d1515a64"
+        }
+      },
+      {
+        "sequence": 1769,
+        "at": "2026-10-21T08:15:36.708Z",
+        "purpose": "main",
+        "diagnostic": {
+          "boundary": "provider_request",
+          "providerId": "openai-compatible",
+          "modelId": "deepseek-flash",
+          "reasoningEffort": "max",
+          "maxOutputTokens": 393216,
+          "messageCount": 114,
+          "toolCount": 22,
+          "toolSchemaChars": 24700,
+          "toolSchemaHash": "a231725cb5a8ea62c87a788c406dac4ba083d41f6f731600f61c7ce2b6261292",
+          "textChars": {
+            "instructions": 10300,
+            "profile": 115,
+            "project": 0,
+            "memory": 0,
+            "conversation": 93636,
+            "toolResults": 0
+          },
+          "attachmentCount": 1,
+          "attachmentManifestHash": "8ea12bf4ca5720558579eacd1c9f75f37d8a074dd10e40dd9f53c7a8d1515a64"
+        }
+      },
+      {
+        "sequence": 1802,
+        "at": "2026-10-21T08:15:40.665Z",
+        "purpose": "main",
+        "diagnostic": {
+          "boundary": "provider_request",
+          "providerId": "openai-compatible",
+          "modelId": "deepseek-flash",
+          "reasoningEffort": "max",
+          "maxOutputTokens": 393216,
+          "messageCount": 117,
+          "toolCount": 22,
+          "toolSchemaChars": 24700,
+          "toolSchemaHash": "a231725cb5a8ea62c87a788c406dac4ba083d41f6f731600f61c7ce2b6261292",
+          "textChars": {
+            "instructions": 10300,
+            "profile": 115,
+            "project": 0,
+            "memory": 0,
+            "conversation": 94002,
+            "toolResults": 0
+          },
+          "attachmentCount": 1,
+          "attachmentManifestHash": "8ea12bf4ca5720558579eacd1c9f75f37d8a074dd10e40dd9f53c7a8d1515a64"
+        }
+      },
+      {
+        "sequence": 1857,
+        "at": "2026-10-21T08:15:58.361Z",
+        "purpose": "main",
+        "diagnostic": {
+          "boundary": "provider_request",
+          "providerId": "openai-compatible",
+          "modelId": "deepseek-flash",
+          "reasoningEffort": "max",
+          "maxOutputTokens": 393216,
+          "messageCount": 120,
+          "toolCount": 22,
+          "toolSchemaChars": 24700,
+          "toolSchemaHash": "a231725cb5a8ea62c87a788c406dac4ba083d41f6f731600f61c7ce2b6261292",
+          "textChars": {
+            "instructions": 10300,
+            "profile": 115,
+            "project": 0,
+            "memory": 0,
+            "conversation": 95537,
+            "toolResults": 0
+          },
+          "attachmentCount": 1,
+          "attachmentManifestHash": "8ea12bf4ca5720558579eacd1c9f75f37d8a074dd10e40dd9f53c7a8d1515a64"
+        }
+      },
+      {
+        "sequence": 1908,
+        "at": "2026-10-21T08:16:05.022Z",
+        "purpose": "main",
+        "diagnostic": {
+          "boundary": "provider_request",
+          "providerId": "openai-compatible",
+          "modelId": "deepseek-flash",
+          "reasoningEffort": "max",
+          "maxOutputTokens": 393216,
+          "messageCount": 123,
+          "toolCount": 22,
+          "toolSchemaChars": 24700,
+          "toolSchemaHash": "a231725cb5a8ea62c87a788c406dac4ba083d41f6f731600f61c7ce2b6261292",
+          "textChars": {
+            "instructions": 10300,
+            "profile": 115,
+            "project": 0,
+            "memory": 0,
+            "conversation": 95877,
+            "toolResults": 0
+          },
+          "attachmentCount": 1,
+          "attachmentManifestHash": "8ea12bf4ca5720558579eacd1c9f75f37d8a074dd10e40dd9f53c7a8d1515a64"
+        }
+      },
+      {
+        "sequence": 1922,
+        "at": "2026-10-21T08:16:11.569Z",
+        "purpose": "main",
+        "diagnostic": {
+          "boundary": "provider_request",
+          "providerId": "openai-compatible",
+          "modelId": "deepseek-flash",
+          "reasoningEffort": "max",
+          "maxOutputTokens": 393216,
+          "messageCount": 126,
+          "toolCount": 22,
+          "toolSchemaChars": 24700,
+          "toolSchemaHash": "a231725cb5a8ea62c87a788c406dac4ba083d41f6f731600f61c7ce2b6261292",
+          "textChars": {
+            "instructions": 10300,
+            "profile": 115,
+            "project": 0,
+            "memory": 0,
+            "conversation": 100107,
+            "toolResults": 0
+          },
+          "attachmentCount": 1,
+          "attachmentManifestHash": "8ea12bf4ca5720558579eacd1c9f75f37d8a074dd10e40dd9f53c7a8d1515a64"
+        }
+      },
+      {
+        "sequence": 1971,
+        "at": "2026-10-21T08:16:16.384Z",
+        "purpose": "main",
+        "diagnostic": {
+          "boundary": "provider_request",
+          "providerId": "openai-compatible",
+          "modelId": "deepseek-flash",
+          "reasoningEffort": "max",
+          "maxOutputTokens": 393216,
+          "messageCount": 129,
+          "toolCount": 22,
+          "toolSchemaChars": 24700,
+          "toolSchemaHash": "a231725cb5a8ea62c87a788c406dac4ba083d41f6f731600f61c7ce2b6261292",
+          "textChars": {
+            "instructions": 10300,
+            "profile": 115,
+            "project": 0,
+            "memory": 0,
+            "conversation": 103536,
+            "toolResults": 0
+          },
+          "attachmentCount": 1,
+          "attachmentManifestHash": "8ea12bf4ca5720558579eacd1c9f75f37d8a074dd10e40dd9f53c7a8d1515a64"
+        }
+      },
+      {
+        "sequence": 2022,
+        "at": "2026-10-21T08:16:26.563Z",
+        "purpose": "main",
+        "diagnostic": {
+          "boundary": "provider_request",
+          "providerId": "openai-compatible",
+          "modelId": "deepseek-flash",
+          "reasoningEffort": "max",
+          "maxOutputTokens": 393216,
+          "messageCount": 135,
+          "toolCount": 22,
+          "toolSchemaChars": 24700,
+          "toolSchemaHash": "a231725cb5a8ea62c87a788c406dac4ba083d41f6f731600f61c7ce2b6261292",
+          "textChars": {
+            "instructions": 10300,
+            "profile": 115,
+            "project": 0,
+            "memory": 0,
+            "conversation": 105326,
+            "toolResults": 0
+          },
+          "attachmentCount": 1,
+          "attachmentManifestHash": "8ea12bf4ca5720558579eacd1c9f75f37d8a074dd10e40dd9f53c7a8d1515a64"
+        }
+      },
+      {
+        "sequence": 2076,
+        "at": "2026-10-21T08:16:30.987Z",
+        "purpose": "main",
+        "diagnostic": {
+          "boundary": "provider_request",
+          "providerId": "openai-compatible",
+          "modelId": "deepseek-flash",
+          "reasoningEffort": "max",
+          "maxOutputTokens": 393216,
+          "messageCount": 138,
+          "toolCount": 22,
+          "toolSchemaChars": 24700,
+          "toolSchemaHash": "a231725cb5a8ea62c87a788c406dac4ba083d41f6f731600f61c7ce2b6261292",
+          "textChars": {
+            "instructions": 10300,
+            "profile": 115,
+            "project": 0,
+            "memory": 0,
+            "conversation": 107860,
+            "toolResults": 0
+          },
+          "attachmentCount": 1,
+          "attachmentManifestHash": "8ea12bf4ca5720558579eacd1c9f75f37d8a074dd10e40dd9f53c7a8d1515a64"
+        }
+      },
+      {
+        "sequence": 2131,
+        "at": "2026-10-21T08:16:46.166Z",
+        "purpose": "main",
+        "diagnostic": {
+          "boundary": "provider_request",
+          "providerId": "openai-compatible",
+          "modelId": "deepseek-flash",
+          "reasoningEffort": "max",
+          "maxOutputTokens": 393216,
+          "messageCount": 141,
+          "toolCount": 22,
+          "toolSchemaChars": 24700,
+          "toolSchemaHash": "a231725cb5a8ea62c87a788c406dac4ba083d41f6f731600f61c7ce2b6261292",
+          "textChars": {
+            "instructions": 10300,
+            "profile": 115,
+            "project": 0,
+            "memory": 0,
+            "conversation": 111755,
+            "toolResults": 0
+          },
+          "attachmentCount": 1,
+          "attachmentManifestHash": "8ea12bf4ca5720558579eacd1c9f75f37d8a074dd10e40dd9f53c7a8d1515a64"
+        }
+      },
+      {
+        "sequence": 2190,
+        "at": "2026-10-21T08:17:01.629Z",
+        "purpose": "main",
+        "diagnostic": {
+          "boundary": "provider_request",
+          "providerId": "openai-compatible",
+          "modelId": "deepseek-flash",
+          "reasoningEffort": "max",
+          "maxOutputTokens": 393216,
+          "messageCount": 144,
+          "toolCount": 22,
+          "toolSchemaChars": 24700,
+          "toolSchemaHash": "a231725cb5a8ea62c87a788c406dac4ba083d41f6f731600f61c7ce2b6261292",
+          "textChars": {
+            "instructions": 10300,
+            "profile": 115,
+            "project": 0,
+            "memory": 0,
+            "conversation": 113226,
+            "toolResults": 0
+          },
+          "attachmentCount": 1,
+          "attachmentManifestHash": "8ea12bf4ca5720558579eacd1c9f75f37d8a074dd10e40dd9f53c7a8d1515a64"
+        }
+      },
+      {
+        "sequence": 2252,
+        "at": "2026-10-21T08:17:07.645Z",
+        "purpose": "main",
+        "diagnostic": {
+          "boundary": "provider_request",
+          "providerId": "openai-compatible",
+          "modelId": "deepseek-flash",
+          "reasoningEffort": "max",
+          "maxOutputTokens": 393216,
+          "messageCount": 148,
+          "toolCount": 22,
+          "toolSchemaChars": 24700,
+          "toolSchemaHash": "a231725cb5a8ea62c87a788c406dac4ba083d41f6f731600f61c7ce2b6261292",
+          "textChars": {
+            "instructions": 10300,
+            "profile": 115,
+            "project": 0,
+            "memory": 0,
+            "conversation": 114210,
+            "toolResults": 0
+          },
+          "attachmentCount": 1,
+          "attachmentManifestHash": "8ea12bf4ca5720558579eacd1c9f75f37d8a074dd10e40dd9f53c7a8d1515a64"
+        }
+      },
+      {
+        "sequence": 2267,
+        "at": "2026-10-21T08:17:11.703Z",
+        "purpose": "main",
+        "diagnostic": {
+          "boundary": "provider_request",
+          "providerId": "openai-compatible",
+          "modelId": "deepseek-flash",
+          "reasoningEffort": "max",
+          "maxOutputTokens": 393216,
+          "messageCount": 151,
+          "toolCount": 22,
+          "toolSchemaChars": 24700,
+          "toolSchemaHash": "a231725cb5a8ea62c87a788c406dac4ba083d41f6f731600f61c7ce2b6261292",
+          "textChars": {
+            "instructions": 10300,
+            "profile": 115,
+            "project": 0,
+            "memory": 0,
+            "conversation": 114907,
+            "toolResults": 0
+          },
+          "attachmentCount": 1,
+          "attachmentManifestHash": "8ea12bf4ca5720558579eacd1c9f75f37d8a074dd10e40dd9f53c7a8d1515a64"
+        }
+      },
+      {
+        "sequence": 2282,
+        "at": "2026-10-21T08:17:15.439Z",
+        "purpose": "main",
+        "diagnostic": {
+          "boundary": "provider_request",
+          "providerId": "openai-compatible",
+          "modelId": "deepseek-flash",
+          "reasoningEffort": "max",
+          "maxOutputTokens": 393216,
+          "messageCount": 154,
+          "toolCount": 22,
+          "toolSchemaChars": 24700,
+          "toolSchemaHash": "a231725cb5a8ea62c87a788c406dac4ba083d41f6f731600f61c7ce2b6261292",
+          "textChars": {
+            "instructions": 10300,
+            "profile": 115,
+            "project": 0,
+            "memory": 0,
+            "conversation": 115517,
+            "toolResults": 0
+          },
+          "attachmentCount": 1,
+          "attachmentManifestHash": "8ea12bf4ca5720558579eacd1c9f75f37d8a074dd10e40dd9f53c7a8d1515a64"
+        }
+      },
+      {
+        "sequence": 2297,
+        "at": "2026-10-21T08:17:19.356Z",
+        "purpose": "main",
+        "diagnostic": {
+          "boundary": "provider_request",
+          "providerId": "openai-compatible",
+          "modelId": "deepseek-flash",
+          "reasoningEffort": "max",
+          "maxOutputTokens": 393216,
+          "messageCount": 157,
+          "toolCount": 22,
+          "toolSchemaChars": 24700,
+          "toolSchemaHash": "a231725cb5a8ea62c87a788c406dac4ba083d41f6f731600f61c7ce2b6261292",
+          "textChars": {
+            "instructions": 10300,
+            "profile": 115,
+            "project": 0,
+            "memory": 0,
+            "conversation": 116138,
+            "toolResults": 0
+          },
+          "attachmentCount": 1,
+          "attachmentManifestHash": "8ea12bf4ca5720558579eacd1c9f75f37d8a074dd10e40dd9f53c7a8d1515a64"
+        }
+      },
+      {
+        "sequence": 2312,
+        "at": "2026-10-21T08:17:22.658Z",
+        "purpose": "main",
+        "diagnostic": {
+          "boundary": "provider_request",
+          "providerId": "openai-compatible",
+          "modelId": "deepseek-flash",
+          "reasoningEffort": "max",
+          "maxOutputTokens": 393216,
+          "messageCount": 160,
+          "toolCount": 22,
+          "toolSchemaChars": 24700,
+          "toolSchemaHash": "a231725cb5a8ea62c87a788c406dac4ba083d41f6f731600f61c7ce2b6261292",
+          "textChars": {
+            "instructions": 10300,
+            "profile": 115,
+            "project": 0,
+            "memory": 0,
+            "conversation": 116759,
+            "toolResults": 0
+          },
+          "attachmentCount": 1,
+          "attachmentManifestHash": "8ea12bf4ca5720558579eacd1c9f75f37d8a074dd10e40dd9f53c7a8d1515a64"
+        }
+      },
+      {
+        "sequence": 2327,
+        "at": "2026-10-21T08:17:26.843Z",
+        "purpose": "main",
+        "diagnostic": {
+          "boundary": "provider_request",
+          "providerId": "openai-compatible",
+          "modelId": "deepseek-flash",
+          "reasoningEffort": "max",
+          "maxOutputTokens": 393216,
+          "messageCount": 163,
+          "toolCount": 22,
+          "toolSchemaChars": 24700,
+          "toolSchemaHash": "a231725cb5a8ea62c87a788c406dac4ba083d41f6f731600f61c7ce2b6261292",
+          "textChars": {
+            "instructions": 10300,
+            "profile": 115,
+            "project": 0,
+            "memory": 0,
+            "conversation": 117369,
+            "toolResults": 0
+          },
+          "attachmentCount": 1,
+          "attachmentManifestHash": "8ea12bf4ca5720558579eacd1c9f75f37d8a074dd10e40dd9f53c7a8d1515a64"
+        }
+      },
+      {
+        "sequence": 2375,
+        "at": "2026-10-21T08:17:33.283Z",
+        "purpose": "main",
+        "diagnostic": {
+          "boundary": "provider_request",
+          "providerId": "openai-compatible",
+          "modelId": "deepseek-flash",
+          "reasoningEffort": "max",
+          "maxOutputTokens": 393216,
+          "messageCount": 166,
+          "toolCount": 22,
+          "toolSchemaChars": 24700,
+          "toolSchemaHash": "a231725cb5a8ea62c87a788c406dac4ba083d41f6f731600f61c7ce2b6261292",
+          "textChars": {
+            "instructions": 10300,
+            "profile": 115,
+            "project": 0,
+            "memory": 0,
+            "conversation": 118994,
+            "toolResults": 0
+          },
+          "attachmentCount": 1,
+          "attachmentManifestHash": "8ea12bf4ca5720558579eacd1c9f75f37d8a074dd10e40dd9f53c7a8d1515a64"
+        }
+      },
+      {
+        "sequence": 2422,
+        "at": "2026-10-21T08:17:42.021Z",
+        "purpose": "main",
+        "diagnostic": {
+          "boundary": "provider_request",
+          "providerId": "openai-compatible",
+          "modelId": "deepseek-flash",
+          "reasoningEffort": "max",
+          "maxOutputTokens": 393216,
+          "messageCount": 169,
+          "toolCount": 22,
+          "toolSchemaChars": 24700,
+          "toolSchemaHash": "a231725cb5a8ea62c87a788c406dac4ba083d41f6f731600f61c7ce2b6261292",
+          "textChars": {
+            "instructions": 10300,
+            "profile": 115,
+            "project": 0,
+            "memory": 0,
+            "conversation": 119351,
+            "toolResults": 0
+          },
+          "attachmentCount": 1,
+          "attachmentManifestHash": "8ea12bf4ca5720558579eacd1c9f75f37d8a074dd10e40dd9f53c7a8d1515a64"
+        }
+      },
+      {
+        "sequence": 2482,
+        "at": "2026-10-21T08:17:52.806Z",
+        "purpose": "main",
+        "diagnostic": {
+          "boundary": "provider_request",
+          "providerId": "openai-compatible",
+          "modelId": "deepseek-flash",
+          "reasoningEffort": "max",
+          "maxOutputTokens": 393216,
+          "messageCount": 173,
+          "toolCount": 22,
+          "toolSchemaChars": 24700,
+          "toolSchemaHash": "a231725cb5a8ea62c87a788c406dac4ba083d41f6f731600f61c7ce2b6261292",
+          "textChars": {
+            "instructions": 10300,
+            "profile": 115,
+            "project": 0,
+            "memory": 0,
+            "conversation": 119716,
+            "toolResults": 0
+          },
+          "attachmentCount": 1,
+          "attachmentManifestHash": "8ea12bf4ca5720558579eacd1c9f75f37d8a074dd10e40dd9f53c7a8d1515a64"
+        }
+      },
+      {
+        "sequence": 2529,
+        "at": "2026-10-21T08:18:02.808Z",
+        "purpose": "main",
+        "diagnostic": {
+          "boundary": "provider_request",
+          "providerId": "openai-compatible",
+          "modelId": "deepseek-flash",
+          "reasoningEffort": "max",
+          "maxOutputTokens": 393216,
+          "messageCount": 176,
+          "toolCount": 22,
+          "toolSchemaChars": 24700,
+          "toolSchemaHash": "a231725cb5a8ea62c87a788c406dac4ba083d41f6f731600f61c7ce2b6261292",
+          "textChars": {
+            "instructions": 10300,
+            "profile": 115,
+            "project": 0,
+            "memory": 0,
+            "conversation": 120160,
+            "toolResults": 0
+          },
+          "attachmentCount": 1,
+          "attachmentManifestHash": "8ea12bf4ca5720558579eacd1c9f75f37d8a074dd10e40dd9f53c7a8d1515a64"
+        }
+      },
+      {
+        "sequence": 3087,
+        "at": "2026-10-21T08:18:09.700Z",
+        "purpose": "main",
+        "diagnostic": {
+          "boundary": "provider_request",
+          "providerId": "openai-compatible",
+          "modelId": "deepseek-flash",
+          "reasoningEffort": "max",
+          "maxOutputTokens": 393216,
+          "messageCount": 179,
+          "toolCount": 22,
+          "toolSchemaChars": 24700,
+          "toolSchemaHash": "a231725cb5a8ea62c87a788c406dac4ba083d41f6f731600f61c7ce2b6261292",
+          "textChars": {
+            "instructions": 10300,
+            "profile": 115,
+            "project": 0,
+            "memory": 0,
+            "conversation": 122199,
+            "toolResults": 0
+          },
+          "attachmentCount": 1,
+          "attachmentManifestHash": "8ea12bf4ca5720558579eacd1c9f75f37d8a074dd10e40dd9f53c7a8d1515a64"
+        }
+      },
+      {
+        "sequence": 3091,
+        "at": "2026-10-21T08:18:16.361Z",
+        "purpose": "memory",
+        "diagnostic": {
+          "boundary": "provider_request",
+          "providerId": "openai-compatible",
+          "modelId": "deepseek-flash",
+          "maxOutputTokens": 1800,
+          "messageCount": 2,
+          "toolCount": 0,
+          "toolSchemaChars": 2,
+          "toolSchemaHash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+          "textChars": {
+            "instructions": 1544,
+            "profile": 0,
+            "project": 0,
+            "memory": 0,
+            "conversation": 1634,
+            "toolResults": 0
+          },
+          "attachmentCount": 0,
+          "attachmentManifestHash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+        }
+      }
+    ]
+  },
+  {
+    "runId": "run_68f125ef-875d-4a88-9cb4-d6faab154625",
+    "status": "paused",
+    "eventCount": 986,
+    "routes": [
+      {
+        "at": "2026-10-20T11:58:10.595Z",
+        "provider": "openai-compatible",
+        "model": "deepseek-flash",
+        "reason": "capability match; quality=0.75, cost=1.00, latency=0.80"
+      }
+    ],
+    "byPurpose": {
+      "main": {
+        "calls": 1,
+        "input": 15662,
+        "cached": 7296,
+        "measuredInput": 15662,
+        "output": 2047,
+        "hitRate": 0.4658408887753799
+      }
+    },
+    "diagnosticCounts": {
+      "main:first_request": 1
+    },
+    "compactions": [
+      {
+        "sequence": 5,
+        "at": "2026-10-20T11:58:10.598Z",
+        "type": "context_adjusted",
+        "adjustment": {
+          "kind": "policy_migration",
+          "policyVersion": 1,
+          "capacityTokens": 1000000,
+          "triggerTokens": 800000,
+          "targetTokens": 450000
+        }
+      }
+    ],
+    "requests": [
+      {
+        "sequence": 980,
+        "at": "2026-10-20T11:58:22.790Z",
+        "purpose": "main",
+        "input": 15662,
+        "cached": 7296,
+        "miss": 8366,
+        "hitRate": 0.4658408887753799,
+        "diagnostic": {
+          "purpose": "main",
+          "protocol": "responses",
+          "reason": "first_request",
+          "unchangedPrefixItems": 0,
+          "inputItems": 18,
+          "sharedPrefixCharacters": 0,
+          "payloadCharacters": 53411
+        }
+      }
+    ],
+    "structural": [
+      {
+        "sequence": 981,
+        "at": "2026-10-20T11:58:22.794Z",
+        "purpose": "main",
+        "diagnostic": {
+          "boundary": "provider_request",
+          "providerId": "openai-compatible",
+          "modelId": "deepseek-flash",
+          "reasoningEffort": "max",
+          "maxOutputTokens": 393216,
+          "messageCount": 18,
+          "toolCount": 22,
+          "toolSchemaChars": 24700,
+          "toolSchemaHash": "a231725cb5a8ea62c87a788c406dac4ba083d41f6f731600f61c7ce2b6261292",
+          "textChars": {
+            "instructions": 3853,
+            "profile": 115,
+            "project": 1655,
+            "memory": 0,
+            "conversation": 7491,
+            "toolResults": 0
+          },
+          "attachmentCount": 0,
+          "attachmentManifestHash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+        }
+      }
+    ]
+  }
+]

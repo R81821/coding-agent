@@ -1,0 +1,14 @@
+{
+  "capturedAt": "2026-10-18T08:59:39.140Z",
+  "callId": "call_00_3k2whW41scwWo8vOLe1u3015",
+  "tool": "browser",
+  "input": {
+    "action": "screenshot",
+    "fullPage": true,
+    "tabId": "17ae7fbb-e072-4ba2-b559-a528bf9c26ee"
+  },
+  "isError": false,
+  "durationMs": 718,
+  "text": "{\n  \"tabId\": \"17ae7fbb-e072-4ba2-b559-a528bf9c26ee\",\n  \"url\": \"http://127.0.0.1:5180/\",\n  \"title\": \"GROKBOT + JEV // trading desk\",\n  \"fullPage\": true,\n  \"mimeType\": \"image/png\",\n  \"width\": 701,\n  \"height\": 4365,\n  \"byteLength\": 624985,\n  \"scope\": \"full_page\",\n  \"capturedAt\": \"2026-10-18T08:59:26.576Z\",\n  \"attachments\": [\n    {\n      \"id\": \"attachment_9acb5aec-afc8-44b6-b360-5c304022c538\",\n      \"sha256\": \"c42fa1ab40dfad8d2a56663acb30ca3fa281c0ba02fbc9e98acdd42ea83eca1e\",\n      \"mimeType\": \"image/png\",\n      \"byteLength\": 624985,\n      \"width\": 701,\n      \"height\": 4365,\n      \"encryptedPath\": \"C:\\\\Users\\\\13437\\\\AppData\\\\Roaming\\\\@harness\\\\desktop\\\\blobs\\\\c4\\\\c42fa1ab40dfad8d2a56663acb30ca3fa281c0ba02fbc9e98acdd42ea83eca1e.hab\",\n      \"source\": \"browser\",\n      \"trust\": \"untrusted_web\",\n      \"allowedProviders\": [\n        \"openai-compatible\"\n      ],\n      \"createdAt\": \"2026-10-18T08:59:26.594Z\"\n    }\n  ]\n}",
+  "truncated": false
+}

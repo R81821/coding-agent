@@ -15,15 +15,26 @@ function isReadOnlyGitQuery(call: ToolCall): boolean {
 export class LightweightWorkflow extends CodingWorkflow {
   private readonly currentVerificationRuns = new Map<string, { stage: "local" | "broader"; epoch: string; revision: number; codeFingerprint?: string }>();
   private nonInvalidatingToolFailure = false;
-  constructor(objective: string, publish: (state: WorkflowState, detail: string) => void, recovered?: WorkflowState, policy: ConstructorParameters<typeof CodingWorkflow>[3] = {}, taskMode: "auto" | "analysis" | "change" = "auto") {
+  private readonly configuredChecks: boolean;
+  constructor(objective: string, publish: (state: WorkflowState, detail: string) => void, recovered?: WorkflowState, policy: ConstructorParameters<typeof CodingWorkflow>[3] = {}, taskMode: "auto" | "analysis" | "change" = "auto", behaviorPolicyVersion: 1 | 2 = recovered?.behaviorPolicyVersion ?? (recovered ? 1 : 2)) {
     super(objective, publish, recovered, policy);
     this.state.schemaVersion = 3;
+    this.state.behaviorPolicyVersion = behaviorPolicyVersion;
+    if (recovered?.broaderPolicy === "required") this.state.broaderPolicy = "required";
+    this.configuredChecks = !!policy.items?.some(item => item.required) || policy.broaderPolicy === "required";
     this.state.taskMode = taskMode;
     this.state.todos ??= [];
-    this.state.intent = taskMode === "change" || this.state.revision > 0 ? "change" : "analysis";
+    this.state.intent = taskMode === "change" || this.state.revision > 0 || recovered?.intent === "change" ? "change" : "analysis";
+    if (recovered?.requirements.length) return;
     const requirements = objective.split(/\n+/).map(line => line.replace(/^\s*(?:[-*]|\d+[.)、])\s*/, "").trim()).filter(Boolean);
     this.state.requirements = requirements.length > 1 ? requirements : [objective];
     this.state.requirementIds = this.state.requirements.map((_, index) => `req-${index + 1}`);
+  }
+  /** Only plain documentation with no explicit test contract uses content/diff acceptance. */
+  get requiresCodeChecks(): boolean {
+    return this.needsChange && !(this.state.behaviorPolicyVersion === 2 && !this.configuredChecks &&
+      !this.state.sequential?.steps.length && !this.state.verification.length && this.state.changedFiles.length > 0 &&
+      this.state.changedFiles.every(path => /\.(?:md|rst)$/i.test(path) || /^(?:docs|notes)[\\/].*\.txt$/i.test(path)));
   }
   override before(call: ToolCall, tool: ToolDefinition): string | undefined {
     if (this.state.taskMode !== "analysis") return;
@@ -96,15 +107,19 @@ export class LightweightWorkflow extends CodingWorkflow {
     this.state.revision++;
     this.state.changedFiles = [...new Set([...this.state.changedFiles, ...effect.changedFiles])];
     this.invalidate();
-    if (this.state.changedFiles.length > 3 || effect.changedFiles.some(path => /auth|security|migration|schema/i.test(path))) this.state.riskFlags = [...new Set([...this.state.riskFlags, "significant_change"])];
+    if (this.state.changedFiles.length > 3 || effect.changedFiles.some(path => /auth|security|permission|migration|schema|database|storage/i.test(path))) {
+      this.state.riskFlags = [...new Set([...this.state.riskFlags, "significant_change"])];
+      if (this.state.behaviorPolicyVersion === 2 && this.requiresCodeChecks) this.state.broaderPolicy = "required";
+    }
     this.move("small_edit", `实际修改 ${effect.changedFiles.length} 个文件；版本 ${this.state.revision}`);
   }
   override observe(call: ToolCall, result: ToolResult): void {
     if (["todo", "read_evidence", "run_verification", "check_requirements"].includes(call.name)) return;
     const output = result.output && typeof result.output === "object" ? result.output as Record<string, unknown> : undefined;
     const validationFailure = ["patch", "apply_patch"].includes(call.name) && output?.applied === false && output.phase === "validation" && this.state.effect !== "repository_write";
+    const fileValidationFailure = call.name === "write_file" && output?.written === false && output.phase === "validation" && this.state.effect !== "repository_write";
     this.nonInvalidatingToolFailure = result.isError === true && this.state.effect !== "unknown" &&
-      (readTools.has(call.name) || isReadOnlyGitQuery(call) || validationFailure);
+      (readTools.has(call.name) || isReadOnlyGitQuery(call) || validationFailure || fileValidationFailure);
     try { super.observe(call, result); }
     finally { this.nonInvalidatingToolFailure = false; }
     if (!this.needsChange) this.state.diagnosisRequired = false;
@@ -139,13 +154,13 @@ export class LightweightWorkflow extends CodingWorkflow {
   }
   override checksCurrent(): boolean {
     if (this.state.effect === "unknown") return false;
-    if (!this.needsChange) return true;
+    if (!this.requiresCodeChecks) return true;
     const current = (check: WorkflowState["localCheck"]) => check.epoch === this.state.epoch && check.revision === this.state.revision;
     return current(this.state.localCheck) && this.state.localCheck.status === "passed" &&
       (this.state.broaderPolicy !== "required" || (current(this.state.broaderCheck) && this.state.broaderCheck.status === "passed"));
   }
   override missingVerificationStages(): ("local" | "broader")[] {
-    return this.needsChange ? super.missingVerificationStages() : [];
+    return this.requiresCodeChecks ? super.missingVerificationStages() : [];
   }
   override get requiresIndependentReview(): boolean { return false; }
   /** The runtime calls this before parsing an explicit check_requirements request. */
@@ -160,7 +175,7 @@ export class LightweightWorkflow extends CodingWorkflow {
     if (receipts.length !== this.state.requirementIds.length || new Set(receipts.map(item => item.requirementId)).size !== this.state.requirementIds.length || receipts.some(item => !this.state.requirementIds.includes(item.requirementId))) throw new Error("Provide every stable requirementId exactly once.");
     const currentDiff = this.state.observations.findLast(item => ["git_diff", "workspace_diff"].includes(item.tool) && !item.failed && item.complete && item.epoch === this.state.epoch && item.revision === this.state.revision);
     for (const item of receipts) {
-      (this.needsChange ? RequirementReceiptSchema : RequirementEvidenceSchema).parse(item);
+      (this.requiresCodeChecks ? RequirementReceiptSchema : RequirementEvidenceSchema).parse(item);
       if (!item.passed) throw new Error(`${item.requirementId} has not passed acceptance: ${item.summary}`);
       this.freshEvidence(item.observationIds);
       const diff = item.diffObservationId ? this.freshEvidence([item.diffObservationId])[0] : undefined;
@@ -175,7 +190,7 @@ export class LightweightWorkflow extends CodingWorkflow {
         if (diff?.codeFingerprint && receipt.codeFingerprint && diff.codeFingerprint !== receipt.codeFingerprint) throw new Error(`${item.requirementId} diff and passing test suites have different runtime workspace fingerprints.`);
         if (diff && !sameFingerprint && diff.sequence <= observation.sequence) throw new Error(`${item.requirementId} must cite a fresh complete diff read after its passing test suites when matching runtime workspace fingerprints are unavailable.`);
       }
-      if (this.needsChange && (!item.verificationIds.includes(this.state.localCheck.runId) || (this.state.broaderPolicy === "required" && !item.verificationIds.includes(this.state.broaderCheck.runId)))) throw new Error(`${item.requirementId} must cite current passing local and required broader runtime test receipts.`);
+      if (this.requiresCodeChecks && (!item.verificationIds.includes(this.state.localCheck.runId) || (this.state.broaderPolicy === "required" && !item.verificationIds.includes(this.state.broaderCheck.runId)))) throw new Error(`${item.requirementId} must cite current passing local and required broader runtime test receipts.`);
     }
     this.state.requirementReceipts = receipts.map(({ passed: _passed, ...receipt }) => receipt);
     this.state.requirementEvidence = receipts.map(item => item.summary);
@@ -215,7 +230,7 @@ export class LightweightWorkflow extends CodingWorkflow {
   projection(): Record<string, unknown> {
     const excerpt = (value: string, size: number) => value.length <= size ? value : value.slice(0, size - 1) + "…";
     const check = (value: WorkflowState["localCheck"]) => ({ status: value.status, revision: value.revision, epoch: value.epoch, runId: excerpt(value.runId, 120), reason: excerpt(value.reason, 240) });
-    return { taskMode: this.state.taskMode, intent: this.state.intent, objective: excerpt(this.state.objective, 800), phase: this.state.phase,
+    return { behaviorPolicyVersion: this.state.behaviorPolicyVersion, requiresCodeChecks: this.requiresCodeChecks, taskMode: this.state.taskMode, intent: this.state.intent, objective: excerpt(this.state.objective, 800), phase: this.state.phase,
       revision: this.state.revision, effect: this.state.effect,
       todos: (this.state.todos ?? []).slice(0, 20).map(todo => ({ id: excerpt(todo.id, 40), text: excerpt(todo.text, 100), status: todo.status })),
       checks: { local: check(this.state.localCheck), broader: check(this.state.broaderCheck) },

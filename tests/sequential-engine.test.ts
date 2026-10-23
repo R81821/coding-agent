@@ -162,7 +162,7 @@ async function scenario(mode: "pass" | "repair" | "repair-test" | "denied" | "bu
     };
     engine = new HarnessEngine({ database, providers: [provider], tools, memory: new MemoryService(database), skills: new SkillService(join(directory, "skills")), projectTrust: new ProjectTrustService(database) });
     const profile: Profile = { ...DEFAULT_PROFILE, ...(options.generationPolicy ? { generationPolicy: options.generationPolicy } : {}), allowedProviders: ["fake"], toolNames: ["read_file", "edit_module", "edit_test", "terminal", "git_diff", "browser"], verificationPolicy: { ...DEFAULT_PROFILE.verificationPolicy, broaderPolicy: "disabled", ...(options.reviewPolicy ? { reviewPolicy: options.reviewPolicy } : {}) } };
-    const spec: RunSpec = { id: newId("run"), sessionId: "sequential", request: "Implement service and wire caller", workspacePath: workspace, profileId: profile.id, attachments: [], budget: { ...profile.budget, maxTurns: options.maxTurns ?? (mode === "budget" || mode === "denied" ? 9 : 24), ...(options.maxToolCalls !== undefined ? { maxToolCalls: options.maxToolCalls } : {}) }, grants: [{ toolNames: ["edit_module", "edit_test"], pathGlobs: ["**"], commandPrefixes: [], networkDomains: [], maxRisk: "write" }], createdAt: nowIso() };
+    const spec: RunSpec = { behaviorPolicyVersion: 1, id: newId("run"), sessionId: "sequential", request: "Implement service and wire caller", workspacePath: workspace, profileId: profile.id, attachments: [], budget: { ...profile.budget, maxTurns: options.maxTurns ?? (mode === "budget" || mode === "denied" ? 9 : 24), ...(options.maxToolCalls !== undefined ? { maxToolCalls: options.maxToolCalls } : {}) }, grants: [{ toolNames: ["edit_module", "edit_test"], pathGlobs: ["**"], commandPrefixes: [], networkDomains: [], maxRisk: "write" }], createdAt: nowIso() };
     engine.on("event", (event: AgentEvent) => {
       events.push(event);
       if (event.type === "workflow_updated") latest = event.workflow;
@@ -190,7 +190,7 @@ async function scenario(mode: "pass" | "repair" | "repair-test" | "denied" | "bu
   }
 }
 
-describe("default sequential loop through the actual engine and bridge", { timeout: 30000 }, () => {
+describe("version 1 sequential compatibility through the actual engine and bridge", { timeout: 30000 }, () => {
   it.each([undefined, "standard", "risk_based"] as const)("uses test acceptance without a reviewer when Profile review is %s", async reviewPolicy => {
     const result = await scenario("pass", reviewPolicy ? { reviewPolicy } : {});
     expect(result.result.status).toBe("completed");

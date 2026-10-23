@@ -1,0 +1,14 @@
+{
+  "capturedAt": "2026-10-18T09:05:39.896Z",
+  "callId": "call_00_ET_D5GYVek2AWXi9urvOhtr6520",
+  "tool": "browser",
+  "input": {
+    "action": "screenshot",
+    "fullPage": true,
+    "tabId": "17ae7fbb-e072-4ba2-b559-a528bf9c26ee"
+  },
+  "isError": false,
+  "durationMs": 108,
+  "text": "{\n  \"tabId\": \"17ae7fbb-e072-4ba2-b559-a528bf9c26ee\",\n  \"url\": \"file:///D:/npqo/screenshots/dashboard-390.png\",\n  \"title\": \"dashboard-390.png (390×2930)\",\n  \"fullPage\": true,\n  \"mimeType\": \"image/png\",\n  \"width\": 716,\n  \"height\": 957,\n  \"byteLength\": 96599,\n  \"scope\": \"full_page\",\n  \"capturedAt\": \"2026-10-18T09:05:30.558Z\",\n  \"attachments\": [\n    {\n      \"id\": \"attachment_497e643e-00a9-408f-ac65-5f21c17ab9e3\",\n      \"sha256\": \"3ff0df9598fc0d6bbb436886438ebbf27582c2296b363a3b17a65c3ef117315e\",\n      \"mimeType\": \"image/png\",\n      \"byteLength\": 96599,\n      \"width\": 716,\n      \"height\": 957,\n      \"encryptedPath\": \"C:\\\\Users\\\\13437\\\\AppData\\\\Roaming\\\\@harness\\\\desktop\\\\blobs\\\\3f\\\\3ff0df9598fc0d6bbb436886438ebbf27582c2296b363a3b17a65c3ef117315e.hab\",\n      \"source\": \"browser\",\n      \"trust\": \"untrusted_web\",\n      \"allowedProviders\": [\n        \"openai-compatible\"\n      ],\n      \"createdAt\": \"2026-10-18T09:05:30.563Z\"\n    }\n  ]\n}",
+  "truncated": false
+}

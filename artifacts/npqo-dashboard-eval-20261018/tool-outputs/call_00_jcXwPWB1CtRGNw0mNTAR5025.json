@@ -1,0 +1,13 @@
+{
+  "capturedAt": "2026-10-18T08:58:54.043Z",
+  "callId": "call_00_jcXwPWB1CtRGNw0mNTAR5025",
+  "tool": "terminal",
+  "input": {
+    "command": "cd D:\\npqo\n$existing = Get-NetTCPConnection -LocalPort 5173 -State Listen -ErrorAction SilentlyContinue\nif (-not $existing) { Start-Process -FilePath 'cmd.exe' -ArgumentList '/c','npm run dev > dev-server.log 2>&1' -WindowStyle Hidden }\nStart-Sleep -Seconds 4\nGet-Content dev-server.log -ErrorAction SilentlyContinue\nGet-NetTCPConnection -LocalPort 5173 -State Listen -ErrorAction SilentlyContinue | Select-Object LocalAddress,LocalPort,State",
+    "timeoutMs": 120000
+  },
+  "isError": false,
+  "durationMs": 5779,
+  "text": "{\n  \"exitCode\": 0,\n  \"stdout\": \"\\r\\nLocalAddress LocalPort  State\\r\\n------------ ---------  -----\\r\\n127.0.0.1         5173 Listen\\r\\n\\r\\n\\r\\n\",\n  \"stderr\": \"\",\n  \"truncated\": false,\n  \"timedOut\": false\n}",
+  "truncated": false
+}

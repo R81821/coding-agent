@@ -1,0 +1,14 @@
+{
+  "capturedAt": "2026-10-18T08:58:54.048Z",
+  "callId": "call_00_2HYlaegPXhVF7PhxCVPZ2440",
+  "tool": "browser",
+  "input": {
+    "action": "screenshot",
+    "fullPage": true,
+    "tabId": "17ae7fbb-e072-4ba2-b559-a528bf9c26ee"
+  },
+  "isError": false,
+  "durationMs": 70,
+  "text": "{\n  \"tabId\": \"17ae7fbb-e072-4ba2-b559-a528bf9c26ee\",\n  \"url\": \"http://127.0.0.1:5173/\",\n  \"title\": \"Harness Agent\",\n  \"fullPage\": true,\n  \"mimeType\": \"image/png\",\n  \"width\": 716,\n  \"height\": 957,\n  \"byteLength\": 4053,\n  \"scope\": \"full_page\",\n  \"capturedAt\": \"2026-10-18T08:58:48.198Z\",\n  \"attachments\": [\n    {\n      \"id\": \"attachment_0701ae44-1192-4130-a2ed-ff237fb28f1c\",\n      \"sha256\": \"204cddc0d11e0ecdd68249ae70bca0ea9d57040dcc719098312a30216a7417c6\",\n      \"mimeType\": \"image/png\",\n      \"byteLength\": 4053,\n      \"width\": 716,\n      \"height\": 957,\n      \"encryptedPath\": \"C:\\\\Users\\\\13437\\\\AppData\\\\Roaming\\\\@harness\\\\desktop\\\\blobs\\\\20\\\\204cddc0d11e0ecdd68249ae70bca0ea9d57040dcc719098312a30216a7417c6.hab\",\n      \"source\": \"browser\",\n      \"trust\": \"untrusted_web\",\n      \"allowedProviders\": [\n        \"openai-compatible\"\n      ],\n      \"createdAt\": \"2026-10-18T08:58:48.202Z\"\n    }\n  ]\n}",
+  "truncated": false
+}

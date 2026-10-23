@@ -12,7 +12,7 @@ export interface VerificationDependencies {
   reason?: string;
 }
 
-type DependencyCheck = VerificationItem & { dependencyPaths?: string[] | undefined };
+type DependencyCheck = VerificationItem & { dependencyPaths?: string[] | undefined; generatedArtifactPaths?: string[] | undefined };
 type Token = { kind: "word" | "string" | "punct" | "template"; value: string };
 const sourceExtensions = [".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx", ".mts", ".cts"];
 const builtins = new Set(builtinModules.map(name => name.replace(/^node:/, "")));
@@ -259,7 +259,7 @@ export async function analyzeVerificationDependencies(workspacePath: string, ite
     if (!entryPaths.size) reasons.add("No persisted test entry could be resolved");
     const sortedPaths = [...paths].sort();
     const complete = reasons.size === 0;
-    const execution = { command: item.command, cwd: slash(item.cwd), stdin: item.stdin ?? "", timeoutMs: item.timeoutMs, expectedExitCodes: item.expectedExitCodes, dependencyPaths: item.dependencyPaths ?? [], environment };
+    const execution = { command: item.command, cwd: slash(itemCwd), stdin: item.stdin ?? "", timeoutMs: item.timeoutMs, expectedExitCodes: item.expectedExitCodes, dependencyPaths: item.dependencyPaths ?? [], generatedArtifactPaths: item.generatedArtifactPaths ?? [], environment };
     result[item.id] = {
       paths: sortedPaths,
       complete,

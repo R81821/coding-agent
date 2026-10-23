@@ -1,6 +1,30 @@
 import type { PermissionGrant, RiskLevel } from "@harness/protocol";
 
 const riskRank: Record<RiskLevel, number> = { read: 0, write: 1, high: 2, destructive: 3 };
+const pathInputFields = ["path", "filePath", "cwd"] as const;
+
+/** Automatically approved inputs are literal scopes, including the absence of each field. */
+export function captureExactPathInputs(input: Record<string, unknown>): Exclude<PermissionGrant["exactPathInputs"], undefined> {
+  const values: Record<(typeof pathInputFields)[number], string | null> = { path: null, filePath: null, cwd: null };
+  for (const field of pathInputFields) {
+    if (!Object.hasOwn(input, field)) continue;
+    const value = input[field];
+    // Unsupported path input types remain one-time approvals rather than reusable wildcards.
+    if (typeof value !== "string") return null;
+    values[field] = value;
+  }
+  return values;
+}
+
+/** Shared by the runtime and tools layer; no glob matching or normalization is applied here. */
+export function exactPathInputsMatch(grant: PermissionGrant, input: Record<string, unknown>): boolean {
+  if (grant.exactPathInputs === undefined) return true;
+  if (grant.exactPathInputs === null) return false;
+  return pathInputFields.every(field => {
+    const expected = grant.exactPathInputs![field];
+    return expected === null ? !Object.hasOwn(input, field) : Object.hasOwn(input, field) && input[field] === expected;
+  });
+}
 
 /** Prefix grants cover one simple command; shell programs require an exact grant. */
 export function commandMatchesGrant(command: string, prefix: string): boolean {
@@ -38,6 +62,8 @@ export function grantsAllow(
   const command = typeof input.command === "string" ? input.command.trim() : undefined;
   const url = typeof input.url === "string" ? input.url : undefined;
   for (const grant of relevant) {
+    if (!exactPathInputsMatch(grant, input)) continue;
+    if (grant.exactCommands !== undefined && (typeof input.command !== "string" || !grant.exactCommands.includes(input.command))) continue;
     if (command !== undefined && grant.commandPrefixes.length > 0 && !grant.commandPrefixes.some((prefix) => commandMatchesGrant(command, prefix))) continue;
     if (url !== undefined && grant.networkDomains.length > 0) {
       let host = "";

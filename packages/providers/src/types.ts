@@ -1,4 +1,4 @@
-import type { AgentEvent, AttachmentRef, CacheDiagnostic, ModelDescriptor, ModelRequest, Profile, ReasoningEffort, ToolCall, Usage } from "@harness/protocol";
+import type { AgentEvent, AttachmentRef, CacheDiagnostic, ModelDescriptor, ModelRequest, Profile, PromptBackend, ReasoningEffort, ToolCall, Usage } from "@harness/protocol";
 
 export interface ResolvedAttachment {
   mimeType: string;
@@ -19,6 +19,8 @@ export interface ProviderStreamEvent {
 export interface ModelProvider {
   supportsNonThinkingCompaction?(): boolean;
   readonly id: string;
+  /** Bound when provider configuration is loaded, before any model request. */
+  readonly promptBackend?: PromptBackend;
   listModels(): Promise<ModelDescriptor[]>;
   stream(request: ModelRequest, signal: AbortSignal): AsyncIterable<ProviderStreamEvent>;
   health(signal?: AbortSignal): Promise<boolean>;

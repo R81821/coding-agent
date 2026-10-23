@@ -22,7 +22,8 @@ const patch = (id: string, module: "a" | "b", before: number, after: number) => 
 const cleanup: Array<() => Promise<void>> = [];
 afterEach(async () => { for (const close of cleanup.splice(0).reverse()) await close(); });
 
-async function scenario(mode: "normal" | "forced" | "later-failure") {
+async function scenario(mode: "normal" | "forced" | "later-failure" | "shared-suite" | "shared-forced" | "shared-env") {
+  const integrationCheck = mode.startsWith("shared-") ? bCommand : integrationCommand;
   const directory = await mkdtemp(join(tmpdir(), "harness-verification-cache-engine-"));
   const workspace = join(directory, "repo");
   await mkdir(join(workspace, "test"), { recursive: true });
@@ -68,7 +69,7 @@ async function scenario(mode: "normal" | "forced" | "later-failure") {
           steps: [
             { id: "a", text: "Implement a", priority: 90, dependsOn: [], verification: [check(aCommand)] },
             { id: "b", text: "Implement b", priority: 10, dependsOn: [], verification: [check(bCommand)] },
-          ], integration: [check(integrationCommand)],
+          ], integration: [check(integrationCheck)],
         });
         yield action("select-a", { action: "select_next" });
         phase = "implement-a"; return;
@@ -89,7 +90,8 @@ async function scenario(mode: "normal" | "forced" | "later-failure") {
       if (phase === "repair-a") { yield patch("repair-a", "a", 0, 1); phase = "repaired-local"; return; }
       if (phase === "repaired-local") { yield call("verify-repair", "run_verification", check(aCommand)); phase = "integration"; return; }
       if (phase === "integration") {
-        yield call("verify-integration", "run_verification", { ...check(integrationCommand), stage: "broader" });
+        if (mode === "shared-env") process.env.HARNESS_TEST_POLICY_CACHE = "changed";
+        yield call("verify-integration", "run_verification", { ...check(integrationCheck), stage: "broader", ...(mode === "shared-forced" ? { force: true } : {}) });
         phase = "diff"; return;
       }
       if (phase === "diff") { yield call("current-diff", "workspace_diff", {}); phase = "accept"; return; }
@@ -141,6 +143,30 @@ function measurement(events: AgentEvent[], callId: string) {
 }
 
 describe("verification cache measurement through actual persisted test execution", { timeout: 35000 }, () => {
+  it("reuses one execution across stage references without claiming a new run", async () => {
+    const f = await scenario("shared-suite");
+    expect(f.result.status).toBe("completed");
+    expect(f.commands).toEqual([aCommand, bCommand]);
+    const runs = f.database.listVerificationRuns(f.spec.id);
+    const local = runs.filter(run => run.stage === "local").flatMap(run => run.results).find(result => result.command === bCommand)!;
+    const broader = runs.find(run => run.stage === "broader")!.results[0]!;
+    expect(local.executionId).toBeTruthy();
+    expect(broader.executionId).toBe(local.executionId);
+    expect(broader.reusedFromRunId).toBeTruthy();
+    expect(broader.reusedFromItemId).toBe(local.itemId);
+  });
+  it("reruns a shared suite when force is requested or environment changes", async () => {
+    const original = process.env.HARNESS_TEST_POLICY_CACHE;
+    try {
+      for (const mode of ["shared-forced", "shared-env"] as const) {
+        delete process.env.HARNESS_TEST_POLICY_CACHE;
+        const f = await scenario(mode);
+        expect(f.result.status).toBe("completed");
+        expect(f.commands).toEqual([aCommand, bCommand, bCommand]);
+      }
+    } finally { if (original === undefined) delete process.env.HARNESS_TEST_POLICY_CACHE; else process.env.HARNESS_TEST_POLICY_CACHE = original; }
+  });
+
   it("persists explicit execution misses and unchanged dependency receipt hits with provenance", async () => {
     const f = await scenario("normal");
     expect(f.result.status, JSON.stringify(f.result)).toBe("completed");

@@ -239,7 +239,8 @@ describe("ordinary next-message engine continuity", () => {
       const main = requests.filter(request => request.purpose === "main");
       expect(main).toHaveLength(3);
       expect(render(main[2]!.messages)).toMatch(/human request 0[\s\S]*answer for run-0[\s\S]*human request 1[\s\S]*answer for run-1[\s\S]*human request 2/);
-      expect(main[2]!.messages.filter(message => message.role === "system")).toHaveLength(1);
+      expect(main[2]!.messages.filter(message => message.role === "system")).toEqual(main[0]!.messages.filter(message => message.role === "system"));
+      expect(main[2]!.messages.filter(message => message.role === "developer")).toHaveLength(1);
       expect(render(main[2]!.messages)).not.toContain("Runtime recovery: continue the original task");
       expect(render(main[2]!.messages).match(/Trusted runtime context \(approved plan and permission snapshot\):/g)).toHaveLength(1);
       expect(main[2]!.messages.filter(message => message.role === "user").flatMap(message => message.content).flatMap(part => part.type === "text" && part.trust === "user_request" && part.text.startsWith("human request") ? [part.text] : [])).toEqual(["human request 0", "human request 1", "human request 2"]);

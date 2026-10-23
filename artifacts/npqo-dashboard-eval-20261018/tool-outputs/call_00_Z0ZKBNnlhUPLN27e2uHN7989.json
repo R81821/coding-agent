@@ -1,0 +1,14 @@
+{
+  "capturedAt": "2026-10-18T08:59:39.138Z",
+  "callId": "call_00_Z0ZKBNnlhUPLN27e2uHN7989",
+  "tool": "browser",
+  "input": {
+    "action": "navigate",
+    "tabId": "17ae7fbb-e072-4ba2-b559-a528bf9c26ee",
+    "url": "http://127.0.0.1:5180/"
+  },
+  "isError": false,
+  "durationMs": 396,
+  "text": "{\n  \"tabId\": \"17ae7fbb-e072-4ba2-b559-a528bf9c26ee\",\n  \"url\": \"http://127.0.0.1:5180/\",\n  \"title\": \"GROKBOT + JEV // trading desk\",\n  \"success\": true\n}",
+  "truncated": false
+}

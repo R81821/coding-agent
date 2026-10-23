@@ -846,6 +846,11 @@ export class HarnessDatabase {
     return { session, runs, withdrawnEvents: this.withdrawnEvents(id), hasMore: rows.length > limit, ...(first ? { before: { createdAt: first.spec.createdAt, id: first.spec.id } } : {}) };
   }
 
+  /** Visibility check without decrypting the session's message history. */
+  getVisibleSession(id: string): SessionRecord | undefined {
+    return this.visibleSession(id);
+  }
+
   private visibleSession(id: string): SessionRecord | undefined {
     const session = this.get<SessionRecord>("sessions", id);
     if (!session || session.deletedAt) return;

@@ -1,0 +1,13 @@
+{
+  "capturedAt": "2026-10-18T09:07:10.009Z",
+  "callId": "call_00_WtnhATRKhnWUrNA2CciM5346",
+  "tool": "terminal",
+  "input": {
+    "command": "cd D:\\npqo\n@'\nnode_modules/\ndist/\ndev-server.log\n*.log\n.DS_Store\n'@ | Set-Content -Encoding ascii .gitignore\n$listener = Get-NetTCPConnection -LocalPort 5180 -State Listen -ErrorAction SilentlyContinue\nif ($listener) { Stop-Process -Id $listener.OwningProcess -Force -ErrorAction SilentlyContinue }\nRemove-Item dev-server.log -Force -ErrorAction SilentlyContinue\nRemove-Item dist -Recurse -Force -ErrorAction SilentlyContinue\nGet-ChildItem screenshots | Select-Object Name,Length\n$report = Get-Content screenshots\\verification.json -Raw | ConvertFrom-Json\n$report.viewports | Format-Table viewport,columns,room,cards,candleBodies,scrollWidth,clientWidth,screenshotBytes\n$report.interactions | Select-Object beforeHold,heldTick,heldTickAfterWait,steppedTick,resumedTick,tooltip,mode\nGet-ChildItem src,scripts | Select-Object Name,Length",
+    "timeoutMs": 120000
+  },
+  "isError": false,
+  "durationMs": 1444,
+  "text": "{\n  \"exitCode\": 0,\n  \"stdout\": \"\\r\\nName                  Length\\r\\n----                  ------\\r\\ndashboard-1024.png    591852\\r\\ndashboard-1440.png    736991\\r\\ndashboard-390.png     342536\\r\\nequity-hover-1440.png  95899\\r\\npixel-room-1440.png   345276\\r\\nverification.json       1278\\r\\n\\r\\n\\r\\n\\r\\nviewport  columns room     cards candleBodies scrollWidth clientWidth screenshotBytes\\r\\n--------  ------- ----     ----- ------------ ----------- ----------- ---------------\\r\\n1440x1000       4 1372x686     8           30        1440        1440          736991\\r\\n1024x900        2 975x455      8           30        1024        1024          591852\\r\\n390x844         1 368x300      8           30         390         390          342536\\r\\n\\r\\n\\r\\n\\r\\n\\r\\nbeforeHold        : 0\\r\\nheldTick          : 0\\r\\nheldTickAfterWait : 0\\r\\nsteppedTick       : 1\\r\\nresumedTick       : 2\\r\\ntooltip           : DAY 11 / TICK 0-27 $71,914.80\\r\\nmode              : save\\r\\n\\r\\nName   : components\\r\\nLength : \\r\\n\\r\\nName   : data\\r\\nLength : \\r\\n\\r\\nName   : test\\r\\nLength : \\r\\n\\r\\nName   : App.test.tsx\\r\\nLength : 5139\\r\\n\\r\\nName   : App.tsx\\r\\nLength : 2386\\r\\n\\r\\nName   : main.tsx\\r\\nLength : 631\\r\\n\\r\\nName   : styles.css\\r\\nLength : 40634\\r\\n\\r\\nName   : screenshots.mjs\\r\\nLength : 11494\\r\\n\\r\\n\\r\\n\\r\\n\",\n  \"stderr\": \"\",\n  \"truncated\": false,\n  \"timedOut\": false\n}",
+  "truncated": false
+}

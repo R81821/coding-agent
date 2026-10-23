@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import { dispatchMcp, isMcpRequest } from "./mcp-rpc.js";
 import { watchParentLifetime } from "./parent-lifetime.js";
 import { ingestUploadedAttachment, sniffImage } from "./attachment-ingest.js";
+import { readAttachmentPreview } from "./attachment-preview.js";
 import { validateFileAttachment } from "@harness/providers";
 import { createRuntime, profileFor, validateSessionRunStart, type HarnessRuntime } from "@harness/core";
 import { FeishuConnector, PairingService, TelegramConnector, type MessageConnector, type RemoteMessage } from "@harness/extensions";
@@ -114,7 +115,7 @@ async function dispatch(request: DaemonRequest, target: HarnessRuntime): Promise
   if (isMcpRequest(request)) return dispatchMcp(request, target);
   switch (request.method) {
     case "health":
-      return { status: "ok", version: "1.4.51", activeRuns: "available", providerIds: target.providerIds, connectors: [...connectors.keys()] };
+      return { status: "ok", version: "1.4.52", activeRuns: "available", providerIds: target.providerIds, connectors: [...connectors.keys()] };
     case "model.current":
       return target.currentModel(request.params.profileId, request.params.needsVision);
     case "session.reasoning":
@@ -217,7 +218,7 @@ async function dispatch(request: DaemonRequest, target: HarnessRuntime): Promise
     case "checkpoints.get":
       return target.database.listCheckpoints(request.params.runId, request.params.limit);
     case "approval.decide":
-      return target.engine.approvals.decide(request.params.approvalId, request.params.approved, request.params.actor);
+      return target.engine.approvals.decideIfPending(request.params.approvalId, request.params.approved, request.params.actor);
     case "approvals.list":
       return target.database.listApprovals();
     case "tasks.list":
@@ -319,6 +320,8 @@ async function dispatch(request: DaemonRequest, target: HarnessRuntime): Promise
       return target.projectTrust.inspect(request.params.workspacePath);
     case "project.trust":
       return target.projectTrust.trust(request.params.workspacePath, request.params.files);
+    case "project.migrate":
+      return target.projectTrust.migrate(request.params.workspacePath, request.params.expectedSha256);
     case "project.scaffold":
       return target.projectTrust.scaffold(request.params.workspacePath);
     case "connectors.pairing":
@@ -326,6 +329,9 @@ async function dispatch(request: DaemonRequest, target: HarnessRuntime): Promise
       return { connector: request.params.connector, code: pairing.create(request.params.connector), expiresInSeconds: 600 };
     case "attachment.put": {
       return ingestUploadedAttachment(request.params, target, validateFileAttachment);
+    }
+    case "attachment.preview": {
+      return readAttachmentPreview(request.params, target);
     }
   }
 }

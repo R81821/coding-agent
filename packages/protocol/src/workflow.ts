@@ -23,6 +23,7 @@ export const RequirementEvidenceSchema = RequirementReceiptSchema.extend({
 });
 const pendingCheck = { status: "pending" as const, revision: -1, epoch: "legacy", runId: "", reason: "" };
 export const StepVerificationSchema = z.object({
+  generatedArtifactPaths: z.array(z.string().trim().min(1).max(500)).max(100).optional(),
   dependencyPaths: z.array(z.string().trim().min(1).max(500)).max(100).optional(),
   command: z.string().trim().min(1).max(10000), cwd: z.string().default("."),
   timeoutMs: z.number().int().min(1).max(3600000).default(120000), stdin: z.string().max(1_000_000).optional(),
@@ -64,6 +65,7 @@ export const SequentialWorkflowSchema = z.object({
   integration: z.array(StepVerificationSchema).max(8).default([]),
 });
 export const WorkflowStateSchema = z.object({
+  behaviorPolicyVersion: z.union([z.literal(1), z.literal(2)]).optional(),
   sequential: SequentialWorkflowSchema.optional(),
   taskMode: z.enum(["auto", "analysis", "change"]).optional(),
   effect: z.enum(["read", "probe", "repository_write", "unknown"]).optional(),
@@ -85,7 +87,7 @@ export const WorkflowStateSchema = z.object({
   context: z.string(),
   plan: z.array(z.string()),
   hypotheses: z.array(z.object({ alternatives: z.array(z.string()).optional(), experiment: z.object({ question: z.string(), expectedResults: z.array(z.string()), observationIds: z.array(z.string()) }).optional(), cause: z.string(), evidenceIds: z.array(z.string()), revision: z.number() })),
-  verification: z.array(z.object({ stage: z.enum(["local", "broader"]), command: z.string(), cwd: z.string(), timeoutMs: z.number(), stdin: z.string().optional() })).default([]),
+  verification: z.array(z.object({ stage: z.enum(["local", "broader"]), command: z.string(), cwd: z.string(), timeoutMs: z.number(), stdin: z.string().optional(), dependencyPaths: z.array(z.string()).optional(), generatedArtifactPaths: z.array(z.string()).optional() })).default([]),
   observations: z.array(z.object({ complete: z.boolean().default(true), codeFingerprint: z.string().optional(), sequence: z.number().default(0), epoch: z.string().default("legacy"), failureId: z.string().default(""), digest: z.string().default(""), kind: z.enum(["tool", "verification", "failure"]).default("tool"), id: z.string(), tool: z.string(), target: z.string(), summary: z.string(), failed: z.boolean(), revision: z.number() })),
   relevantFiles: z.array(z.string()),
   changedFiles: z.array(z.string()),

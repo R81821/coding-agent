@@ -6,17 +6,20 @@ import { runProcess } from "@harness/tools";
 
 export interface WorkspaceSnapshot { files: Record<string, string>; complete: boolean; scanned: number; skipped: number; truncated: boolean }
 export interface ExecutionEffect { kind: "read" | "probe" | "repository_write" | "unknown"; changedFiles: string[] }
-const excluded = new Set([".git", "node_modules", ".cache", ".pnpm-store", ".harness-agent", "dist", "build", "release", ".venv"]);
+export const workspaceSnapshotExcludedDirectories = [".git", "node_modules", ".cache", ".pnpm-store", ".harness-agent", "dist", "build", "release", ".venv"] as const;
+const excluded = new Set<string>(workspaceSnapshotExcludedDirectories);
 export async function snapshotWorkspace(root: string, signal = new AbortController().signal): Promise<WorkspaceSnapshot> {
-  const snapshot: WorkspaceSnapshot = { files: {}, complete: true, scanned: 0, skipped: 0, truncated: false };
+  const snapshot: WorkspaceSnapshot = { files: Object.create(null) as Record<string, string>, complete: true, scanned: 0, skipped: 0, truncated: false };
   let paths: string[] = [];
   try {
-    const git = await runProcess("git", ["ls-files", "-c", "-o", "--exclude-standard", "-z"], { cwd: root, signal, timeoutMs: 10000, maxOutputBytes: 4_000_000 });
-    if (git.exitCode === 0 && !git.truncated) paths = [...new Set(git.stdout.split("\0").filter(Boolean))];
+    let git;
+    try { git = await runProcess("git", ["ls-files", "-c", "-o", "--exclude-standard", "-z"], { cwd: root, signal, timeoutMs: 10000, maxOutputBytes: 4_000_000 }); }
+    catch { signal.throwIfAborted(); }
+    if (git?.exitCode === 0 && !git.truncated) paths = [...new Set(git.stdout.split("\0").filter(Boolean))];
     else {
       const walk = async (directory: string, prefix = "") => {
         for (const entry of await readdir(directory, { withFileTypes: true })) {
-          if (excluded.has(entry.name)) continue;
+          if (entry.isDirectory() && excluded.has(entry.name)) continue;
           const path = prefix + entry.name;
           if (paths.length >= 20000) { snapshot.complete = false; snapshot.truncated = true; return; }
           if (entry.isDirectory()) await walk(join(directory, entry.name), path + "/");
@@ -37,7 +40,7 @@ export async function snapshotWorkspace(root: string, signal = new AbortControll
         const hash = createHash("sha256");
         for await (const chunk of createReadStream(absolute, { signal })) hash.update(chunk);
         snapshot.files[path.replaceAll("\\", "/")] = hash.digest("hex");
-      } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") { snapshot.complete = false; snapshot.skipped++; } }
+      } catch { signal.throwIfAborted(); snapshot.complete = false; snapshot.skipped++; }
     }
   } catch { signal.throwIfAborted(); snapshot.complete = false; }
   return snapshot;

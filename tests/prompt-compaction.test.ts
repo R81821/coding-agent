@@ -25,6 +25,7 @@ function estimatedInput(request: ModelRequest): number {
 async function fixture(options: {
   capacity?: number; modelOutput?: number | undefined; workingContext?: number; recordCharacters?: number; recordCount?: number;
   historicalPrefix?: ModelMessage[];
+  compactionMaxOutputTokens?: number;
   summary?: (request: ModelRequest, turn: number) => string;
 }) {
   const capacity = options.capacity ?? 1_000_000;
@@ -55,6 +56,7 @@ async function fixture(options: {
     resumeTranscript: [{ role: "user", content: [{ type: "text", trust: "user_request", text: userRequest }] }, ...records],
     contracts: [], resolveTool: () => undefined, externalSignal: new AbortController().signal,
     maxOutputTokens: 200, parallelToolCalls: false,
+    ...(options.compactionMaxOutputTokens === undefined ? {} : { compactionMaxOutputTokens: options.compactionMaxOutputTokens }),
     contextPolicy: { compactAtRatio: .8, maxAfterCompactionRatio: .45, retainRecentTurns: 1,
       ...(options.workingContext === undefined ? {} : { workingContextTokens: options.workingContext }) },
     beforeToolCall: async () => ({}), executeTool: async () => ({ output: null }), shouldStopAfterTurn: () => false,
@@ -129,6 +131,14 @@ describe("prompt-led history summaries", () => {
     expect(result.errorMessage).toBeUndefined();
     expect(summaries).toHaveLength(1);
     expect(summaries[0]!.maxOutputTokens).toBe(4_096);
+  });
+
+  it("passes the explicit compaction ceiling independently of the main request ceiling", async () => {
+    const { result, summaries, requests } = await fixture({ workingContext: 128_000, compactionMaxOutputTokens: 12_000 });
+    expect(result.errorMessage).toBeUndefined();
+    expect(summaries).toHaveLength(1);
+    expect(summaries[0]!.maxOutputTokens).toBe(12_000);
+    expect(requests.filter(request => request.purpose === "main").every(request => request.maxOutputTokens === 200)).toBe(true);
   });
 
   it("summarizes full historical error evidence and preserves its identity alongside model facts", async () => {

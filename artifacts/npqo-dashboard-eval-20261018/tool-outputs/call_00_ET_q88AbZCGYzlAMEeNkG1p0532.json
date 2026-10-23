@@ -1,0 +1,12 @@
+{
+  "capturedAt": "2026-10-18T08:46:53.634Z",
+  "callId": "call_00_ET_q88AbZCGYzlAMEeNkG1p0532",
+  "tool": "terminal",
+  "input": {
+    "command": "cd D:\\npqo; Get-ChildItem -Force | Select-Object Mode,Length,Name"
+  },
+  "isError": false,
+  "durationMs": 695,
+  "text": "{\n  \"exitCode\": 0,\n  \"stdout\": \"\\r\\nMode   Length Name     \\r\\n----   ------ ----     \\r\\n-a----   1306 AGENTS.md\\r\\n\\r\\n\\r\\n\",\n  \"stderr\": \"\",\n  \"truncated\": false,\n  \"timedOut\": false\n}",
+  "truncated": false
+}

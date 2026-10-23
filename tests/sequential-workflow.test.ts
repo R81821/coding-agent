@@ -35,8 +35,8 @@ function accept(w: SequentialWorkflow, overrides: Record<string, unknown> = {}) 
 }
 
 describe("sequential implementation gates", () => {
-  it("requires understanding, current repository evidence, architecture and a plan before writes", () => {
-    const w = new SequentialWorkflow("Implement", () => {});
+  it("preserves version 1 preparation and graph gates for rollback", () => {
+    const w = new SequentialWorkflow("Implement", () => {}, undefined, {}, "auto", 1);
     expect(w.before({ id: "write", name: "patch", input: {} }, writer)).toContain("workflow_preparation_required");
     expect(w.needsChange).toBe(true);
     inspect(w, "too-early");

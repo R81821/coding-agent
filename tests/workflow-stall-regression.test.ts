@@ -111,12 +111,15 @@ describe("non-Git workspace review", () => {
       ]) } });
     } finally { vault.dispose(); }
   }));
-  it("does not certify missing historical coverage or oversized changed text", () => fixture(async root => {
+  it("does not certify missing historical coverage and fully includes source above the old 64KB limit", () => fixture(async root => {
     const missing = new WorkspaceDiff(root, undefined, undefined, true);
     expect(await missing.tool().execute({}, context(root))).toMatchObject({ truncated: true, output: { code: "baseline_history_missing" } });
     const bounded = new WorkspaceDiff(root); await bounded.prepare(context(root).signal);
     await writeFile(join(root, "large.txt"), "x".repeat(65000));
-    expect(await bounded.tool().execute({}, context(root))).toMatchObject({ truncated: true, output: { files: [expect.objectContaining({ complete: false })] } });
+    const result = await bounded.tool().execute({}, context(root));
+    expect(result).toMatchObject({ truncated: false, output: { complete: true } });
+    const files = (result.output as { files: Array<{ diff: string }> }).files;
+    expect(files.map(file => file.diff).join("")).toContain("x".repeat(65000));
   }));
   it("delegates staged and untracked Git changes to the existing implementation", () => fixture(async root => {
     await runProcess("git", ["init", "-q"], { cwd: root, signal: context(root).signal, timeoutMs: 10000 });

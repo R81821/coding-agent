@@ -129,6 +129,17 @@ describe("verification dependency analysis", () => {
     expect(canReuseVerificationDependencies(before, await analyze(root, undefined, ["data/*.json"]))).toBe(false);
   });
 
+  it("invalidates a saved receipt when the generated artifact contract changes", async () => {
+    const root = await fixture(isolated);
+    const item = VerificationItemSchema.parse({ id: "a", command: "node --test tests/a.test.mjs" });
+    const state = await snapshot(root);
+    const first = (await analyzeVerificationDependencies(root, [{ ...item, generatedArtifactPaths: ["screenshots/first.png"] }], state)).a!;
+    const second = (await analyzeVerificationDependencies(root, [{ ...item, generatedArtifactPaths: ["screenshots/second.png"] }], state)).a!;
+    expect(first.complete).toBe(true);
+    expect(second.complete).toBe(true);
+    expect(canReuseVerificationDependencies(first, second)).toBe(false);
+  });
+
   it.each(["package.json", "pnpm-lock.yaml", "tsconfig.json", "vite.config.ts", "vitest.config.ts", ".env.test"])("detects creation and deletion of global configuration %s", async path => {
     const root = await fixture(isolated);
     const before = await analyze(root);

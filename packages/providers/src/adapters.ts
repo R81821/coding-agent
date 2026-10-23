@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
-import { canonicalJson, stableTools, cacheUsage } from "@harness/protocol";
-import type { ModelDescriptor, ModelMessage, ModelRequest } from "@harness/protocol";
+import { canonicalJson, stableTools, cacheUsage, resolvePromptBackend } from "@harness/protocol";
+import type { ModelDescriptor, ModelMessage, ModelRequest, PromptBackend, PromptBackendSelection } from "@harness/protocol";
 import { authHeaders, parseSse } from "./http.js";
 import type { AttachmentResolver, ModelProvider, ProviderStreamEvent } from "./types.js";
 import { normalizeToolMessageSequence } from "./tool-history.js";
@@ -17,6 +17,7 @@ export type ApiProtocol = "chat_completions" | "responses";
 
 export interface AdapterConfig {
   apiProtocol?: ApiProtocol;
+  promptBackend?: PromptBackendSelection;
   id: string;
   apiKey: string;
   baseUrl: string;
@@ -27,6 +28,7 @@ export interface AdapterConfig {
 
 abstract class HttpProvider implements ModelProvider {
   readonly id: string;
+  readonly promptBackend: PromptBackend;
   protected readonly config: AdapterConfig;
   protected readonly apiKey: string;
   protected readonly baseUrl: string;
@@ -38,6 +40,7 @@ abstract class HttpProvider implements ModelProvider {
   constructor(config: AdapterConfig) {
     this.config = config;
     this.id = config.id;
+    this.promptBackend = resolvePromptBackend(config.baseUrl, config.promptBackend);
     this.apiKey = config.apiKey;
     this.baseUrl = config.baseUrl.replace(/\/$/, "");
     this.models = config.models;

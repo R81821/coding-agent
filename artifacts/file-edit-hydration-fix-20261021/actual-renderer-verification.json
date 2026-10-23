@@ -1,0 +1,15 @@
+{
+  "checks": [
+    "actual-record production renderer ready",
+    "actual saved write row is loaded from the event page",
+    "actual saved receipt restores its confirmed panel after JSON paging"
+  ],
+  "path": "server/marketData.ts",
+  "byteLength": 9830,
+  "added": 315,
+  "deleted": 0,
+  "outputPages": 22,
+  "screenshot": "actual-marketData-restored.png",
+  "isolated": true,
+  "databaseModified": false
+}

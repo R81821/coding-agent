@@ -58,6 +58,8 @@ import { ConversationTaskQueue } from "./components/ConversationTaskQueue.js";
 import { SessionCacheStats } from "./components/SessionCacheStats.js";
 import { RunStopCard } from "./components/RunStopCard.js";
 import { FinalReportStatus } from "./components/FinalReportStatus.js";
+import { SentAttachments } from "./components/SentAttachments.js";
+import { approvalDecisionNotice, createApprovalActionGuard } from "./approval-actions.js";
 import { McpView } from "./components/McpView.js";
 import { McpInteractions } from "./components/McpInteractions.js";
 import { groupSessionsByProject, isLiveRun, latestConversationRun, eligibleWithdrawalRun, mergeRunEvents, mergeSessionPages, runStatusLabel, createSessionTurnSelector, workspaceKey, type SessionTurn } from "./run-history.js";
@@ -270,6 +272,12 @@ function App() {
   const [recycleVersion, setRecycleVersion] = useState(0);
   const [busy, setBusy] = useState(false);
   const [approvalPrompt, setApprovalPrompt] = useState<ApprovalPrompt>();
+  const [approvalGuard] = useState(createApprovalActionGuard);
+  const [approvalBusy, setApprovalBusy] = useState(false);
+  const [approvalNotice, setApprovalNotice] = useState("");
+  useEffect(() => {
+    setApprovalPrompt(current => current?.kind === "tool" && approvals.some(approval => approval.id === current.approval.id && approval.status !== "pending") ? undefined : current);
+  }, [approvals]);
   const [capture, setCapture] = useState<{
     dataUrl: string;
     width: number;
@@ -393,6 +401,7 @@ function App() {
 
   const workspaceRef = useRef(workspace); workspaceRef.current = workspace;
   const refresh = useCallback(async () => {
+    const approvalVersion = approvalGuard.version;
     viewCache.current.clear();
     const path = workspaceRef.current;
     const [nextProfiles, nextTasks, nextApprovals, nextMemories, nextPlugins] =
@@ -405,12 +414,12 @@ function App() {
       ]);
     setProfiles(nextProfiles);
     setTasks(nextTasks);
-    setApprovals(nextApprovals);
+    if (approvalGuard.isCurrent(approvalVersion)) setApprovals(nextApprovals);
     setMemories(nextMemories);
     setPlugins(nextPlugins);
     const nextSkills = await window.harness.request<DesktopSkill[]>({ method: "skills.list", ...(path ? { params: { workspacePath: path } } : {}) });
     if (workspaceRef.current === path) setSkills(nextSkills);
-  }, []);
+  }, [approvalGuard]);
 
   useEffect(() => {
     if (!unlocked) return;
@@ -453,7 +462,7 @@ function App() {
    * Trust stays a separate, explicit confirmation: the file is written first and reviewed after.
    */
   async function reviewProjectInstructions(workspacePath: string, token: number) {
-    type Inspection = { files: Array<{ path: string; sha256: string; content: string }>; trusted: boolean; changed: boolean };
+    type Inspection = { files: Array<{ path: string; sha256: string; content: string }>; trusted: boolean; changed: boolean; migration?: { fromSha256: string; content: string } };
     const inspect = () => window.harness.request<Inspection>({ method: "project.inspect", params: { workspacePath } });
     let inspection = await inspect();
     if (token !== viewVersion.current) return;
@@ -467,6 +476,13 @@ function App() {
       }
       if (token !== viewVersion.current) return;
       inspection = await inspect();
+    }
+    if (inspection.migration && window.confirm(`检测到旧版自动生成的项目规范，其中测试要求适用于所有任务。可更新为按实际改动验证，并保留托管记忆。更新后仍需重新信任。\n\n更新后的完整内容：\n${inspection.migration.content}\n\n应用此更新吗？`)) {
+      try {
+        await window.harness.request({ method: "project.migrate", params: { workspacePath, expectedSha256: inspection.migration.fromSha256 } });
+        if (token !== viewVersion.current) return;
+        inspection = await inspect();
+      } catch (error) { setHistoryError(`项目规范更新失败：${error instanceof Error ? error.message : String(error)}`); return; }
     }
     if (!inspection.files.length || (inspection.trusted && !inspection.changed)) return;
     if (token !== viewVersion.current) return;
@@ -613,6 +629,10 @@ function App() {
     // A paused task accepts the new user turn and resumes with it. Keep the same transcript,
     // workspace baseline and permissions throughout the conversation.
     if (activeRun && (isLiveRun(activeRunStatus ?? "queued") || activeRunStatus === "paused")) {
+      if (attachments.length) {
+        setAttachmentError("当前任务的追加消息暂不支持附件。文字和图片已保留，请在任务结束后发送，或新建会话发送图片。");
+        return;
+      }
       await steerRun(prompt);
       return;
     }
@@ -791,10 +811,22 @@ function App() {
   /** Ask the active run to stop at its next turn boundary. It stays resumable, unlike cancel. */
   async function pauseRun() {
     if (!activeRun || pendingWithdrawal.current?.sessionId === activeSessionId) return;
+    if (!approvalGuard.begin()) return;
+    const runId = activeRun;
+    setApprovalBusy(true);
+    setApprovalNotice("");
     try {
-      const result = await window.harness.request<{ pausing: boolean }>({ method: "run.pause", params: { runId: activeRun } });
-      if (!result.pausing) setPausedRun(undefined);
+      const result = await window.harness.request<{ pausing: boolean }>({ method: "run.pause", params: { runId } });
+      if (result.pausing) {
+        setApprovalPrompt(current => (current?.kind === "tool" ? current.approval.runId : current?.plan.runId) === runId ? undefined : current);
+        setApprovalNotice("已请求暂停，待审批请求会保留。");
+        try {
+          const latest = await window.harness.request<ApprovalRequest[]>({ method: "approvals.list" });
+          setApprovals(latest);
+        } catch { setApprovalNotice("已请求暂停，审批列表暂时无法刷新。"); }
+      } else setPausedRun(undefined);
     } catch (error) { setHistoryError(`无法暂停：${error instanceof Error ? error.message : String(error)}`); }
+    finally { approvalGuard.end(); setApprovalBusy(false); }
   }
 
   async function continueTask(runId: string, note: string) {
@@ -828,6 +860,7 @@ function App() {
     setBusy(true);
     setPausedRun(undefined);
     setActiveRun(runId);
+    setApprovalNotice("");
     try {
       await window.harness.request({ method: "run.resume", params: { runId } });
       // The engine accepted the resume, so the run is working again. Reflect that immediately instead
@@ -1003,6 +1036,7 @@ function App() {
       return promptRunId === runId ? undefined : current;
     });
     while (!finished && viewToken === viewVersion.current) {
+      const approvalVersion = approvalGuard.version;
       const page = await window.harness.request<RunEventPage>({ method: "run.eventPage", params: { limit: 100, runId, afterSequence: sequence } });
       if (viewToken !== viewVersion.current) return;
       setEvents(current => mergeRunEvents(current, page.events, runId));
@@ -1011,44 +1045,57 @@ function App() {
       lastStatus = page.status;
       finished = !page.hasMore && !isLiveRun(page.status);
       const stored = { status: page.status };
-      if (stored?.status === "waiting_approval") {
+      if (approvalGuard.isCurrent(approvalVersion) && stored?.status === "waiting_approval") {
         const pendingPlan = await window.harness.request<PlanSpec | undefined>({ method: "plan.get", params: { runId } });
         if (viewToken !== viewVersion.current) return;
-        if (pendingPlan?.status === "awaiting_approval") setApprovalPrompt({ kind: "plan", plan: pendingPlan });
+        if (!approvalGuard.isCurrent(approvalVersion)) { /* An action invalidated this pending snapshot. */ }
+        else if (pendingPlan?.status === "awaiting_approval") setApprovalPrompt({ kind: "plan", plan: pendingPlan });
         else {
           const nextApprovals = await window.harness.request<ApprovalRequest[]>({ method: "approvals.list" });
           if (viewToken !== viewVersion.current) return;
-          setApprovals(nextApprovals);
-          const pending = nextApprovals.find((approval) => approval.runId === runId && approval.status === "pending");
-          if (pending) setApprovalPrompt({ kind: "tool", approval: pending });
-          else clearRunApprovalPrompt();
+          if (approvalGuard.isCurrent(approvalVersion)) {
+            setApprovals(nextApprovals);
+            const pending = nextApprovals.find((approval) => approval.runId === runId && approval.status === "pending");
+            if (pending) setApprovalPrompt({ kind: "tool", approval: pending });
+            else clearRunApprovalPrompt();
+          }
         }
-      } else clearRunApprovalPrompt();
+      } else if (approvalGuard.isCurrent(approvalVersion)) clearRunApprovalPrompt();
       if (!finished && !page.hasMore) await delay(500);
     }
     return lastStatus;
   }
 
   async function decideApproval(approvalId: string, approved: boolean) {
-    await window.harness.request({
-      method: "approval.decide",
-      params: { approvalId, approved, actor: "desktop:user" },
-    });
-    setApprovalPrompt((current) =>
-      current?.kind === "tool" && current.approval.id === approvalId
-        ? undefined
-        : current,
-    );
-    await refresh();
+    if (!approvalGuard.begin()) return;
+    setApprovalBusy(true);
+    setApprovalNotice("");
+    try {
+      const latest = await window.harness.request<ApprovalRequest[]>({ method: "approvals.list" });
+      setApprovals(latest);
+      const pending = latest.find(approval => approval.id === approvalId);
+      if (!pending) throw new Error("审批不存在，请刷新审批列表。");
+      const actual = pending.status === "pending" ? await window.harness.request<ApprovalRequest>({
+        method: "approval.decide", params: { approvalId, approved, actor: "desktop:user" },
+      }) : pending;
+      setApprovals(current => [...current.filter(approval => approval.id !== actual.id), actual]);
+      const remainsPaused = pausedRun === actual.runId || sessionDetail?.runs.some(run => run.spec.id === actual.runId && run.status === "paused");
+      setApprovalNotice(remainsPaused && actual.status === "approved" && approved ? "审批已保存；任务仍处于暂停状态，继续后才会执行。" : approvalDecisionNotice(actual, approved));
+      if (actual.status !== "pending") setApprovalPrompt(current => current?.kind === "tool" && current.approval.id === approvalId ? undefined : current);
+    } catch (error) {
+      const message = `无法处理审批：${error instanceof Error ? error.message : String(error)}`;
+      setApprovalNotice(message);
+      throw new Error(message);
+    } finally { approvalGuard.end(); setApprovalBusy(false); }
   }
 
   async function decidePlan(plan: PlanSpec, approved: boolean, feedback?: string) {
-    await window.harness.request({ method: "plan.decide", params: { planId: plan.id, version: plan.version, approved, actor: "desktop:user", ...(feedback ? { feedback } : {}) } });
-    setApprovalPrompt((current) =>
-      current?.kind === "plan" && current.plan.id === plan.id
-        ? undefined
-        : current,
-    );
+    if (!approvalGuard.begin()) return;
+    setApprovalBusy(true);
+    try {
+      await window.harness.request({ method: "plan.decide", params: { planId: plan.id, version: plan.version, approved, actor: "desktop:user", ...(feedback ? { feedback } : {}) } });
+      setApprovalPrompt(current => current?.kind === "plan" && current.plan.id === plan.id ? undefined : current);
+    } finally { approvalGuard.end(); setApprovalBusy(false); }
   }
 
   async function pluginAction(method: "plugins.install" | "plugins.trust" | "plugins.enable" | "plugins.disable", params: Record<string, unknown>) {
@@ -1293,6 +1340,7 @@ function App() {
           })}
           {historyLoading && <p className="sidebar-hint">正在加载历史记录…</p>}
           {historyError && <p className="sidebar-hint history-error" role="alert">{historyError}</p>}
+          {approvalNotice && <p className="sidebar-hint" role="alert" data-approval-notice>{approvalNotice}</p>}
           {historyError && <BuiButton variant="ghost" size="sm" disabled={historyLoading} onClick={() => void refreshHistory()}>重试加载</BuiButton>}
           {sessionPage.hasMore && <BuiButton variant="ghost" size="sm" disabled={busy || historyLoading} onClick={() => void refreshHistory(true)}>加载更早的会话</BuiButton>}
         </section>
@@ -1302,7 +1350,7 @@ function App() {
         </details>
         </div>
         <div className="sidebar-foot">
-          <BuiButton variant="ghost" onClick={() => setTab("settings")} className="sidebar-settings"><Settings size={17} /><span>设置</span><small>v1.4.51</small></BuiButton>
+          <BuiButton variant="ghost" onClick={() => setTab("settings")} className="sidebar-settings"><Settings size={17} /><span>设置</span><small>v1.4.52</small></BuiButton>
           <div className="sidebar-connection"><span className="status-dot" />本地运行时已解锁</div>
         </div>
       </aside>
@@ -1381,6 +1429,7 @@ function App() {
               {...(activeRun ? { runId: activeRun } : {})}
               paused={Boolean(pausedRun) || activeRunStatus === "paused"}
               canPause={canPauseRun}
+              runControlBusy={approvalBusy}
               onPause={pauseRun}
               onResume={resumeRun}
               {...(withdrawableRun && (!withdrawalSessionId || withdrawing) ? { withdrawableRunId: withdrawableRun.spec.id } : {})}
@@ -1403,9 +1452,9 @@ function App() {
           )}
           {tab === "changes" && <SessionChanges key={activeSessionId ?? "none"} sessionId={activeSessionId} />}
           {tab === "approvals" && (
-            <ApprovalsView approvals={approvals} decide={decideApproval} />
+            <ApprovalsView approvals={approvals} decide={decideApproval} busy={approvalBusy} />
           )}
-          {tab === "plan" && <PlanView {...(activeRun ? { runId: activeRun } : {})} events={activeRunEvents} decide={decidePlan} />}
+          {tab === "plan" && <PlanView {...(activeRun ? { runId: activeRun } : {})} events={activeRunEvents} decide={decidePlan} busy={approvalBusy} />}
           {tab === "memory" && (
             <MemoryManager memories={memories} decide={decideMemory} refresh={refresh} workspace={workspace} {...(profile ? { profile } : {})} />
           )}
@@ -1443,6 +1492,7 @@ function App() {
           onClose={() => setApprovalPrompt(undefined)}
           onDecideTool={decideApproval}
           onDecidePlan={decidePlan}
+          busy={approvalBusy}
           {...((approvalPrompt.kind === "tool" ? approvalPrompt.approval.runId : approvalPrompt.plan.runId) === activeRun && canPauseRun ? { onPause: pauseRun } : {})}
         />
       )}
@@ -1511,6 +1561,7 @@ function ChatView(props: {
   paused: boolean;
   canPause: boolean;
   onPause: () => void;
+  runControlBusy: boolean;
   onResume: () => void;
   withdrawableRunId?: string;
   withdrawing: boolean;
@@ -1591,7 +1642,7 @@ function ChatView(props: {
           holding={props.paused}
           {...(props.runId ? { onRelease: props.onResume, canRelease: !props.steering } : {})}
           withdrawing={props.withdrawing}
-          runDisabled={props.withdrawing || props.uploadingAttachments}
+          runDisabled={props.withdrawing || props.uploadingAttachments || props.runControlBusy}
           {...(props.attachments.length > 0
             ? {
                 attachments: (
@@ -1791,7 +1842,7 @@ function ConversationTurnView({ turn, busy, continuationDisabled, onContinue, on
     <section className="conversation-turn" data-run-id={turn.runId} data-replay-state={replay.replaying ? "playing" : "idle"}>
       {turn.view && !turn.view.eventsComplete && <p role="status">正在同步执行记录…</p>}
       <Message align="end" className="conversation-user-turn">
-        <MessageContent><Bubble align="end" variant="muted" className="user-message" aria-label="你的任务"><BubbleContent>{turn.continuation ? `继续任务${turn.continuation.note ? "：" + turn.continuation.note : ""}` : turn.request}</BubbleContent></Bubble></MessageContent>
+        <MessageContent className="conversation-user-content"><SentAttachments runId={turn.runId} attachments={turn.attachments} /><Bubble align="end" variant="muted" className="user-message" aria-label="你的任务"><BubbleContent>{turn.continuation ? `继续任务${turn.continuation.note ? "：" + turn.continuation.note : ""}` : turn.request}</BubbleContent></Bubble></MessageContent>
         {onWithdraw && !replay.replaying && !latestHuman && withdrawalButton()}
       </Message>
       {segments.map((segment, index) => {
@@ -1921,6 +1972,7 @@ function ApprovalPromptDialog({
   onDecideTool,
   onDecidePlan,
   onPause,
+  busy,
 }: {
   prompt: ApprovalPrompt;
   onClose: () => void;
@@ -1931,6 +1983,7 @@ function ApprovalPromptDialog({
     feedback?: string,
   ) => Promise<void>;
   onPause?: () => Promise<void>;
+  busy: boolean;
 }) {
   const isTool = prompt.kind === "tool";
   const risk = isTool ? prompt.approval.risk : prompt.plan.scope.maxRisk;
@@ -1944,6 +1997,7 @@ function ApprovalPromptDialog({
       {...(isTool ? { subject: prompt.approval.toolName } : {})}
       status={status}
       destructive={risk === "destructive" || risk === "high"}
+      busy={busy}
       {...(isTool ? { alternativesLabel: "查看参数" } : { alternativesLabel: `查看步骤（${prompt.plan.steps.length}）` })}
       confirmLabel={isTool ? "批准一次" : "批准计划"}
       cancelLabel="拒绝"
@@ -2121,9 +2175,11 @@ function TasksView({
 function ApprovalsView({
   approvals,
   decide,
+  busy,
 }: {
   approvals: ApprovalRequest[];
-  decide: (id: string, approved: boolean) => void;
+  decide: (id: string, approved: boolean) => Promise<void>;
+  busy: boolean;
 }) {
   return (
     <div className="flex flex-col gap-3">
@@ -2161,14 +2217,16 @@ function ApprovalsView({
               <BuiButton
                 variant="ghost"
                 size="sm"
-                onClick={() => void decide(approval.id, false)}
+                disabled={busy}
+                onClick={() => void decide(approval.id, false).catch(() => {})}
               >
                 拒绝
               </BuiButton>
               <BuiButton
                 variant="primary"
                 size="sm"
-                onClick={() => void decide(approval.id, true)}
+                disabled={busy}
+                onClick={() => void decide(approval.id, true).catch(() => {})}
               >
                 批准一次
               </BuiButton>
@@ -2279,16 +2337,37 @@ function ProfilesView({
   );
 }
 
-function PlanView({ runId, events, decide }: { runId?: string; events: AgentEvent[]; decide: (plan: PlanSpec, approved: boolean, feedback?: string) => Promise<void> }) {
+function PlanView({ runId, events, decide, busy }: { runId?: string; events: AgentEvent[]; decide: (plan: PlanSpec, approved: boolean, feedback?: string) => Promise<void>; busy: boolean }) {
   const [plan, setPlan] = useState<PlanSpec>();
   const [checkpoints, setCheckpoints] = useState<RunCheckpoint[]>([]);
+  const [pending, setPending] = useState(false);
+  const [error, setError] = useState("");
+  const locked = useRef(false);
+  const loadVersion = useRef(0);
   useEffect(() => {
-    if (!runId) return;
+    const version = ++loadVersion.current;
+    setError("");
+    if (!runId) { setPlan(undefined); setCheckpoints([]); return; }
     void Promise.all([
       window.harness.request<PlanSpec | undefined>({ method: "plan.get", params: { runId } }),
       window.harness.request<RunCheckpoint[]>({ method: "checkpoints.get", params: { runId, limit: 30 } }),
-    ]).then(([nextPlan, nextCheckpoints]) => { setPlan(nextPlan); setCheckpoints(nextCheckpoints); });
+    ]).then(([nextPlan, nextCheckpoints]) => {
+      if (version === loadVersion.current) { setPlan(nextPlan); setCheckpoints(nextCheckpoints); }
+    }).catch(caught => { if (version === loadVersion.current) setError(`无法读取计划：${caught instanceof Error ? caught.message : String(caught)}`); });
+    return () => { loadVersion.current++; };
   }, [runId, events.length]);
+  async function submit(approved: boolean, feedback?: string) {
+    if (locked.current || busy || !runId || !plan) return;
+    locked.current = true; setPending(true); setError("");
+    const version = ++loadVersion.current;
+    try {
+      await decide(plan, approved, feedback);
+      const latest = await window.harness.request<PlanSpec | undefined>({ method: "plan.get", params: { runId } });
+      if (version === loadVersion.current) setPlan(latest);
+    } catch (caught) {
+      if (version === loadVersion.current) setError(`无法处理计划审批：${caught instanceof Error ? caught.message : String(caught)}`);
+    } finally { locked.current = false; setPending(false); }
+  }
   const verification = [...events].reverse().find((event) => event.type === "verification_finished") as Extract<AgentEvent, { type: "verification_finished" }> | undefined;
   const compactions = events.filter((event) => event.type === "context_compacted") as Array<Extract<AgentEvent, { type: "context_compacted" }>>;
   return (
@@ -2297,6 +2376,7 @@ function PlanView({ runId, events, decide }: { runId?: string; events: AgentEven
         <h2 className="text-base font-semibold text-text">计划与上下文</h2>
         <p className="text-sm text-text-muted">副作用前审批计划；工具权限仍单独裁决。</p>
       </div>
+      {error && <p role="alert">{error}</p>}
       {!plan ? (
         <Empty label="当前运行尚未请求副作用计划" />
       ) : (
@@ -2332,17 +2412,18 @@ function PlanView({ runId, events, decide }: { runId?: string; events: AgentEven
           </pre>
           {plan.status === "awaiting_approval" && (
             <footer className="mt-3 flex justify-end gap-2">
-              <BuiButton variant="primary" onClick={() => void decide(plan, true)}>
+              <BuiButton variant="primary" disabled={busy || pending} onClick={() => void submit(true)}>
                 批准计划
               </BuiButton>
-              <BuiButton variant="ghost" onClick={() => void decide(plan, false)}>
+              <BuiButton variant="ghost" disabled={busy || pending} onClick={() => void submit(false)}>
                 拒绝
               </BuiButton>
               <BuiButton
                 variant="secondary"
+                disabled={busy || pending}
                 onClick={() => {
                   const feedback = window.prompt("填写修订意见");
-                  if (feedback) void decide(plan, false, feedback);
+                  if (feedback) void submit(false, feedback);
                 }}
               >
                 要求修订

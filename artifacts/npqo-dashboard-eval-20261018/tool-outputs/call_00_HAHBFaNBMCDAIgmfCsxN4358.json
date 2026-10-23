@@ -1,0 +1,13 @@
+{
+  "capturedAt": "2026-10-18T08:58:54.046Z",
+  "callId": "call_00_HAHBFaNBMCDAIgmfCsxN4358",
+  "tool": "browser",
+  "input": {
+    "action": "new_tab",
+    "url": "http://127.0.0.1:5173"
+  },
+  "isError": false,
+  "durationMs": 215,
+  "text": "{\n  \"tabId\": \"17ae7fbb-e072-4ba2-b559-a528bf9c26ee\",\n  \"id\": \"17ae7fbb-e072-4ba2-b559-a528bf9c26ee\",\n  \"title\": \"http://127.0.0.1:5173/\",\n  \"url\": \"http://127.0.0.1:5173/\",\n  \"loading\": true,\n  \"canGoBack\": false,\n  \"canGoForward\": false\n}",
+  "truncated": false
+}

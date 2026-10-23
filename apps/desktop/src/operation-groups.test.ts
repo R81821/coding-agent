@@ -83,3 +83,11 @@ it("keeps an approval visible when it follows only reads", () => {
   const entries = [tool("a", "read_file", { path: "app.ts" }), tool("b", "read_file", { path: "theme.ts" }), approval("gate")];
   expect(groupToolEntries(entries).map(row => row.kind)).toEqual(["read_group", "approval"]);
 });
+
+it("keeps all local file edits independently visible while commands and approvals retain grouping", () => {
+ const entries = [tool("command-a", "terminal", { command: "first" }), approval("gate"), tool("create", "write_file", { path: "app.ts" }),
+  tool("edit", "patch", { patch: "patch" }, "pending"), tool("failed-edit", "apply_patch", { patch: "patch" }, "error"), tool("command-b", "terminal", { command: "second" }), tool("command-c", "terminal", { command: "third" })];
+ const rows = groupToolEntries(entries);
+ expect(rows.map(row => row.kind)).toEqual(["operation_group", "tool", "tool", "tool", "operation_group"]);
+ expect(rows.flatMap(row => row.kind === "tool" ? [row.tool.started.id] : [])).toEqual(["create", "edit", "failed-edit"]);
+});

@@ -9,6 +9,8 @@ import type { AgentEvent } from "@harness/protocol";
 import { toolActivity, toolSummary } from "../tool-summary.js";
 import { MarkdownMessage } from "../markdown-message.js";
 import { ConversationHoverCard } from "./ConversationHoverCard.js";
+import { isLocalFileEdit } from "../code-changes.js";
+import { FileEditTraceRow } from "./FileEditTrace.js";
 import { CodeBlock, CodeBlockContent } from "../ui/code-block.js";
 import { Trace, TraceCollapsible, TraceCollapsibleContent, TraceCollapsibleTrigger, TraceDescription, TraceIcon, TraceLine, TraceTitle } from "../ui/trace.js";
 
@@ -24,6 +26,10 @@ function outputText(value: unknown): string {
 }
 
 export function ToolTraceRow({ tool, active }: { tool: ToolTimelineItem; active: boolean }) {
+  return isLocalFileEdit(tool.started) ? <FileEditTraceRow tool={tool} active={active} /> : <GenericToolTraceRow tool={tool} active={active} />;
+}
+
+function GenericToolTraceRow({ tool, active }: { tool: ToolTimelineItem; active: boolean }) {
   const { started, finished } = tool;
   const [open, setOpen] = useRowState(`tool:${started.id}:open`, false);
   const state = getToolTraceState(started, finished, active);
